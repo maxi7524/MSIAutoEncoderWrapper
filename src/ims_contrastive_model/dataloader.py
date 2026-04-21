@@ -5,6 +5,7 @@ Contains code for dataloader for m2aia ims_contrastive_model
 """
 
 # base
+from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -37,6 +38,7 @@ class IMSPyTorchDataset(Dataset):
     def __init__(self, 
                 # obligatory 
                 m2aia_img: m2.ImzMLReader,
+                data_path: str | Path, # give path to .imzML file
                 # optional
                 resampling_method = 'mean', 
                 mz_min: float = None, 
@@ -63,6 +65,7 @@ class IMSPyTorchDataset(Dataset):
         """
         ## image
         self._img = m2aia_img
+        self.data_path = Path(data_path)
 
         ## grid stats
         # WARNING: here i use hardcoded values from GetMetaData dict 

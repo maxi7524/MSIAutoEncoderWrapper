@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 
 # local modules
 from .architecture import ContrastiveAutoencoder, ContrastiveLoss
-from .optimization import suggest_cnn_configs, train_clr_loop
+from .optimization import suggest_cnn_configs, train_loop_ims_contrastive_model
 from .dataloader import IMSPyTorchDataset
 
 # IMS library 
@@ -51,9 +51,9 @@ class ContrastiveSegmenter(BasePyTorchModel):
         """
         self.network = ContrastiveAutoencoder(
             input_dim=self.hyperparameters.get('input_dim'),
-            kernel_sizes=self.hyperparameters.get('kernel_sizes'),
-            encoding_dim=self.hyperparameters.get('encoding_dim'),
-            hidden_dims=self.hyperparameters.get('hidden_dims'),
+            kernels=self.hyperparameters.get('kernel_sizes'),
+            latent_dim=self.hyperparameters.get('encoding_dim'),
+            channels=self.hyperparameters.get('hidden_dims'),
             strides=self.hyperparameters.get('strides')
         )
         self.to_optimal_device()
@@ -103,7 +103,7 @@ class ContrastiveSegmenter(BasePyTorchModel):
         # 7. Training loop  
         print("[Model] Starting training...")
         
-        self.network = train_clr_loop(
+        self.network = train_loop_ims_contrastive_model(
             model=self.network,
             dataloader=dataloader,
             criterion=criterion,
