@@ -29,7 +29,7 @@ import m2aia as m2
 
 # TODO - by default we assume that we provide parameters for image 
 
-class ImsContrastiveModel:
+class IMSContrastiveModel:
     def __init__(self, 
                 # obligatory
                 ## 
@@ -75,6 +75,7 @@ class ImsContrastiveModel:
         train_loader = DataLoader(self.IMSLoader, batch_size=self._batch_size, shuffle=True)
 
         def save_callback(metrics, is_best):
+            save_dir.mkdir(parents=True, exist_ok=True)
             self._history.append(metrics)
             # Newest state
             self.save(save_dir, filename="model_latest.pt")
