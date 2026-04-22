@@ -1,5 +1,5 @@
 # Use the official Python 3.12 slim image as base
-FROM python:3.12-slim
+FROM --platform=linux/amd64 python:3.12-slim
 
 # Avoid interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -7,6 +7,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install system dependencies for M2aia, Qt5, and patchelf
 # Added 'patchelf' which is often required by M2aia to resolve internal library paths
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # basic libraries
+    git \
+    tree \
+    htop \
+    vim \
+    curl \
+    # m2aia dependencies
     libglu1-mesa-dev \
     libtiff5-dev \
     qtbase5-dev \
@@ -67,6 +74,8 @@ RUN mkdir -p /tmp/m2aia_bin && \
 
 # Register the kernel for Jupyter
 RUN python3 -m ipykernel install --user --name m2aia_env --display-name "Python 3.12 (M2aia_Docker)"
+
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/m2aia/bin:$LD_LIBRARY_PATH
 
 # Expose port for Jupyter
 EXPOSE 8888
