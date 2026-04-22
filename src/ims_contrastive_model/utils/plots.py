@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import pandas as pd
 import numpy as np
 import torch
 
@@ -13,39 +14,77 @@ class IMSModelVisualizer:
         """
         # W Twoim modelu historia to self._history (lista słowników)
         if not hasattr(self, '_history') or not self._history:
-            print("No training history found. Was the model trained?")
+            print("[UTILS - plots]: No training history found.")
             return
 
-        # Konwersja listy słowników na słownik list (dla kompatybilności z kodem plota)
-        metrics_dict = {}
-        for key in self._history[0].keys():
-            metrics_dict[key] = [epoch[key] for epoch in self._history]
-
-        n_metrics = len(metrics_dict)
-        cols = min(4, n_metrics)
-        rows = int(np.ceil(n_metrics / cols))
+        # 1. Konwersja do DataFrame dla łatwej manipulacji
+        df = pd.DataFrame(self._history)
         
+        # 2. Usuwamy kolumny, których nie chcemy na wykresie (np. 'epoch')
+        cols_to_plot = [c for c in df.columns if c.lower() != 'epoch']
+        n_metrics = len(cols_to_plot)
+
+        # 3. Dynamiczne ustawienie siatki (grid)
+        cols = min(3, n_metrics) # max 3 wykresy w rzędzie
+        rows = int(np.ceil(n_metrics / cols))
+
         fig, axes = plt.subplots(rows, cols, figsize=(cols * figsize_per_plot[0], rows * figsize_per_plot[1]))
         
+        # Spłaszczenie osi, żeby łatwo po nich iterować
         if n_metrics == 1:
             axes = np.array([axes])
         axes = axes.flatten()
 
-        for idx, (metric_name, values) in enumerate(metrics_dict.items()):
-            axes[idx].plot(values, label=metric_name, linewidth=2, marker='o', markersize=3)
-            axes[idx].set_title(metric_name.replace('_', ' ').title())
-            axes[idx].set_xlabel(xlabel)
-            axes[idx].set_ylabel(ylabel)
-            axes[idx].grid(True, linestyle='--', alpha=0.7)
-            axes[idx].legend()
+        for idx, col_name in enumerate(cols_to_plot):
+            ax = axes[idx]
+            ax.plot(df[col_name], label=col_name, linewidth=2, color=f'C{idx}')
+            ax.set_title(col_name.replace('_', ' ').title(), fontsize=12, fontweight='bold')
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Value")
+            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.legend()
 
-        # Ukryj puste wykresy
-        for idx in range(n_metrics, len(axes)):
-            axes[idx].set_visible(False)
+        # 4. Ukrycie pustych osi, jeśli metryk jest mniej niż pól w siatce
+        for i in range(idx + 1, len(axes)):
+            axes[i].set_visible(False)
 
-        plt.suptitle(title, fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.suptitle(title, fontsize=16, y=1.02)
+        plt.tight_layout()
         plt.show()
+
+
+        # # Konwersja listy słowników na słownik list (dla kompatybilności z kodem plota)
+        # metrics_dict = {}
+        # keys_to_plot = [k for k in self._history[0].keys() if k != 'epoch']
+        
+        # for key in keys_to_plot:
+        #     metrics_dict[key] = [epoch[key] for epoch in self._history]
+
+        # n_metrics = len(metrics_dict)
+        # cols = min(4, n_metrics)
+        # rows = int(np.ceil(n_metrics / cols))
+        
+        # fig, axes = plt.subplots(rows, cols, figsize=(cols * figsize_per_plot[0], rows * figsize_per_plot[1]))
+        
+        # if n_metrics == 1:
+        #     axes = np.array([axes])
+        # axes = axes.flatten()
+
+        # for idx, (metric_name, values) in enumerate(metrics_dict.items()):
+        #     axes[idx].plot(values, label=metric_name, linewidth=2, marker='o', markersize=3)
+        #     axes[idx].set_title(metric_name.replace('_', ' ').title())
+        #     axes[idx].set_xlabel(xlabel)
+        #     axes[idx].set_ylabel(ylabel)
+        #     axes[idx].grid(True, linestyle='--', alpha=0.7)
+        #     axes[idx].legend()
+
+        # # Ukryj puste wykresy
+        # for idx in range(n_metrics, len(axes)):
+        #     axes[idx].set_visible(False)
+
+        # plt.suptitle(title, fontsize=16)
+        # plt.tight_layout(rect=[0, 0, 1, 0.95])
+        # plt.show()
 
     def plot_reconstruction(self, data_batch, apply_noise_fn=None):
         """

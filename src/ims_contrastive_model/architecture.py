@@ -83,8 +83,9 @@ class Encoder(nn.Module):
         for layer in self.layers:
             x = layer(x)
         x = self.flatten(x)
-        x = self.projector(x)
-        return x
+        z = self.projector(x)
+        z_norm = F.normalize(z, p=2, dim=1)
+        return z_norm
     
 class Decoder(nn.Module):
     """
@@ -157,9 +158,8 @@ class ContrastiveAutoencoder(nn.Module):
         
     def forward(self, x):
         # encode 
-        z = self.encoder(x)
-        # normalize (embedded space)
-        z_norm = F.normalize(z, p=2, dim=1)
+        z_norm = self.encoder(x)
+        # TODO moved normalization to encoder 
         # decode
         x_hat = self.decoder(z_norm)
         return z_norm, x_hat

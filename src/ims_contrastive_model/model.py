@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 from .architecture import ContrastiveAutoencoder, ContrastiveLoss
 from .optimization import suggest_cnn_configuration, train_loop_ims_contrastive_model
 from .dataloader import IMSPyTorchDataset
-from .utils import IMSModelVisualizer
+from .utils.plots import IMSModelVisualizer
 
 # IMS library 
 import m2aia as m2
@@ -114,24 +114,27 @@ class IMSContrastiveModel(IMSModelVisualizer):
         )
 
     
-    def transform(self):
-        # TODO encode full image to latent space and return img x latent space 
-        # initialization
+    def encode(self):
         ## change model execution
         self.model.eval()
         ## create loader
         loader = DataLoader(self.IMSLoader, batch_size=self._batch_size, shuffle=False)
         embeddings = []
 
-        print("[Model] Transforming image to latent space...")
+        print("[Model] Encoding image to latent space...")
         with torch.no_grad(): # ram saving
             for batch in loader:
-                z_norm, _ = self._model(batch.to(self._device))
+                z_norm = self.model.encoder(batch.to(self._device))
                 embeddings.append(z_norm.cpu().numpy())
 
             return np.concatenate(embeddings, axis=0)
 
-
+    def decode(self, z: torch.Tensor):
+        self.model.eval()
+        with torch.no_grad():
+            #  we use decoder 
+            x_hat = self.model.decoder(z.to(self._device))
+        return x_hat.cpu().numpy()
 
     
     # ---------------------

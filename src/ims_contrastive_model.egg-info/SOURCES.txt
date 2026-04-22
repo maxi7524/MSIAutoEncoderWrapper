@@ -6,9 +6,10 @@ src/ims_contrastive_model/dataloader.py
 src/ims_contrastive_model/model.py
 src/ims_contrastive_model/model_old.py
 src/ims_contrastive_model/optimization.py
-src/ims_contrastive_model/utils.py
 src/ims_contrastive_model.egg-info/PKG-INFO
 src/ims_contrastive_model.egg-info/SOURCES.txt
 src/ims_contrastive_model.egg-info/dependency_links.txt
 src/ims_contrastive_model.egg-info/top_level.txt
+src/ims_contrastive_model/utils/__init__.py
+src/ims_contrastive_model/utils/plots.py
 tests/test_dataloader.py
