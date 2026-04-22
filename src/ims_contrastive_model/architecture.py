@@ -41,6 +41,8 @@ class ReshapeLayer(nn.Module):
 class Encoder(nn.Module):
     """
     Sub-module responsible for compressing MSI spectra into latent space.
+
+    It returns normalized value. 
     """
     def __init__(self, input_dim, latent_dim, channels, kernels, strides):
         super().__init__()
@@ -159,14 +161,23 @@ class ContrastiveAutoencoder(nn.Module):
     def forward(self, x):
         # encode 
         z_norm = self.encoder(x)
-        # TODO moved normalization to encoder 
         # decode
         x_hat = self.decoder(z_norm)
         return z_norm, x_hat
         
 class ContrastiveLoss(nn.Module):
     """
-    Loss function - combine contrastive loss function with reconstruction MSE
+    Detailed Breakdown of Regularization Losses:
+
+    1. Variance Regularization (std_loss):
+       Calculates the standard deviation of features across the batch dimension. 
+       Loss = Mean((Std(representations, dim=0) - 1)**2).
+       This ensures that each latent dimension remains active and carries unique information.
+
+    2. Mean Regularization (mean_loss):
+       Loss = Mean(Mean(representations, dim=1)**2).
+       This prevents the latent space from drifting too far from the origin, ensuring 
+       a zero-centered distribution which aids decoder stability.
     """
     def __init__(self, device, temperature=2.0):
         super().__init__()
@@ -196,7 +207,7 @@ class ContrastiveLoss(nn.Module):
         contrastive_loss = torch.sum(all_losses) / (2 * actual_batch_size)
 
         ## regularization loss
-        std_loss = torch.mean((torch.std(representations, dim=0) - 1) ** 2)
+        std_loss = torch.mean((torch.std(representations, dim=0) - 1) ** 2 + 1e-6)  # for 0 error
         mean_loss = torch.mean(torch.mean(representations, dim=1) ** 2)
 
         # MSE loss - reconstruction

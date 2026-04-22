@@ -1,4 +1,4 @@
-# Usunięto sztywne platform=linux/amd64
+# Usunięto sztywne platform=linux/amd64 # TODO - to jest problmeatyczne albo nie ładuje plików albo nie mogę tego odczytać 
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive

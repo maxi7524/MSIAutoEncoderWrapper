@@ -20,11 +20,13 @@ from sympy import hyperexpand
 import torch
 from torch.utils.data import DataLoader
 
+
 # local modules
 from .architecture import ContrastiveAutoencoder, ContrastiveLoss
 from .optimization import suggest_cnn_configuration, train_loop_ims_contrastive_model
 from .dataloader import IMSPyTorchDataset
 from .utils.plots import IMSModelVisualizer
+form .utils import docs as DOCS
 
 # IMS library 
 import m2aia as m2
@@ -32,6 +34,10 @@ import m2aia as m2
 # TODO - by default we assume that we provide parameters for image 
 
 class IMSContrastiveModel(IMSModelVisualizer):
+    '''
+    The IMSContrastiveModel acts as a high-level wrapper for the Contrastive Autoencoder (CAE) architecture. It facilitates the compression of high-dimensional Mass Spectrometry Imaging (MSI) data into a lower-dimensional latent manifold, preserving spatial and chemical variance through a dual-objective loss function (InfoNCE + MSE).
+    '''
+
     def __init__(self, 
                 # obligatory
                 ## 
@@ -44,9 +50,12 @@ class IMSContrastiveModel(IMSModelVisualizer):
                 lr: float = 1e-3,
                 patience_limit: int = 5,
                 ## hyperparameters
-                hyperparameters = None # here put dict # TODO 
+                hyperparameters = None # here put dict # TODO if need to change settings 
             
             ):
+        '''
+        
+        '''
         # inherit
         super().__init__()
         # attributes
@@ -62,24 +71,23 @@ class IMSContrastiveModel(IMSModelVisualizer):
         self._batch_size = batch_size
         self._lr = lr
         self._patience_limit = patience_limit
-        
-        # dynamic 
-        ## architecture construction
-        # TODO - configure optimal params (optimization module call)  - moved to fit
-        # self._hyperparameters = suggest_cnn_configuration(IMSLoader=IMSLoader, latent_dim=latent_dim, hyperparameters=hyperparameters)
-        # self._model = ContrastiveAutoencoder(**self._hyperparameters).to(self._device)
-        self._criterion = ContrastiveLoss(self._device)
+
+        # INFO: model is initialized in`fit` method 
 
     # ---------------------
     # model essentials 
     # ---------------------
 
     def fit(self, save_dir: str | Path):
+        '''
+        Information about training what save_dir param means, and propsition how to use it effectively (files schema) and explanation
+        '''
         # create instance of model
         if self._model is None:
             print('[fit]: Initialization of new model ... ')
             self._hyperparameters = suggest_cnn_configuration(self.IMSLoader, self._latent_dim, self._hyperparameters)
             self._model = ContrastiveAutoencoder(**self._hyperparameters).to(self._device)
+            self._criterion = ContrastiveLoss(self._device)
         else:
             print('[fit]: Continue training on loaded model ...')
 
@@ -87,7 +95,8 @@ class IMSContrastiveModel(IMSModelVisualizer):
         train_loader = DataLoader(
             self.IMSLoader, 
             batch_size=self._batch_size, 
-            # pin_memory=True,         # TODO test - nothing changed
+            # # TODO SET PARAMS: here you can adjust parameters settings
+            # pin_memory=True,         
             # shuffle=True
             )
 
@@ -113,8 +122,29 @@ class IMSContrastiveModel(IMSModelVisualizer):
 
         )
 
-    
-    def encode(self):
+    def encode(self, x: torch.Tensor):
+        '''
+        Methdods that encodes given batch_of_pixels x spectra 
+        '''
+        self.model.eval()
+        with torch.no_grad():
+            z_norm = self.model.encode(x.to(self._device))
+        return z_norm.cpu().numpy()
+
+    def decode(self, z: torch.Tensor):
+        '''
+        Method that decode information from given transformed pixel 
+        '''
+        self.model.eval()
+        with torch.no_grad():
+            #  we use decoder 
+            x_hat = self.model.decoder(z.to(self._device))
+        return x_hat.cpu().numpy()
+
+    def transform(self):
+        '''
+        Method which transforms whole image to latent space and return image_shape x latent_dim
+        '''
         ## change model execution
         self.model.eval()
         ## create loader
@@ -128,21 +158,16 @@ class IMSContrastiveModel(IMSModelVisualizer):
                 embeddings.append(z_norm.cpu().numpy())
 
             return np.concatenate(embeddings, axis=0)
-
-    def decode(self, z: torch.Tensor):
-        self.model.eval()
-        with torch.no_grad():
-            #  we use decoder 
-            x_hat = self.model.decoder(z.to(self._device))
-        return x_hat.cpu().numpy()
-
     
     # ---------------------
     # helpers
     # ---------------------
 
     def save(self, path: str | Path = None, filename: str = "model_weights.pt"):
-        """Saves model weights and training configuration."""
+        """Saves model weights and training configuration.
+        
+        TODO - information about where it is save (schema of folders) with interpretation, as well as information that during training model will be overwritten
+        """
         # obtain paths
         if path is None:
             path = Path(str(self.IMSLoader.data_path) + '_model')
@@ -168,6 +193,9 @@ class IMSContrastiveModel(IMSModelVisualizer):
 
 
     def load(self, path: str | Path):
+        '''
+        information about what is loaded, and that model will adjust to new training 
+        '''
         path = Path(path)
         # load config
         with open(path / "config.json", "r") as f:
@@ -204,3 +232,11 @@ class IMSContrastiveModel(IMSModelVisualizer):
     @property
     def history(self):
         return self._history
+
+IMSContrastiveModel.__doc__ = DOCS.IMSContrastiveModel_DOC
+IMSContrastiveModel.__init__.__doc__ = DOCS.IMSContrastiveModel_init_DOC
+IMSContrastiveModel.fit.__doc__ = DOCS.IMSContrastiveModel_fit_DOC
+IMSContrastiveModel.transform.__doc__ = DOCS.IMSContrastiveModel_transform_DOC
+IMSContrastiveModel.encode.__doc__ = DOCS.IMSContrastiveModel_encode_DOC
+IMSContrastiveModel.decode.__doc__ = DOCS.IMSContrastiveModel_decode_DOC
+

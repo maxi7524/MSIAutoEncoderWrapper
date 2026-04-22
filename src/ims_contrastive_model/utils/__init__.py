@@ -1,1 +1,2 @@
-from . import plots
+from . import plots, docs
+
