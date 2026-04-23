@@ -26,7 +26,7 @@ from .architecture import ContrastiveAutoencoder, ContrastiveLoss
 from .optimization import suggest_cnn_configuration, train_loop_ims_contrastive_model
 from .dataloader import IMSPyTorchDataset
 from .utils.plots import IMSModelVisualizer
-form .utils import docs as DOCS
+from .utils import docs as DOCS
 
 # IMS library 
 import m2aia as m2
@@ -34,10 +34,6 @@ import m2aia as m2
 # TODO - by default we assume that we provide parameters for image 
 
 class IMSContrastiveModel(IMSModelVisualizer):
-    '''
-    The IMSContrastiveModel acts as a high-level wrapper for the Contrastive Autoencoder (CAE) architecture. It facilitates the compression of high-dimensional Mass Spectrometry Imaging (MSI) data into a lower-dimensional latent manifold, preserving spatial and chemical variance through a dual-objective loss function (InfoNCE + MSE).
-    '''
-
     def __init__(self, 
                 # obligatory
                 ## 
@@ -71,23 +67,20 @@ class IMSContrastiveModel(IMSModelVisualizer):
         self._batch_size = batch_size
         self._lr = lr
         self._patience_limit = patience_limit
-
-        # INFO: model is initialized in`fit` method 
+        ## INFO: model is initialized in`fit` method 
+        self._model = None
+        self._criterion = ContrastiveLoss(self._device)
 
     # ---------------------
     # model essentials 
     # ---------------------
 
     def fit(self, save_dir: str | Path):
-        '''
-        Information about training what save_dir param means, and propsition how to use it effectively (files schema) and explanation
-        '''
         # create instance of model
         if self._model is None:
             print('[fit]: Initialization of new model ... ')
             self._hyperparameters = suggest_cnn_configuration(self.IMSLoader, self._latent_dim, self._hyperparameters)
             self._model = ContrastiveAutoencoder(**self._hyperparameters).to(self._device)
-            self._criterion = ContrastiveLoss(self._device)
         else:
             print('[fit]: Continue training on loaded model ...')
 
@@ -127,8 +120,9 @@ class IMSContrastiveModel(IMSModelVisualizer):
         Methdods that encodes given batch_of_pixels x spectra 
         '''
         self.model.eval()
+        x_tensor = self._prepare_input(x)
         with torch.no_grad():
-            z_norm = self.model.encode(x.to(self._device))
+            z_norm = self.model.encoder(x_tensor.to(self._device))
         return z_norm.cpu().numpy()
 
     def decode(self, z: torch.Tensor):
@@ -136,9 +130,10 @@ class IMSContrastiveModel(IMSModelVisualizer):
         Method that decode information from given transformed pixel 
         '''
         self.model.eval()
+        z_tensor = self._prepare_input(z)
         with torch.no_grad():
             #  we use decoder 
-            x_hat = self.model.decoder(z.to(self._device))
+            x_hat = self.model.decoder(z_tensor.to(self._device))
         return x_hat.cpu().numpy()
 
     def transform(self):
@@ -154,20 +149,16 @@ class IMSContrastiveModel(IMSModelVisualizer):
         print("[Model] Encoding image to latent space...")
         with torch.no_grad(): # ram saving
             for batch in loader:
-                z_norm = self.model.encoder(batch.to(self._device))
-                embeddings.append(z_norm.cpu().numpy())
+                embeddings.append(self.encode(batch))
 
             return np.concatenate(embeddings, axis=0)
     
     # ---------------------
-    # helpers
+    # save & load
     # ---------------------
 
     def save(self, path: str | Path = None, filename: str = "model_weights.pt"):
-        """Saves model weights and training configuration.
-        
-        TODO - information about where it is save (schema of folders) with interpretation, as well as information that during training model will be overwritten
-        """
+        """Saves model weights and training configuration."""
         # obtain paths
         if path is None:
             path = Path(str(self.IMSLoader.data_path) + '_model')
@@ -194,7 +185,7 @@ class IMSContrastiveModel(IMSModelVisualizer):
 
     def load(self, path: str | Path):
         '''
-        information about what is loaded, and that model will adjust to new training 
+        Loads trained model
         '''
         path = Path(path)
         # load config
@@ -218,6 +209,20 @@ class IMSContrastiveModel(IMSModelVisualizer):
         print(f"[Load]: Model loaded successfully from {path}")
 
     # ---------------------
+    # helpers
+    # ---------------------
+
+    def _prepare_input(self, data: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
+        """
+        Internal helper to ensure input is a float32 torch.Tensor on the correct device.
+        """
+        if isinstance(data, np.ndarray):
+            data = torch.from_numpy(data)
+        
+        # Ensure correct type and move to device
+        return data.float().to(self._device)
+
+    # ---------------------
     # getters and setters
     # ---------------------
 
@@ -227,6 +232,10 @@ class IMSContrastiveModel(IMSModelVisualizer):
 
     @property
     def model(self):
+        if self._model is None:
+            print('[fit]: Initialization of new model ... ')
+            self._hyperparameters = suggest_cnn_configuration(self.IMSLoader, self._latent_dim, self._hyperparameters)
+            self._model = ContrastiveAutoencoder(**self._hyperparameters).to(self._device)
         return self._model
     
     @property

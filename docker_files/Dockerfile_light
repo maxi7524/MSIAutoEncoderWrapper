@@ -1,0 +1,71 @@
+# 1. Use slim image - much smaller than default ubuntu/python images
+FROM --platform=linux/amd64 python:3.12-slim-bookworm
+
+# 2. Avoid interactive prompts and set encoding
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# 3. Install ONLY necessary system libraries
+# We combine everything into one RUN to keep the image layers small
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    tar \
+    libgl1 \
+    libopengl0 \
+    libegl1 \
+    libgomp1 \
+    libfontconfig1 \
+    libdbus-1-3 \
+    # Required for M2aia/Qt internal operations
+    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+    libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 4. Install 'uv' for extremely fast and space-efficient package management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uv/bin/
+ENV PATH="/uv/bin:${PATH}"
+
+WORKDIR /app
+
+# 5. Environment variables for M2aia
+# Setting these here ensures they are available both in Terminal and Jupyter
+ENV M2AIA_BIN_DIR=/usr/local/lib/python3.12/site-packages/m2aia/bin \
+    LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/m2aia/bin \
+    QT_QPA_PLATFORM=offscreen
+
+# 6. Install Python packages in a single layer
+# We use --no-cache to prevent 'uv' from storing copies of installers inside the image
+# Step 1: Install standard libraries from PyPI
+RUN uv pip install --system --no-cache \
+    ipykernel \
+    notebook \
+    pandas \
+    numpy \
+    matplotlib \
+    seaborn \
+    scipy \
+    scikit-learn \
+    tabulate \
+    m2aia
+
+# Step 2: Install CPU-only version of Torch (separately to avoid index conflicts)
+RUN uv pip install --system --no-cache \
+    torch torchvision \
+    --index-url https://download.pytorch.org/whl/cpu
+    
+# 7. Handle M2aia binaries
+# We extract them directly to where the python package expects them
+COPY M2aia-2025.07.00-linux-x86_64.tar.gz /tmp/
+RUN mkdir -p /tmp/m2aia_bin && \
+    tar -xzf /tmp/M2aia-2025.07.00-linux-x86_64.tar.gz -C /tmp/m2aia_bin --strip-components=1 && \
+    mkdir -p /usr/local/lib/python3.12/site-packages/m2aia/bin && \
+    cp -rp /tmp/m2aia_bin/bin/* /usr/local/lib/python3.12/site-packages/m2aia/bin/ && \
+    rm -rf /tmp/m2aia_bin /tmp/M2aia-2025.07.00-linux-x86_64.tar.gz
+
+# 8. Final setup
+RUN python3 -m ipykernel install --user --name m2aia_env --display-name "Python 3.12 (M2aia_Slim)"
+
+EXPOSE 8888
+CMD ["bash"]
