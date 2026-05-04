@@ -23,16 +23,6 @@ class ReshapeLayer(nn.Module):
     def forward(self, x):
         return x.view([x.shape[0]] + self.vec_shape)
     
-# sugestia 
-# class ReshapeLayer(nn.Module):
-#     def __init__(self, vec_shape):
-#         super().__init__()
-#         self.vec_shape = vec_shape
-
-#     def forward(self, x):
-#         # x.shape[0] to zawsze rozmiar batcha
-#         return x.view(x.shape[0], *self.vec_shape)
-    
 
 # ---------------------
 # Encoder & decoder
@@ -105,7 +95,6 @@ class Decoder(nn.Module):
             ReshapeLayer([channels[-1], spatial_dims[-2]])
         ) 
         ## Transposed convolutions
-        # TODO check - here we change implementation
         for i in range(len(kernels) - 1, -1, -1):
             in_dim = spatial_dims[i+1]
             target_dim = spatial_dims[i]

@@ -121,7 +121,7 @@ def suggest_cnn_configuration(IMSLoader: IMSPyTorchDataset, latent_dim: int, hyp
     '''
     #TODO - suggest configuration
     # deterministic
-    input_dim = len(IMSLoader.grid)
+    input_dim = IMSLoader.GetGridXAxisDepth()
 
     # predicted | given *if hyperparameters are not none apply hyperparameters 
     

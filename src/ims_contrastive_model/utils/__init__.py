@@ -1,2 +1,2 @@
-from . import plots, docs
+from . import Binners, plots, docs,LatentSpace
 

@@ -11,8 +11,8 @@ from torch.utils.data import Dataset
 import numpy as np
 # IMS
 import m2aia as m2
-# resampling method
-from scipy.stats import binned_statistic
+# binning module
+from .utils.Binners import IMSPyTorchBinner
 
 
 # TODO - we could use certain *mask* (so we do not batch noise pixel ~ match faster learning)
@@ -38,12 +38,7 @@ class IMSPyTorchDataset(Dataset):
     def __init__(self, 
                 # obligatory 
                 m2aia_img: m2.ImzMLReader,
-                data_path: str | Path, # give path to .imzML file
-                # optional
-                resampling_method = 'mean', 
-                mz_min: float = None, 
-                mz_max: float = None, 
-                mz_resolution: float = None,
+                Binner: IMSPyTorchBinner
             ):
         """
         Initializes the IMS dataset with a fixed m/z grid.
@@ -65,27 +60,8 @@ class IMSPyTorchDataset(Dataset):
         """
         ## image
         self._img = m2aia_img
-        self.data_path = Path(data_path)
-
-        ## grid stats
-        # WARNING: here i use hardcoded values from GetMetaData dict 
-        ### min
-        self._mz_min = mz_min if mz_min is not None else float(m2aia_img.GetMetaData()['m2aia.xs.min'])
-        ### max
-        self._mz_max = mz_max if mz_max is not None else float(m2aia_img.GetMetaData()['m2aia.xs.max'])
-        ### reslution 
-        self._mz_resolution = mz_resolution if mz_resolution is not None else float(m2aia_img.GetMetaData()['pixel size z'])
-        
-        ## resampling 
-        ### resampling method 
-        self._resampling_method = resampling_method
-        ### Grid arrange {x in [min_mz, max_mz] | x = min_mz + i * mz_resolution, i \in N}
-        self._grid = np.arange(
-            self.mz_min, 
-            self.mz_max + self._mz_resolution, # to consider max_mz
-            self._mz_resolution
-        )
-
+        self._Binner = Binner
+        # self.data_path = Path(data_path)
     
     # ---------------------
     # dataset essentials 
@@ -112,61 +88,22 @@ class IMSPyTorchDataset(Dataset):
         """
         # load data
         try: 
-            mzs, intensities = self.img.GetSpectrum(idx)
+            ## Sample is single spectrum 
+            xs, ys = self.img.GetSpectrum(idx)
             ## map to common axis
-            mapped_val = self._resample(mzs=mzs, intensities=intensities)
+            mapped_val = self.Binner(xs=xs, ys=ys)
             return torch.tensor(mapped_val, dtype=torch.float32)
         except:
             ## if GetSpectrum(idx) is None
-            return torch.zeros(len(self.grid), dtype=torch.float32)
+            return torch.zeros(len(self.GetGridXAxis), dtype=torch.float32)
     
     # ---------------------
     # helpers
     # ---------------------
 
-    def _resample(self, mzs, intensities):
-        """
-        Projects raw m/z intensities onto the fixed self.grid.
-
-        The method creates bins centered at each grid point with a width 
-        equal to self.mz_resolution. 
-
-        Args:
-            mzs (np.ndarray): Raw m/z values from m2aia.
-            intensities (np.ndarray): Raw intensity values from m2aia.
-
-        Returns:
-            np.ndarray: Binned intensities corresponding to self.grid.
-        """
-        # resampling
-        ## active width (how far from grid point)
-        # --------------
-        # START TODO - decide range / use in header function 
-        grid_dis = self.mz_resolution / 2 
-        # END TOD 
-        # --------------
-
-        ## define bins (from, to) (for scipy method)
-        bins = np.concatenate([
-            self.grid - grid_dis, # [mz_min - grid_dist, ...., mz_max - grid_dit]
-            # adding last part,
-            [self.grid[-1] + grid_dis]
-        ])
-
-        ## resampling method
-        ### (binned values , bin info,  )
-        rtn_val, _, _ = binned_statistic(
-            mzs, 
-            intensities, 
-            statistic=self.resampling_method, 
-            bins=bins
-        )
-
-        ## change nan to zeros
-        return np.nan_to_num(rtn_val, nan=0.0)
 
     # ---------------------
-    # getters and setters
+    # getters and setters (functions for m2aia convenience)
     # ---------------------
     
     @property
@@ -174,27 +111,50 @@ class IMSPyTorchDataset(Dataset):
         return self._img
 
     @property
-    def mz_min(self):
-        return self._mz_min
+    def Binner(self):
+        return self._Binner
 
-    @property
-    def mz_max(self):
-        return self._mz_max
+    # --- image part ---
+
+    def GetXMin(self):
+        return self.img.GetXAxis[0]
     
-    @property
-    def mz_resolution(self):
-        return self._mz_resolution
-
-    @property
-    def resampling_method(self):
-        return self._resampling_method
+    def GetXMax(self):
+        return self.img.GetXAxis[-1]
     
-    @property
-    def grid(self):
-        return self._grid
+    def GetXAxis(self):
+        return self.img.GetXAxis()
+    
+    def GetXAxisDepth(self):
+        return self.img.GetXAxisDepth()
+
+    # --- binner part ---
+
+    def GetGridXMin(self):
+        return self.Binner.GetXMin()
+
+    def GetGridXMax(self):
+        return self.Binner.GetXMax()
+    
+    def GetGridXAxis(self):
+        return self.Binner.GetXAxis()
+    
+    def GetGridXAxisDepth(self):
+        return self.Binner.GetXAxisDepth()
+    
+    # @property
+    # def mz_resolution(self):
+    #     return self._mz_resolution
+
+    # @property
+    #TODO - to powinno zwracać nazwę tej używanej metody 
+    # def resampling_method(self):
+    #     return self._resampling_method
+    
+    
 
 
-
+    
 
 
 

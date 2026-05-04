@@ -50,7 +50,7 @@ def test_dataset_initialization_with_defaults(mock_m2aia_reader, dummy_path):
     assert dataset.mz_min == 100.0
     assert dataset.mz_max == 200.0
     assert dataset.mz_resolution == 1.0
-    assert len(dataset.grid) > 0
+    assert len(dataset.GetGridXAxis) > 0
     assert dataset.data_path == dummy_path
 
 def test_dataset_custom_grid(mock_m2aia_reader, dummy_path):
@@ -68,7 +68,7 @@ def test_dataset_custom_grid(mock_m2aia_reader, dummy_path):
     assert dataset.mz_max == 160.0
     # Grid: [150.0, 150.5, ..., 160.0] -> (160-150)/0.5 + 1 = 21
     expected_len = int((160.0 - 150.0) / custom_res) + 1
-    assert len(dataset.grid) == expected_len
+    assert len(dataset.GetGridXAxis) == expected_len
 
 def test_getitem_tensor_output(mock_m2aia_reader, dummy_path):
     """Test if __getitem__ returns a valid PyTorch tensor with correct shape."""
@@ -77,7 +77,7 @@ def test_getitem_tensor_output(mock_m2aia_reader, dummy_path):
     
     assert isinstance(sample, torch.Tensor)
     assert sample.dtype == torch.float32
-    assert sample.shape[0] == len(dataset.grid)
+    assert sample.shape[0] == len(dataset.GetGridXAxis)
 
 def test_resampling_integrity(mock_m2aia_reader, dummy_path):
     """Test if the resampling logic produces non-zero values from mock data."""
@@ -96,5 +96,5 @@ def test_exception_handling(mock_m2aia_reader, dummy_path):
     sample = dataset[99]
     
     assert torch.all(sample == 0)
-    assert sample.shape[0] == len(dataset.grid)
+    assert sample.shape[0] == len(dataset.GetGridXAxis)
     assert isinstance(sample, torch.Tensor)
