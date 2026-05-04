@@ -328,13 +328,22 @@ class TopPeaksInverseBinner(IMSPyTorchInverseBinner):
 # ----------------------------------------
 
 # 
-BINNER_REGISTRY = {
+
+
+IMSPyTorchBinner_Registry = {
+    # IMSPyTorchInverseBinner
+    "NotEmptyInverseBinner": NotEmptyInverseBinner,
+    "TopPeaksInverseBinner": TopPeaksInverseBinner
+}
+
+IMSPyTorchInverseBinner = {
     # IMSPyTorchBinner
     # "M2aiaBinning": M2aiaBinning, TODO
     "LinearBinning": LinearBinning,
     # "LogarithmicBinning": LogarithmicBinning,TODO
-    # IMSPyTorchInverseBinner
-    "NotEmptyInverseBinner": NotEmptyInverseBinner,
-    "TopPeaksInverseBinner": TopPeaksInverseBinner
+}
 
+BINNER_REGISTRY = {
+    **IMSPyTorchBinner_Registry, 
+    **IMSPyTorchInverseBinner
 }
