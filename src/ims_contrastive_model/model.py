@@ -55,6 +55,7 @@ class IMSContrastiveModel(IMSModelVisualizer):
                 IMSLoader: IMSPyTorchDataset = None,
                 Binner:  IMSPyTorchBinner = None,
                 InverseBinner: IMSPyTorchInverseBinner = None,
+                #TODO add: criterion, model type 
             
             ):
         '''
