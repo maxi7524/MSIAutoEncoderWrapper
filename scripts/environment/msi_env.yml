@@ -1,4 +1,4 @@
-name: ims_env
+name: msi_env
 channels:
   - conda-forge
   - bioconda

@@ -42,10 +42,10 @@ sudo apt-get install -y libglu1-mesa-dev libgomp1 libopenslide-dev
 
 ```bash
 # Create the environment
-conda env create -f scripts/environment/ims_env.yml
+conda env create -f scripts/environment/msi_env.yml
 
 # Activate the environment
-conda activate ims_env
+conda activate msi_env
 
 # Install torch (~3 GB) (adding it to .yml drastically slows process)
 # TODO - adjust `pytorch-cuda`  
@@ -64,7 +64,7 @@ pip install -e .
 Detailed guides can be found in the `notebooks/tutorials` directory:
 
 1.  **[Tutorial 1: Compression](notebooks/tutorials/tutorial1_compression.ipynb)**
-    * Initialize and train an `IMSContrastiveModel`.
+    * Initialize and train an `MSIContrastiveModel`.
     * Analyze training losses and visualize reconstruction quality.
     * Compress a full `imzML` image into a latent space saved in `npz` format.
     * Demonstration of loading the latent space independently of the raw data.
