@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "IMSAutoEncoderWrapper"
+name = "MSIAutoEncoderWrapper"
 version = "0.0.1"
 description = "MIMUW love forever - Autoencoder wrapper for IMS data"
 readme = "README.md"

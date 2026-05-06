@@ -8,13 +8,13 @@ import numpy as np
 # ML library 
 import torch
 import torch.nn.functional as F
-from .base import IMSABaseAutoEncoderCriterion
-from ..dataset import IMSPyTorchDataset
+from .base import MSIABaseAutoEncoderCriterion
+from ..dataset import MSIPyTorchDataset
 
 ## functions for find peaks and their envelopes 
 from scipy.signal import find_peaks, peak_widths
 
-class ContrastiveCriterion(IMSABaseAutoEncoderCriterion):
+class ContrastiveCriterion(MSIABaseAutoEncoderCriterion):
     r"""
     Composite loss function for Ion Mobility Spectrometry (IMS) contrastive learning.
     
@@ -151,7 +151,7 @@ class ContrastiveCriterion(IMSABaseAutoEncoderCriterion):
     @staticmethod
     def apply_noise(
         vec: torch.Tensor, 
-        IMSDataset: IMSPyTorchDataset, 
+        IMSDataset: MSIPyTorchDataset, 
         PeakBank) -> torch.Tensor:
         """
         Augments the input batch by injecting realistic biological/chemical noise.
@@ -235,7 +235,7 @@ class ContrastiveCriterion(IMSABaseAutoEncoderCriterion):
 
     @staticmethod
     def precompute_peak_bank(
-        dataset: IMSPyTorchDataset, 
+        dataset: MSIPyTorchDataset, 
         max_peaks_per_spectrum: int = 2):
         """
         Pre-identifies and extracts peak envelopes across the entire dataset to 

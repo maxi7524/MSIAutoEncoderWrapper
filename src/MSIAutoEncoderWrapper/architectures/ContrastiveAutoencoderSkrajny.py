@@ -3,8 +3,8 @@ from __future__ import annotations
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-from .base import IMSBaseAutoencoderArchitecture
-from ..dataset import IMSPyTorchDataset
+from .base import MSIBaseAutoencoderArchitecture
+from ..dataset import MSIPyTorchDataset
 #TODO ADD CORRECT LIBRARY 
 from ..utils.architecture_utils import estimate_max_peak_width # Will be moved later
 import copy 
@@ -15,7 +15,7 @@ import numpy as np
 
 
 
-class ContrastiveAutoencoderMax_InverseDim(IMSBaseAutoencoderArchitecture):
+class ContrastiveAutoencoderSkrajny(MSIBaseAutoencoderArchitecture):
     """
     CNN-based Contrastive Autoencoder implementation.
     """
@@ -63,13 +63,11 @@ class ContrastiveAutoencoderMax_InverseDim(IMSBaseAutoencoderArchitecture):
         return self.decoder(z)
 
     @staticmethod
-    def SetHyperparameters(IMSDataset: IMSPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | ContrastiveAutoencoderMax_InverseDim:
+    def SetHyperparameters(IMSDataset: MSIPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | ContrastiveAutoencoderSkrajny:
         """
         Dynamically suggests hyperparameters based on spectral peak width and input depth.
 
-        The logic estimates the peak envelope width to set the initial kernel size 
-        and iteratively adds layers until the convolutional output matches the 
-        target bottleneck size.
+        The logic estimates the peak envelope width to set the initial kernel size.
 
         :param IMSLoader: Loader used to retrieve X-axis depth and peak statistics.
         :type IMSLoader: IMSLoader
@@ -102,28 +100,11 @@ class ContrastiveAutoencoderMax_InverseDim(IMSBaseAutoencoderArchitecture):
         print(f"[Optimization] Estimated peak envelope width: {auto_kernel_1} bins")
 
         # Layer 1: Wide kernel (15) for peak envelope detection (~0.15 Da at 0.01 Da res)
-        # High channel count (256) to capture diverse chemical signatures
-        channels = [1, 64, 32, 16, 8]
-        kernels = [auto_kernel_1, 7, 5, 3]
-        strides = [3, 4, 4, 3]
+        channels = [1, 2, 4, 16, 32, 64]
+        kernels = [auto_kernel_1, 7, 5, 5, 5]
+        strides = [2, 3, 3, 3, 3]
 
-        # Dynamic reduction logic based on latent_dim
-        # Goal: Ensure the flattened conv output is roughly 2x-4x the latent_dim
-        current_stride_prod = np.prod(strides)
-        current_out_dim = input_dim // current_stride_prod
-        
-        # target_conv_out is set to be proportional to latent_dim (max ~400)
-        target_conv_out = max(latent_dim * 2, 512) 
-
-        # Add layers if the dimensionality is still too high for the latent_dim bottleneck
-        while current_out_dim > target_conv_out and len(channels) < 6:
-            new_stride = 2
-            strides.append(new_stride)
-            # we cap at 8 channels 
-            channels.append(max(channels[-1] // 2, 8))
-            kernels.append(3)
-            current_stride_prod *= new_stride
-            current_out_dim = input_dim // current_stride_prod
+    
 
         architecture_params = {
             'input_dim': input_dim,
