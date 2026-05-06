@@ -80,7 +80,7 @@ Users can implement their own architectures and loss functions (criterions) by s
 * **[Development Guide: Custom Models](docs/CUSTOM_MODELS.md)**
 
 ## Feedback & Support
-If you have questions, suggestions, or find any bugs, please feel free to open an issue or [contact me directly](mailto:mb.strozyk@student.uw.edu.pl)
+If you have questions, suggestions, or find any bugs, please feel free to open an issue or [contact me directly by mail](mailto:mb.strozyk@student.uw.edu.pl).
 
 <!-- Later mayebe :): contact the maintainers at [your-email@domain.com]. -->
 
