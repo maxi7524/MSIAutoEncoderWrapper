@@ -1,6 +1,6 @@
 
 
-IMSAutoEncoder_main_DOC = """
+MSIAutoEncoder_main_DOC = """
         High-level Manager for the Contrastive IMS Autoencoder lifecycle.
 
         This class orchestrates the interaction between the neural network architecture, 
@@ -28,7 +28,7 @@ IMSAutoEncoder_main_DOC = """
 
     """
 
-IMSAutoEncoder_fit_DOC = """
+MSIAutoEncoder_fit_DOC = """
         Runs the full training pipeline using the ``train_model`` engine.
 
         This method prepares the DataLoader, handles hardware allocation, 
@@ -48,14 +48,14 @@ IMSAutoEncoder_fit_DOC = """
         :type TorchLoader_config: dict, optional
         """
 
-IMSAutoEncoder_transform_DOC = """
+MSIAutoEncoder_transform_DOC = """
         Processes the entire dataset through the encoder to create a latent map.
 
         :returns: Matrix of latent embeddings for all pixels. Shape: ``[N_pixels, latent_dim]``.
         :rtype: np.ndarray
         """
 
-IMSAutoEncoder_encode_DOC = """
+MSIAutoEncoder_encode_DOC = """
         Encodes raw spectra into the latent space.
 
         :param x: Input spectra. Can be a single spectrum or a batch.
@@ -65,7 +65,7 @@ IMSAutoEncoder_encode_DOC = """
         :rtype: np.ndarray
         """
 
-IMSAutoEncoder_decode_DOC = """
+MSIAutoEncoder_decode_DOC = """
         Decodes latent vectors back into the spectral domain.
 
         :param z: Latent vectors of shape ``[Batch, latent_dim]``.

@@ -1,9 +1,9 @@
 
-## IMSAutoEncoderWrapper
+## MSIAutoEncoderWrapper
 
 ## Introduction
 
-`IMSAutoEncoderWrapper` is a Python library for training and deploying Autoencoder architectures on **Mass Spectrometry Imaging (MSI)** data.
+`MSIAutoEncoderWrapper` is a Python library for training and deploying Autoencoder architectures on **Mass Spectrometry Imaging (MSI)** data.
 
 ### Key Features
 * **Seamless Data Integration**: Direct loading of `imzML` files via `m2aia`.

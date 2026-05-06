@@ -18,7 +18,7 @@ from .utils.Binners import IMSPyTorchBinner
 # TODO - we could use certain *mask* (so we do not batch noise pixel ~ match faster learning)
 
 
-class IMSPyTorchDataset(Dataset):
+class MSIPyTorchDataset(Dataset):
     """
     An adapter class that bridges the M2AIA ImzMLReader with the PyTorch Dataset ecosystem.
 

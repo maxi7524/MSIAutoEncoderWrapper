@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 import torch.nn as nn
 import torch
-from ..architectures.base import IMSBaseAutoencoderArchitecture
+from ..architectures.base import MSIBaseAutoencoderArchitecture
 
-class IMSABaseAutoEncoderCriterion(nn.Module, ABC):
+class MSIABaseAutoEncoderCriterion(nn.Module, ABC):
     """
     Abstract base class for all IMS Criterions.
 
@@ -21,7 +21,7 @@ class IMSABaseAutoEncoderCriterion(nn.Module, ABC):
     def forward(self, 
                 batch_idx: int, 
                 batch_data: tuple[torch.Tensor, torch.Tensor], 
-                model: IMSBaseAutoencoderArchitecture, 
+                model: MSIBaseAutoencoderArchitecture, 
                 dataloader: torch.utils.data.DataLoader,
                 device: torch.device) -> tuple[torch.Tensor, dict[str, float]]:
         """

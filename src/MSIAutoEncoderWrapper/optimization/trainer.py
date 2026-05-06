@@ -5,13 +5,13 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from typing import Callable
 
 # import abstract classes
-from ..architectures import IMSBaseAutoencoderArchitecture
-from ..criterions import IMSABaseAutoEncoderCriterion
+from ..architectures import MSIBaseAutoencoderArchitecture
+from ..criterions import MSIABaseAutoEncoderCriterion
 
 def train_model(
-        model: IMSBaseAutoencoderArchitecture, 
+        model: MSIBaseAutoencoderArchitecture, 
         dataloader: torch.utils.data.DataLoader, 
-        criterion: IMSABaseAutoEncoderCriterion, 
+        criterion: MSIABaseAutoEncoderCriterion, 
         device: torch.device, 
         epochs: int, 
         lr: float, 

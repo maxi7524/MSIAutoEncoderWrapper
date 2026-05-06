@@ -3,11 +3,11 @@ from abc import ABC, abstractmethod
 import torch.nn as nn
 import torch
 
-from ..dataset import IMSPyTorchDataset
+from ..dataset import MSIPyTorchDataset
 
 
 
-class IMSBaseAutoencoderArchitecture(nn.Module, ABC):
+class MSIBaseAutoencoderArchitecture(nn.Module, ABC):
     """
     Abstract base class for Ion Mobility Spectrometry (IMS) Autoencoder architectures.
 
@@ -61,7 +61,7 @@ class IMSBaseAutoencoderArchitecture(nn.Module, ABC):
 
     @staticmethod
     @abstractmethod
-    def SetHyperparameters(IMSDataset: IMSPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | IMSBaseAutoencoderArchitecture:
+    def SetHyperparameters(IMSDataset: MSIPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | MSIBaseAutoencoderArchitecture:
         """
         Analyzes input data to suggest optimal architecture-specific hyperparameters.
 
