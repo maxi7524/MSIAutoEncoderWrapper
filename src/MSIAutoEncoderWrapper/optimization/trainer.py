@@ -20,7 +20,7 @@ def train_model(
         save_callback: Callable
     ):
     """
-    General-purpose training engine for Ion Mobility Spectrometry (IMS) Autoencoders.
+    General-purpose training engine for Ion Mobility Spectrometry (MSI) Autoencoders.
 
     This function orchestrates the training process, handling pre-computation tasks, 
     the optimization loop, and early stopping logic. It is designed to be 
@@ -39,12 +39,12 @@ def train_model(
     4. **Monitoring**: Tracks metrics, logs progress (ETA, loss), and triggers 
        the ``save_callback`` for persistence and best-model tracking[cite: 8].
 
-    :param model: The neural network architecture (must inherit from IMSBaseAutoencoder).
-    :type model: IMSBaseAutoencoderArchitecture
-    :param dataloader: PyTorch DataLoader providing batches from an IMSPyTorchDataset.
+    :param model: The neural network architecture (must inherit from MSIBaseAutoencoder).
+    :type model: MSIBaseAutoencoderArchitecture
+    :param dataloader: PyTorch DataLoader providing batches from an MSIPyTorchDataset.
     :type dataloader: torch.utils.data.DataLoader
     :param criterion: The loss function object containing forward logic and setup tasks.
-    :type criterion: IMSABaseAutoEncoderCriterion
+    :type criterion: MSIABaseAutoEncoderCriterion
     :param device: Hardware target ('cuda' or 'cpu').
     :type device: torch.device
     :param epochs: Maximum number of training iterations.

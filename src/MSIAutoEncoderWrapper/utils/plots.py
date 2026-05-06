@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import torch
 
-class IMSModelVisualizer:
+class MSIModelVisualizer:
     """
-    Mixin class to extend IMSContrastiveModel with visualization capabilities.
+    Mixin class to extend MSIContrastiveModel with visualization capabilities.
     """
     
     def plot_epoch_losses(self, title="Training Losses", xlabel="Epochs", ylabel="Loss", figsize_per_plot=(4, 4)):

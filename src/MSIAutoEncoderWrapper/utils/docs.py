@@ -1,7 +1,7 @@
 
 
 MSIAutoEncoder_main_DOC = """
-        High-level Manager for the Contrastive IMS Autoencoder lifecycle.
+        High-level Manager for the Contrastive MSI Autoencoder lifecycle.
 
         This class orchestrates the interaction between the neural network architecture, 
         the loss criteria, and the data loaders. It is designed to guide the user 

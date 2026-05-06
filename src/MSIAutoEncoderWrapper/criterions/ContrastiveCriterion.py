@@ -16,7 +16,7 @@ from scipy.signal import find_peaks, peak_widths
 
 class ContrastiveCriterion(MSIABaseAutoEncoderCriterion):
     r"""
-    Composite loss function for Ion Mobility Spectrometry (IMS) contrastive learning.
+    Composite loss function for Ion Mobility Spectrometry (MSI) contrastive learning.
     
     This criterion combines InfoNCE contrastive loss with architectural 
     regularization and reconstruction errors.
@@ -151,7 +151,7 @@ class ContrastiveCriterion(MSIABaseAutoEncoderCriterion):
     @staticmethod
     def apply_noise(
         vec: torch.Tensor, 
-        IMSDataset: MSIPyTorchDataset, 
+        MSIDataset: MSIPyTorchDataset, 
         PeakBank) -> torch.Tensor:
         """
         Augments the input batch by injecting realistic biological/chemical noise.
@@ -176,15 +176,15 @@ class ContrastiveCriterion(MSIABaseAutoEncoderCriterion):
 
         :param vec: The input batch of spectral tensors.
         :type vec: torch.Tensor
-        :param IMSDataset: The dataset object containing normalization metadata.
-        :type IMSDataset: IMSPyTorchDataset
+        :param MSIDataset: The dataset object containing normalization metadata.
+        :type MSIDataset: MSIPyTorchDataset
         :param PeakBank: A list of precomputed peak envelopes (start, end, values).
         :type PeakBank: list
         :returns: A noisy version of the input batch.
         :rtype: torch.Tensor
         """
         # local names
-        dataset = IMSDataset
+        dataset = MSIDataset
         # obtain vector and params 
         norm_type = dataset.img.normalization
         device = vec.device
@@ -257,7 +257,7 @@ class ContrastiveCriterion(MSIABaseAutoEncoderCriterion):
            RAM usage.
 
         :param dataset: The dataset to scan for peaks.
-        :type dataset: IMSPyTorchDataset
+        :type dataset: MSIPyTorchDataset
         :param max_peaks_per_spectrum: Maximum number of peaks to extract from 
                                        a single spectrum.
         :type max_peaks_per_spectrum: int

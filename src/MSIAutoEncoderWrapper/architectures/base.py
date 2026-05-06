@@ -9,7 +9,7 @@ from ..dataset import MSIPyTorchDataset
 
 class MSIBaseAutoencoderArchitecture(nn.Module, ABC):
     """
-    Abstract base class for Ion Mobility Spectrometry (IMS) Autoencoder architectures.
+    Abstract base class for Ion Mobility Spectrometry (MSI) Autoencoder architectures.
 
     This class defines a consistent interface for encoding, decoding, and 
     automated hyperparameter suggestion tailored for mass spectrometry data.
@@ -19,7 +19,7 @@ class MSIBaseAutoencoderArchitecture(nn.Module, ABC):
 
     def __init__(self):
         """
-        Initializes the IMSBaseAutoencoder module.
+        Initializes the MSIBaseAutoencoder module.
         """
         super().__init__()
 
@@ -61,7 +61,7 @@ class MSIBaseAutoencoderArchitecture(nn.Module, ABC):
 
     @staticmethod
     @abstractmethod
-    def SetHyperparameters(IMSDataset: MSIPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | MSIBaseAutoencoderArchitecture:
+    def SetHyperparameters(MSIDataset: MSIPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | MSIBaseAutoencoderArchitecture:
         """
         Analyzes input data to suggest optimal architecture-specific hyperparameters.
 
@@ -70,8 +70,8 @@ class MSIBaseAutoencoderArchitecture(nn.Module, ABC):
         This method should evaluate data characteristics, such as peak width, 
         to determine appropriate kernel sizes, strides, and layer counts.
 
-        :param IMSLoader: Data loader object containing spectral metadata.
-        :type IMSLoader: IMSLoader
+        :param MSILoader: Data loader object containing spectral metadata.
+        :type MSILoader: MSILoader
         :param latent_dim: Desired dimensionality of the bottleneck layer.
         :type latent_dim: int
         :param user_hyperparams: Optional dictionary to override suggested parameters.

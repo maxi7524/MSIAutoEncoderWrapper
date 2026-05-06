@@ -9,10 +9,10 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-# IMS
+# MSI
 import m2aia as m2
 # binning module
-from .utils.Binners import IMSPyTorchBinner
+from .utils.Binners import MSIPyTorchBinner
 
 
 # TODO - we could use certain *mask* (so we do not batch noise pixel ~ match faster learning)
@@ -45,15 +45,15 @@ class MSIPyTorchDataset(Dataset):
     :param m2aia_img: Active m2aia reader object.
     :type m2aia_img: m2aia.ImzMLReader
     :param Binner: The binner object used to standardize the m/z axis.
-    :type Binner: IMSPyTorchBinner
+    :type Binner: MSIPyTorchBinner
     """
     def __init__(self, 
                 # obligatory 
                 m2aia_img: m2.ImzMLReader,
-                Binner: IMSPyTorchBinner
+                Binner: MSIPyTorchBinner
             ):
         """
-        Initializes the IMS dataset with a fixed m/z grid.
+        Initializes the MSI dataset with a fixed m/z grid.
 
         Args:
             m2aia_img (m2.ImzMLReader): An opened and loaded M2AIA reader object.

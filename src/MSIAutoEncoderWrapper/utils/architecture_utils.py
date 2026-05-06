@@ -3,12 +3,12 @@ from scipy.signal import find_peaks, peak_widths
 
 
 # TODO - fasten the function
-def estimate_max_peak_width(IMSLoader, sample_size=100):
+def estimate_max_peak_width(MSILoader, sample_size=100):
     """
     Analyzes a sample of spectra to find the largest peak envelope width (in bins).
     This helps in selecting the size of the first kernel in the CNN.[cite: 8]
     """
-    total_spectra = len(IMSLoader)
+    total_spectra = len(MSILoader)
     # Randomly select indices of spectra for analysis (for performance efficiency)[cite: 5]
     indices = np.random.choice(total_spectra, min(sample_size, total_spectra), replace=False)
     
@@ -16,7 +16,7 @@ def estimate_max_peak_width(IMSLoader, sample_size=100):
     
     for idx in indices:
         # Retrieve the normalized spectrum from the Loader
-        _, spectrum = IMSLoader[idx]
+        _, spectrum = MSILoader[idx]
         spectrum = spectrum.numpy()
         
         # Find peaks 

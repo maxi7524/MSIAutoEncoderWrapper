@@ -5,7 +5,7 @@ from ..architectures.base import MSIBaseAutoencoderArchitecture
 
 class MSIABaseAutoEncoderCriterion(nn.Module, ABC):
     """
-    Abstract base class for all IMS Criterions.
+    Abstract base class for all MSI Criterions.
 
     This class defines the training strategy and has full access to the model, 
     spectral data, and spatial indices. This allows for complex loss functions 

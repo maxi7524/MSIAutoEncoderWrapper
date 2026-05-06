@@ -13,9 +13,9 @@ from scipy.stats import binned_statistic
 # Binning
 # ----------------------------------------
 
-class IMSPyTorchBinner(ABC):
+class MSIPyTorchBinner(ABC):
     '''
-    Class which implements binning for `IMSPyTorchDataset`. 
+    Class which implements binning for `MSIPyTorchDataset`. 
 
     Subclasses need to have implemented:
     - `__call__` that maps (xs, ys) to defined grid and returns ys representation. 
@@ -48,7 +48,7 @@ class IMSPyTorchBinner(ABC):
     # ---------------------
 
     def GetConfig(self) -> dict:
-        '''Return dictionary with initial parameters for `IMSPyTorchBinner` object reconstruction.'''
+        '''Return dictionary with initial parameters for `MSIPyTorchBinner` object reconstruction.'''
         pass
 
     # ---------------------
@@ -92,7 +92,7 @@ class IMSPyTorchBinner(ABC):
 # --------------------
 
 
-class M2aiaBinning(IMSPyTorchBinner):
+class M2aiaBinning(MSIPyTorchBinner):
     def __init__(self):
         '''
         Use binning from m2aia library by using `GetXAxis` method
@@ -105,7 +105,7 @@ class M2aiaBinning(IMSPyTorchBinner):
 # Functional transformations
 # --------------------
 
-class LinearBinning(IMSPyTorchBinner):
+class LinearBinning(MSIPyTorchBinner):
     def __init__(
             self, 
             xs_min, 
@@ -188,7 +188,7 @@ class LinearBinning(IMSPyTorchBinner):
     def GetConfig(self):
         return self._init_params
 
-class LogarithmicBinning(IMSPyTorchBinner):
+class LogarithmicBinning(MSIPyTorchBinner):
     '''No tutaj by była klas a któa ma logarytmiczne biny (zwiększające się z osią)'''
     pass
 
@@ -200,7 +200,7 @@ class LogarithmicBinning(IMSPyTorchBinner):
 # ----------------------------------------
 
 
-class IMSPyTorchInverseBinner(ABC):
+class MSIPyTorchInverseBinner(ABC):
     '''
     
     '''
@@ -217,7 +217,7 @@ class IMSPyTorchInverseBinner(ABC):
     # ---------------------
 
     def GetConfig(self) -> dict:
-        '''Return dictionary with initial parameters for `IMSPyTorchInverseBinner` object reconstruction.'''
+        '''Return dictionary with initial parameters for `MSIPyTorchInverseBinner` object reconstruction.'''
         pass
 
     # --- getters ---
@@ -228,11 +228,11 @@ class IMSPyTorchInverseBinner(ABC):
 # Functional transformations
 # --------------------
 
-class NotEmptyInverseBinner(IMSPyTorchInverseBinner):
+class NotEmptyInverseBinner(MSIPyTorchInverseBinner):
     ''' TODO dokumentacja 
     
     '''
-    def __init__(self, Binner: IMSPyTorchBinner):
+    def __init__(self, Binner: MSIPyTorchBinner):
         self._Binner = Binner 
         self._init_params = {
             'Binner': Binner.GetConfig()
@@ -257,8 +257,8 @@ class NotEmptyInverseBinner(IMSPyTorchInverseBinner):
         return self._Binner
     
 
-class TopPeaksInverseBinner(IMSPyTorchInverseBinner):
-    def __init__(self, Binner: IMSPyTorchBinner, max_bins: int, window_size: int = 5, threshold: float = 1e-2):
+class TopPeaksInverseBinner(MSIPyTorchInverseBinner):
+    def __init__(self, Binner: MSIPyTorchBinner, max_bins: int, window_size: int = 5, threshold: float = 1e-2):
         """
         Filters grid intensities by selecting top peaks and their neighborhood.
         
@@ -330,20 +330,20 @@ class TopPeaksInverseBinner(IMSPyTorchInverseBinner):
 # 
 
 
-IMSPyTorchBinner_Registry = {
-    # IMSPyTorchInverseBinner
+MSIPyTorchBinner_Registry = {
+    # MSIPyTorchInverseBinner
     "NotEmptyInverseBinner": NotEmptyInverseBinner,
     "TopPeaksInverseBinner": TopPeaksInverseBinner
 }
 
-IMSPyTorchInverseBinner = {
-    # IMSPyTorchBinner
+MSIPyTorchInverseBinner = {
+    # MSIPyTorchBinner
     # "M2aiaBinning": M2aiaBinning, TODO
     "LinearBinning": LinearBinning,
     # "LogarithmicBinning": LogarithmicBinning,TODO
 }
 
 BINNER_REGISTRY = {
-    **IMSPyTorchBinner_Registry, 
-    **IMSPyTorchInverseBinner
+    **MSIPyTorchBinner_Registry, 
+    **MSIPyTorchInverseBinner
 }

@@ -1,7 +1,7 @@
 """
 visualization/interactive.py
 ----------------------------
-Interactive tools for exploring IMS data.
+Interactive tools for exploring MSI data.
 Uses ipywidgets to drive the m2aia reader directly using its native axis.
 """
 

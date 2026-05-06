@@ -30,13 +30,13 @@ from .dataset import MSIPyTorchDataset
 from .architectures import ARCHITECTURES_REGISTRY, MSIBaseAutoencoderArchitecture
 from .criterions import CRITERIONS_REGISTRY,MSIABaseAutoEncoderCriterion
 from .optimization.trainer import train_model
-from .utils.Binners import IMSPyTorchBinner, IMSPyTorchInverseBinner, BINNER_REGISTRY
+from .utils.Binners import MSIPyTorchBinner, MSIPyTorchInverseBinner, BINNER_REGISTRY
 ## helpers
 from .utils.LatentSpace import build_latent_grid 
-from .utils.plots import IMSModelVisualizer
+from .utils.plots import MSIModelVisualizer
 from .utils import docs as DOCS 
 
-# IMS libraries
+# MSI libraries
 ## main 
 import m2aia as m2
 ## writer
@@ -44,7 +44,7 @@ from pyimzml.ImzMLWriter import ImzMLWriter
 
 # TODO - by default we assume that we provide parameters for image 
 
-class MSIAutoEncoder(IMSModelVisualizer):
+class MSIAutoEncoder(MSIModelVisualizer):
     def __init__(self, 
                 # obligatory
                 ## path for model 
@@ -68,8 +68,8 @@ class MSIAutoEncoder(IMSModelVisualizer):
                 ## loader / dataset
                 MSIDataset: MSIPyTorchDataset = None,
                 ## binner 
-                Binner:  IMSPyTorchBinner = None,
-                InverseBinner: IMSPyTorchInverseBinner = None,
+                Binner:  MSIPyTorchBinner = None,
+                InverseBinner: MSIPyTorchInverseBinner = None,
             
             ):
         '''
@@ -137,7 +137,7 @@ class MSIAutoEncoder(IMSModelVisualizer):
             return None
 
         hyperparameters = ArchitectureClass.SetHyperparameters(
-            IMSDataset=self.MSIDataset, 
+            MSIDataset=self.MSIDataset, 
             latent_dim=latent_dim, 
             user_hyperparameters=user_hyperparameters, initialize_model=False)
 
@@ -181,12 +181,12 @@ class MSIAutoEncoder(IMSModelVisualizer):
 
 
 
-    def SetIMSDataset(self, IMSDataset: MSIPyTorchDataset):
+    def SetMSIDataset(self, MSIDataset: MSIPyTorchDataset):
         
         # Adding dataset and save Binner Option
         if not self._config['Binner']:
-            self._MSIDataset = IMSDataset
-            self._Binner = IMSDataset.Binner
+            self._MSIDataset = MSIDataset
+            self._Binner = MSIDataset.Binner
             self._config['Binner'] = {
                 "name": self.Binner.__class__.__name__,
                 "params": self.Binner.GetConfig()
@@ -197,7 +197,7 @@ class MSIAutoEncoder(IMSModelVisualizer):
         else: 
             #TODO SHOULD CHECK DIMENSION - IF IMAGE CAN BE TRANSFERED *min_mz, max_mz should be same ...
             self._ensure_untrained()
-            self._MSIDataset = IMSDataset
+            self._MSIDataset = MSIDataset
 
             print(f"[Manager] Binner already exists {self._config['Binner']['name']} initialized.")
 
@@ -680,7 +680,7 @@ class MSIAutoEncoder(IMSModelVisualizer):
     def _ensure_loader_available(self):
         if self._MSIDataset is None:
             raise ValueError(
-                "IMSDataset is missing. You cannot perform operations requiring raw MSI data (like .fit() or .transform())."
+                "MSIDataset is missing. You cannot perform operations requiring raw MSI data (like .fit() or .transform())."
             )
 
     def _ensure_trained(self):
@@ -689,7 +689,7 @@ class MSIAutoEncoder(IMSModelVisualizer):
 
     def _ensure_untrained(self):
         if self._history:
-            print("[Warning]: Operating on an trained model. IMSDataset, must have set same binner.")
+            print("[Warning]: Operating on an trained model. MSIDataset, must have set same binner.")
 
     def _ensure_binners_ready(self):
         if self._Binner is None or self._InverseBinner is None:
@@ -760,7 +760,7 @@ class MSIAutoEncoder(IMSModelVisualizer):
         return self._InverseBinner
     
     @InverseBinner.setter
-    def InverseBinner(self, InverseBinner: IMSPyTorchInverseBinner):
+    def InverseBinner(self, InverseBinner: MSIPyTorchInverseBinner):
         self._InverseBinner = InverseBinner
 
     # --- train ---
@@ -775,7 +775,7 @@ class MSIAutoEncoder(IMSModelVisualizer):
         return copy.deepcopy(self._history)
 
 MSIAutoEncoder.__doc__ = DOCS.MSIAutoEncoder_main_DOC
-# IMSAutoEncoder.__init__.__doc__ = DOCS.IMSContrastiveModel_init_DOC
+# MSIAutoEncoder.__init__.__doc__ = DOCS.MSIContrastiveModel_init_DOC
 MSIAutoEncoder.fit.__doc__ = DOCS.MSIAutoEncoder_fit_DOC
 MSIAutoEncoder.transform.__doc__ = DOCS.MSIAutoEncoder_transform_DOC
 MSIAutoEncoder.encode.__doc__ = DOCS.MSIAutoEncoder_encode_DOC

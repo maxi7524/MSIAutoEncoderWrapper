@@ -63,14 +63,14 @@ class ContrastiveAutoencoderSkrajny(MSIBaseAutoencoderArchitecture):
         return self.decoder(z)
 
     @staticmethod
-    def SetHyperparameters(IMSDataset: MSIPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | ContrastiveAutoencoderSkrajny:
+    def SetHyperparameters(MSIDataset: MSIPyTorchDataset, latent_dim: int, user_hyperparameters: dict=None, initialize_model: bool = True) -> dict | ContrastiveAutoencoderSkrajny:
         """
         Dynamically suggests hyperparameters based on spectral peak width and input depth.
 
         The logic estimates the peak envelope width to set the initial kernel size.
 
-        :param IMSLoader: Loader used to retrieve X-axis depth and peak statistics.
-        :type IMSLoader: IMSLoader
+        :param MSILoader: Loader used to retrieve X-axis depth and peak statistics.
+        :type MSILoader: MSILoader
         :param latent_dim: The target dimension for the latent bottleneck.
         :type latent_dim: int
         :param user_hyperparams: Predefined parameters that override the auto-suggestion.
@@ -82,7 +82,7 @@ class ContrastiveAutoencoderSkrajny(MSIBaseAutoencoderArchitecture):
         :raises ValueError: If peak width estimation fails.
         """
 
-        input_dim = IMSDataset.GetGridXAxisDepth()
+        input_dim = MSIDataset.GetGridXAxisDepth()
         print(f"[Optimization] Setting architecture hyperparameters ...")
         
         # If hyperparameters are provided, return them.  
@@ -96,7 +96,7 @@ class ContrastiveAutoencoderSkrajny(MSIBaseAutoencoderArchitecture):
         ## Estimate envelope width
         ### REMARK, starting from 10_000 we obtain same results 
         print(f"[Optimization] Estimating peak envelope width ...")
-        auto_kernel_1 = estimate_max_peak_width(IMSDataset, sample_size=10_000)
+        auto_kernel_1 = estimate_max_peak_width(MSIDataset, sample_size=10_000)
         print(f"[Optimization] Estimated peak envelope width: {auto_kernel_1} bins")
 
         # Layer 1: Wide kernel (15) for peak envelope detection (~0.15 Da at 0.01 Da res)
