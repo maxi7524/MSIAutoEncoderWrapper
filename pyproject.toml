@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "ims_contrastive_model"
+name = "IMSAutoEncoderWrapper"
 version = "0.0.1"
 description = "MIMUW love forever"
 readme = "README.md"

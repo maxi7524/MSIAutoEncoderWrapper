@@ -1,7 +1,7 @@
 import pytest
 import torch
 import numpy as np
-from ims_contrastive_model.architecture import ContrastiveAutoencoder, ContrastiveLoss, ReshapeLayer
+from IMSAutoEncoderWrapper.architecture import ContrastiveAutoencoder, ContrastiveLoss, ReshapeLayer
 
 @pytest.fixture
 def model_params():
