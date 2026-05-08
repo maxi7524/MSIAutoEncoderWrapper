@@ -142,7 +142,7 @@ class ContrastiveAutoencoderMax_InverseDim(MSIBaseAutoencoderArchitecture):
         }
 
         if initialize_model:
-            return ContrastiveAutoencoderSkrajny(**architecture_params)
+            return ContrastiveAutoencoderMax_InverseDim(**architecture_params)
         return architecture_params
 
 # ---------------------

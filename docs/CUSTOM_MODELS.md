@@ -15,11 +15,12 @@ Registration allows the `MSIAutoEncoder` manager to find and initialize your cla
 * **Criterions**: `src/MSIAutoEncoderWrapper/criterions/__init__.py` -> `CRITERIONS_REGISTRY`
 * **Binners**: `src/MSIAutoEncoderWrapper/utils/Binners.py` -> `BINNER_REGISTRY`
 
-### Automated Validation (Coming Soon)
-We are developing a `pytest` suite to validate custom components. It will automatically check if your class:
-* Correctly implements the interface.
-* Handles device placement (CPU/GPU).
-* Returns expected tensor shapes.
+### Automated Validation
+Our library consists of `pytest` suite to validate custom components. It automatically checks:
+* If model correctly implements methods 
+* If train loop is correctly running
+* If criterion returns *proper* values (tries null and ideal cases) 
+
 
 ***
 
@@ -32,6 +33,7 @@ We are developing a `pytest` suite to validate custom components. It will automa
 Every model must function as an Autoencoder.
 
 #### Requirements:
+* **`_config`**: Must contain dictionary attribute with initialization values:
 * **`encode(x)`**: Must return the latent representation $z$.
 * **`decode(z)`**: Must reconstruct the spectrum from latent space.
 * **`forward(x)`**: Usually returns a tuple `(latent, reconstruction)`.
@@ -76,6 +78,10 @@ class MyCustomModel(MSIBaseAutoencoderArchitecture):
         # ensure all parameters are registered for the optimizer.
         self.encoder = Encoder(input_dim, latent_dim)
         self.decoder = Decoder(latent_dim, input_dim)
+        self._config = {
+            'input_dim': input_dim,
+            'latent_dim': latent_dim
+        }
 
     def encode(self, x):
         return self.encoder(x)
@@ -102,7 +108,7 @@ class MyCustomModel(MSIBaseAutoencoderArchitecture):
 **Base Class**: `MSIABaseAutoEncoderCriterion`
 **Location**: `src/MSIAutoEncoderWrapper/criterions/base.py`
 
-The Criterion defines the training **logic**, you . Unlike standard PyTorch loss functions, it has access to the full context: the model, the dataloader, and spatial metadata.
+The Criterion defines the training **logic**. Unlike standard PyTorch loss functions, it has access to the full context: the model, the dataloader, and spatial metadata.
 
 #### Key Features:
 * **Pre-training Setup**: Use the `REQUIRED_SETUP` list to define methods (e.g., `build_peak_bank`) that must run once before the training loop starts.
@@ -128,6 +134,10 @@ class MyComparisonCriterion(MSIABaseAutoEncoderCriterion):
                 'args': {'max_peaks_per_spectrum': max_peaks_per_spectrum}
             }
         ]
+    self._config = {
+        # similar to `Custom Architectures`
+        ...
+    }
 
     def build_reference_bank(self, dataset):
         # Method called automatically before the training loop.
