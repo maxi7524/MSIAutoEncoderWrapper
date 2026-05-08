@@ -1,3 +1,3 @@
 from .dataset import MSIPyTorchDataset
-from .model import MSIAutoEncoder
+from .wrapper import MSIAutoEncoder
 from . import architectures, criterions

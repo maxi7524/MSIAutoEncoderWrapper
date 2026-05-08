@@ -34,7 +34,7 @@ from .dataset import MSIPyTorchDataset
 ## model configuration
 from .architectures import ARCHITECTURES_REGISTRY, MSIBaseAutoencoderArchitecture
 from .criterions import CRITERIONS_REGISTRY,MSIABaseAutoEncoderCriterion
-from .utils.Binners import MSIPyTorchBinner, MSIPyTorchInverseBinner, BINNER_REGISTRY
+from .utils.Binners import MSIPyTorchBinner, MSIPyTorchInverseBinnerRegistry, BINNER_REGISTRY
 from .optimization.trainer import train_model
 ## helpers
 from .utils.LatentSpace import build_latent_grid 
@@ -74,7 +74,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
                 MSIDataset: MSIPyTorchDataset = None,
                 ## binner 
                 Binner:  MSIPyTorchBinner = None,
-                InverseBinner: MSIPyTorchInverseBinner = None,
+                InverseBinner: MSIPyTorchInverseBinnerRegistry = None,
             
             ):
         '''
@@ -196,7 +196,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
     # --- Configure loader ---
 
     # THOSE SHOULD BE InverseBinner.Setter, and SetInverseBinner, should working like: give class name and their params ???
-    def SetInverseBinner(self, InverseBinner: MSIPyTorchInverseBinner, params: dict = None):
+    def SetInverseBinner(self, InverseBinner: MSIPyTorchInverseBinnerRegistry, params: dict = None):
 
         instance, final_params = self._resolve_component(InverseBinner, params)
 
@@ -843,7 +843,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
         return self._InverseBinner
     
     @InverseBinner.setter
-    def InverseBinner(self, InverseBinner: MSIPyTorchInverseBinner):
+    def InverseBinner(self, InverseBinner: MSIPyTorchInverseBinnerRegistry):
         self._InverseBinner = InverseBinner
 
     # --- train ---

@@ -12,11 +12,6 @@
 * **Integrated Visualization**: Mixin classes for plotting training history, latent space maps, and reconstructions.
 * **Automated I/O**: Simplified saving and loading of model weights and compressed latent representations.
 
-<!-- #TODO - zastanawiam się czy to dawać
-## Current Project Status
-* Developing **Contrastive Learning** models for feature extraction.
-* Optimizing Autoencoders for **lossy compression** of MSI datasets.
-* Building predictive models (classification/segmentation) based on the latent space. -->
 
 ### Research Context
 This library reimplements and extends the work from:
