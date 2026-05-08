@@ -22,6 +22,11 @@ class MSIBaseAutoencoderArchitecture(nn.Module, ABC):
         Initializes the MSIBaseAutoencoder module.
         """
         super().__init__()
+        self._config = {}
+
+    def GetConfig(self) -> dict:
+        '''Return dictionary with initial parameters for `MSIBaseAutoencoderArchitecture` object reconstruction.'''
+        return self._config
 
     @abstractmethod
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

@@ -1,4 +1,4 @@
-from .base import MSIBaseAutoencoderArchitecture
+from .base_architecture import MSIBaseAutoencoderArchitecture
 from .ContrastiveAutoencoderSkrajny import ContrastiveAutoencoderSkrajny
 from .ContrastiveAutoencoderMax_InverseDim import ContrastiveAutoencoderMax_InverseDim
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-from .base import MSIBaseAutoencoderArchitecture
+from .base_architecture import MSIBaseAutoencoderArchitecture
 from ..dataset import MSIPyTorchDataset
 #TODO ADD CORRECT LIBRARY 
 from ..utils.architecture_utils import estimate_max_peak_width # Will be moved later
@@ -49,6 +49,14 @@ class ContrastiveAutoencoderSkrajny(MSIBaseAutoencoderArchitecture):
             channels=channels,
             kernels=kernels,
             strides=strides)
+        
+        self._config = {
+            'input_dim': input_dim,
+            'latent_dim': latent_dim,
+            'channels': channels,
+            'kernels': kernels,
+            'strides': strides
+        }
 
 
     def forward(self, x):

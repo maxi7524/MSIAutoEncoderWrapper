@@ -8,7 +8,7 @@ import numpy as np
 # ML library 
 import torch
 import torch.nn.functional as F
-from .base import MSIABaseAutoEncoderCriterion
+from .base_criterion import MSIABaseAutoEncoderCriterion
 from ..dataset import MSIPyTorchDataset
 
 ## functions for find peaks and their envelopes 
@@ -82,7 +82,11 @@ class ContrastiveCriterion(MSIABaseAutoEncoderCriterion):
                 'args': {'max_peaks_per_spectrum': max_peaks_per_spectrum}
             }
         ]
-    
+
+        self._config = {
+            'temperature': temperature,
+            'max_peaks_per_spectrum': max_peaks_per_spectrum
+        }
 
     def forward(self, batch_idx, batch_data, model, dataloader, device):
         # Unpack spatial indices and spectral tensors from the dataset

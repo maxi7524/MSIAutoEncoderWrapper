@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import torch.nn as nn
 import torch
-from ..architectures.base import MSIBaseAutoencoderArchitecture
+from ..architectures.base_architecture import MSIBaseAutoencoderArchitecture
 
 class MSIABaseAutoEncoderCriterion(nn.Module, ABC):
     """
@@ -16,6 +16,13 @@ class MSIABaseAutoEncoderCriterion(nn.Module, ABC):
 
     def __init__(self):
         super().__init__()
+        self._config = {}
+
+
+    def GetConfig(self) -> dict:
+        '''Return dictionary with initial parameters for `MSIABaseAutoEncoderCriterion` object reconstruction.'''
+        return self._config
+
 
     @abstractmethod
     def forward(self, 
