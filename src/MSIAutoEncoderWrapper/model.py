@@ -7,14 +7,19 @@ Ties together the architecture, adapter, and training loop.
 
 # basic python
 from pathlib import Path
+## helpers 
 import time
+## documentation
 from typing import Union, Optional
+## data format 
 import json
 import copy
+## classses
+import inspect
 
 # numerical libraries
 import numpy as np
-# important: updated depracated function
+## important: updated depracated function
 np.fromstring = np.frombuffer
 import pandas as pd
 
@@ -29,8 +34,8 @@ from .dataset import MSIPyTorchDataset
 ## model configuration
 from .architectures import ARCHITECTURES_REGISTRY, MSIBaseAutoencoderArchitecture
 from .criterions import CRITERIONS_REGISTRY,MSIABaseAutoEncoderCriterion
-from .optimization.trainer import train_model
 from .utils.Binners import MSIPyTorchBinner, MSIPyTorchInverseBinner, BINNER_REGISTRY
+from .optimization.trainer import train_model
 ## helpers
 from .utils.LatentSpace import build_latent_grid 
 from .utils.plots import MSIModelVisualizer
@@ -114,56 +119,75 @@ class MSIAutoEncoder(MSIModelVisualizer):
 
         
     # ---------------------
-    # Model definition
+    # Model definition 
     # ---------------------
 
     # ONE 
 
     # --- Configure model ---
 
-    # TODO two concepts:
-    # 1: as it is *loading classes via methods* 
-    # 2: First init object then pass it 
-    # TODO - trzeba zrobić tak żeby obie konwencje były obsługiwane 
+    def SetArchitecture(self, Architecture: MSIBaseAutoencoderArchitecture, latent_dim: int = None, user_hyperparameters: dict = None):
 
-    def SetArchitecture(self, ArchitectureClass: MSIBaseAutoencoderArchitecture, latent_dim: int, user_hyperparameters: dict = None):
+        # TODO dodać checker'a czy jest to zdefinowana klasa czy nie. 
 
         self._ensure_loader_available()
 
-        # Handling existing architecture (not update - can broke model)
+        # handler: architecture exists (not update - can broke model)
         if self._architecture is not None:
             out_txt_warning = '''Architecture is already initialized. For safety reason you can not define it again.'''
             print(out_txt_warning)
             return None
+        
+        # add architecture
 
-        hyperparameters = ArchitectureClass.SetHyperparameters(
-            MSIDataset=self.MSIDataset, 
-            latent_dim=latent_dim, 
-            user_hyperparameters=user_hyperparameters, initialize_model=False)
+        ## case: component is initialized object
+        if inspect.isclass(Architecture):
+            ### getting optimal parameters
+            hyperparameters = Architecture.SetHyperparameters(
+                MSIDataset=self.MSIDataset, 
+                latent_dim=latent_dim, 
+                user_hyperparameters=user_hyperparameters, 
+                initialize_model=False
+                )
+            ### creating architecture instance 
+            self._architecture = Architecture(**hyperparameters).to(self.device)
+            name = Architecture.__name__
+    
 
-        # update config
+        ## case: components is not initialized 
+        else:
+            ### attach object
+            self._architecture = Architecture
+            ### obtain architecture configuration
+            latent_dim, hyperparameters = Architecture.GetConfig()
+            ### save CLASS NAME
+            name = Architecture.__class__.__name__
+
+
+            self._config['Architecture'] 
+
+        ## update config
         self._config['Architecture'] = {
-            "name": ArchitectureClass.__name__,
-            ## For convenience (it is also in hyperparameters)
-            "latent_dim": latent_dim,
-            "hyperparameters": hyperparameters
-        }
-
-        self._architecture = ArchitectureClass(
-            **hyperparameters
-        ).to(self.device)
+                "name": name,
+                ## For convenience (it is also in hyperparameters)
+                "latent_dim": latent_dim,
+                "hyperparameters": hyperparameters
+            }
 
         # Logger
         print(f"[Manager] Architecture: {self._config['Architecture']['name']} initialized.")
 
 
-    def SetCriterion(self, CriterionClass, crit_params):
+
+    def SetCriterion(self, Criterion: MSIABaseAutoEncoderCriterion, crit_params: dict = None):
+
+        instance, final_params = self._resolve_component(Criterion, crit_params, MSIABaseAutoEncoderCriterion)
         
         self._config["Criterion"] = {
-            "name": CriterionClass.__name__,
-            "params": crit_params
+            "name": Criterion.__class__.__name__,
+            "params": final_params
         }
-        self._criterion = CriterionClass(**crit_params)
+        self._criterion = instance
         self._criterion.device = self.device
 
         # Logger
@@ -172,12 +196,16 @@ class MSIAutoEncoder(MSIModelVisualizer):
     # --- Configure loader ---
 
     # THOSE SHOULD BE InverseBinner.Setter, and SetInverseBinner, should working like: give class name and their params ???
-    def SetInverseBinner(self, InverseBinner):
-        self._InverseBinner = InverseBinner
+    def SetInverseBinner(self, InverseBinner: MSIPyTorchInverseBinner, params: dict = None):
+
+        instance, final_params = self._resolve_component(InverseBinner, params)
+
+        self._InverseBinner = instance
         self._config["InverseBinner"] = {
             "name": self.InverseBinner.__class__.__name__,
-            "params": self.InverseBinner.GetConfig()
+            "params":final_params
         }
+
 
 
 
@@ -659,6 +687,8 @@ class MSIAutoEncoder(MSIModelVisualizer):
 
     # --- Helpers: ---
 
+    # ------ Data location ------
+
     def _prepare_input(self, data: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
         """
         Internal helper to ensure input is a float32 torch.Tensor on the correct device.
@@ -668,6 +698,67 @@ class MSIAutoEncoder(MSIModelVisualizer):
         
         # Ensure correct type and move to device
         return data.float().to(self._device)
+    
+
+    # ------ Model configuration ------
+
+    def _resolve_component(self, component, params=None, expected_base_class=None):
+        """
+    Internal helper for resolving and initializing components.
+    
+    This method supports two main loading conventions:
+    
+    1. **Class-based**: If ``component`` is a class, it instantiates it using 
+       the provided ``params``.
+    2. **Instance-based**: If ``component`` is an already initialized object, 
+       it validates its type and extracts its configuration via ``GetConfig()``.
+
+    :param component: The component to resolve. Can be a class type or an instance.
+    :type component: type | object
+    :param params: Dictionary of keyword arguments for class instantiation. 
+        Ignored if ``component`` is already an instance. Defaults to None.
+    :type params: dict, optional
+    :param expected_base_class: A class or tuple of classes to validate the 
+        component against (using ``isinstance``).
+    :type expected_base_class: type, optional
+
+    :returns: A tuple containing the initialized instance and its configuration dictionary.
+    :rtype: (object, dict)
+
+    :raises TypeError: If ``component`` is an instance but does not inherit from 
+        ``expected_base_class``.
+    :raises NotImplementedError: If ``component`` is an instance but does not 
+        implement the required ``GetConfig()`` method.
+    """
+        # case: component is initialized object:
+        if not inspect.isclass(component):
+            ## handler: wrong class type:
+            if expected_base_class and not isinstance(component, expected_base_class):
+                raise TypeError(
+                    f"Component {type(component).__name__} must be an instance "
+                    f"of {expected_base_class.__name__}."
+                )
+            
+            ## handler: lack of GetConfig method (should disallow of creation)
+            if not hasattr(component, 'GetConfig'):
+                ### remark: should now have happend - abstract method
+                raise NotImplementedError(
+                    f"Component {type(component).__name__} does not implement 'GetConfig()'. "
+                    "Please add this method to allow configuration retrieval."
+                )
+
+            ## return (component, params)
+            return component, component.GetConfig() if hasattr(component, 'GetConfig') else {}
+
+        # case: component is class:
+        ## handling no args functions (need to provide empty dict) 
+        if params is None:
+            params = {}
+        
+        ## create instance
+        instance = component(**params)
+        return instance, instance.GetConfig() 
+
     
     # --- Handlers: Not initialized handlers --- 
 
@@ -723,14 +814,6 @@ class MSIAutoEncoder(MSIModelVisualizer):
         return self._criterion
     
      # --- model configuration ---
-    
-    @property
-    def latent_dim(self):
-        return self._latent_dim
-    
-    @property
-    def hyperparameters(self):
-        return self._hyperparameters
 
     @property
     def Model(self):

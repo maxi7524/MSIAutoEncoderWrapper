@@ -28,6 +28,10 @@ class MSIPyTorchBinner(ABC):
     - `GetSpacing` - returns spacing of grid (if it is regular) 
     '''
 
+    def __init__(self):
+        self._config = {}
+
+
     # ---------------------
     # main functionality
     # ---------------------
@@ -49,7 +53,7 @@ class MSIPyTorchBinner(ABC):
 
     def GetConfig(self) -> dict:
         '''Return dictionary with initial parameters for `MSIPyTorchBinner` object reconstruction.'''
-        pass
+        return self._config
 
     # ---------------------
     # getters & setters
@@ -71,6 +75,7 @@ class MSIPyTorchBinner(ABC):
         :return: Number of grid-x values.'''
         pass
 
+    @abstractmethod
     def GetXMin(self):
         '''Get the minimum grid-x-axis value
         
@@ -78,6 +83,7 @@ class MSIPyTorchBinner(ABC):
         '''
         pass
 
+    @abstractmethod
     def GetXMax(self):
         '''Get the maximum grid-x axis value
         
@@ -137,7 +143,7 @@ class LinearBinning(MSIPyTorchBinner):
         self._ys_agg_method = ys_agg_method
 
         # saving initialization params for class reconstruction
-        self._init_params = {
+        self._config = {
             "xs_min": xs_min,
             "xs_max": xs_max,
             "xs_res": xs_res,
@@ -184,9 +190,7 @@ class LinearBinning(MSIPyTorchBinner):
     
     def GetXMax(self):
         return self._grid_xs[-1]
-    
-    def GetConfig(self):
-        return self._init_params
+
 
 class LogarithmicBinning(MSIPyTorchBinner):
     '''No tutaj by była klas a któa ma logarytmiczne biny (zwiększające się z osią)'''
@@ -205,11 +209,14 @@ class MSIPyTorchInverseBinner(ABC):
     
     '''
 
+    def __init__(self):
+        self._config = {}
 
     @abstractmethod
     def __call__(self, grid_ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         ''' Maps grid-ys to (xs, ys)'''
         pass
+
 
 
     # ---------------------
@@ -218,7 +225,7 @@ class MSIPyTorchInverseBinner(ABC):
 
     def GetConfig(self) -> dict:
         '''Return dictionary with initial parameters for `MSIPyTorchInverseBinner` object reconstruction.'''
-        pass
+        return self._config
 
     # --- getters ---
 
@@ -229,13 +236,17 @@ class MSIPyTorchInverseBinner(ABC):
 # --------------------
 
 class NotEmptyInverseBinner(MSIPyTorchInverseBinner):
-    ''' TODO dokumentacja 
-    
+    ''' 
+    REMARK: numerically not stable
+    #TODO 
+    - threshold value should be given 
     '''
     def __init__(self, Binner: MSIPyTorchBinner):
         self._Binner = Binner 
-        self._init_params = {
-            'Binner': Binner.GetConfig()
+
+        self._config = {
+            'Binner': Binner.GetConfig(),
+
         }
 
     def __call__(self, grid_ys):
@@ -249,8 +260,6 @@ class NotEmptyInverseBinner(MSIPyTorchInverseBinner):
 
         return grid_xs[mask], grid_ys[mask]
     
-    def GetConfig(self):
-        return self._init_params
 
     @property
     def Binner(self):
@@ -274,7 +283,7 @@ class TopPeaksInverseBinner(MSIPyTorchInverseBinner):
         self._window_size = window_size
         self._threshold = threshold
         
-        self._init_params = {
+        self._config = {
             'Binner': Binner.GetConfig(),
             'max_bins': max_bins,
             'window_size': window_size,
@@ -320,8 +329,6 @@ class TopPeaksInverseBinner(MSIPyTorchInverseBinner):
         grid_xs = self._Binner.GetXAxis()
         return grid_xs[keep_mask], grid_ys[keep_mask]
 
-    def GetConfig(self):
-        return self._init_params
 
 # ----------------------------------------
 # Helpers
