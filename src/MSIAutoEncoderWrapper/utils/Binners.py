@@ -204,7 +204,7 @@ class LogarithmicBinning(MSIPyTorchBinner):
 # ----------------------------------------
 
 
-class MSIPyTorchInverseBinnerRegistry(ABC):
+class MSIPyTorchInverseBinner(ABC):
     '''
     
     '''
@@ -235,7 +235,7 @@ class MSIPyTorchInverseBinnerRegistry(ABC):
 # Functional transformations
 # --------------------
 
-class NotEmptyInverseBinner(MSIPyTorchInverseBinnerRegistry):
+class NotEmptyInverseBinner(MSIPyTorchInverseBinner):
     ''' 
     REMARK: numerically not stable
     #TODO 
@@ -266,7 +266,7 @@ class NotEmptyInverseBinner(MSIPyTorchInverseBinnerRegistry):
         return self._Binner
     
 
-class TopPeaksInverseBinner(MSIPyTorchInverseBinnerRegistry):
+class TopPeaksInverseBinner(MSIPyTorchInverseBinner):
     def __init__(self, Binner: MSIPyTorchBinner, max_bins: int, window_size: int = 5, threshold: float = 1e-2):
         """
         Filters grid intensities by selecting top peaks and their neighborhood.
