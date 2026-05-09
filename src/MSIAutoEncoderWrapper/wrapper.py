@@ -202,7 +202,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
 
         self._InverseBinner = instance
         self._config["InverseBinner"] = {
-            "name": self.instance.__class__.__name__,
+            "name": instance.__class__.__name__,
             "params":final_params
         }
 
