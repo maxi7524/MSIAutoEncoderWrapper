@@ -184,7 +184,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
         instance, final_params = self._resolve_component(Criterion, crit_params, MSIABaseAutoEncoderCriterion)
         
         self._config["Criterion"] = {
-            "name": Criterion.__class__.__name__,
+            "name": instance.__class__.__name__,
             "params": final_params
         }
         self._criterion = instance
@@ -202,7 +202,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
 
         self._InverseBinner = instance
         self._config["InverseBinner"] = {
-            "name": self.InverseBinner.__class__.__name__,
+            "name": self.instance.__class__.__name__,
             "params":final_params
         }
 
