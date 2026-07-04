@@ -277,7 +277,6 @@ class TopPeaksInverseBinner(MSIPyTorchInverseBinner):
             window_size: How many points to the left and right of a peak to include.
             threshold: Absolute intensity below which signal is ignored.
         """
-        #TODO - to validate (promt) 
         self._Binner = Binner
         self._max_bins = max_bins
         self._window_size = window_size
