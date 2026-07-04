@@ -2,7 +2,7 @@ import numpy as np
 from scipy.signal import find_peaks, peak_widths
 
 
-# TODO - fasten the function
+# FIXME: It can be optimized 
 def estimate_max_peak_width(MSILoader, sample_size=100):
     """
     Analyzes a sample of spectra to find the largest peak envelope width (in bins).

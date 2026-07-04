@@ -47,7 +47,6 @@ import m2aia as m2
 ## writer
 from pyimzml.ImzMLWriter import ImzMLWriter 
 
-# TODO - by default we assume that we provide parameters for image 
 
 class MSIAutoEncoder(MSIModelVisualizer):
     def __init__(self, 
@@ -848,7 +847,7 @@ class MSIAutoEncoder(MSIModelVisualizer):
 
     # --- train ---
 
-    # TODO
+    # TODO(ADDITIONAL) - batch size / memory estimator 
     ## ADD BATCH SIZE HERE - it should calculate available memory and model size with all weights and print if there is risk of getting memory limit - 
 
     # --- other ---

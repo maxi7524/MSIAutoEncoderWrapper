@@ -131,7 +131,7 @@ class TestArchitectures:
         torch.testing.assert_close(recon1, recon2, msg=f"{arch_name}: Non-deterministic output in eval mode.")
 
     
-    # TODO - it does not pass ??? i do not know how to create it 
+    # BUG - it does not pass ??? i do not know how to create it 
     # def test_weight_initialization_sanity(self, arch_name, architecture_params):
     #     """
     #     Test: Initial weights state.
