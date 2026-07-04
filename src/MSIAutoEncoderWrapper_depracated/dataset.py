@@ -15,7 +15,7 @@ import m2aia as m2
 from .utils.Binners import MSIPyTorchBinner
 
 
-# TODO - we could use certain *mask* (so we do not batch noise pixel ~ match faster learning)
+# REVISION - we could use certain *mask* (so we do not batch noise pixel ~ match faster learning)
 
 
 class MSIPyTorchDataset(Dataset):
