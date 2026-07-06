@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 import numpy as np
 
 # Purely relative imports within the package hierarchy
-from ....loader.strategies.base_loader import MSIBaseLoader
+from ....readers.strategies.base_reader import MSIBaseReader
 from ....binners.binners_strategies.base_binner import MSIBaseBinner
 
 
@@ -18,12 +18,12 @@ class MSIBaseDataset(Dataset, ABC):
     getters for automated grid-x-axis dimensionality verification.
     """
 
-    def __init__(self, loader: MSIBaseLoader, binner: MSIBaseBinner) -> None:
+    def __init__(self, loader: MSIBaseReader, binner: MSIBaseBinner) -> None:
         """
         Initializes the base dataset wrapper via explicit dependency injection.
 
-        :param loader: Concrete implementation of MSIBaseLoader driving storage file I/O operations.
-        :type loader: MSIBaseLoader
+        :param loader: Concrete implementation of MSIBaseReader driving storage file I/O operations.
+        :type loader: MSIBaseReader
         :param binner: Concrete implementation of MSIBaseBinner defining target grid-x-axis mapping properties.
         :type binner: MSIBaseBinner
         """
@@ -69,7 +69,7 @@ class MSIBaseDataset(Dataset, ABC):
 
     # Enforced abstract getters to guarantee decoupling across architectures and trainers
     @property
-    def loader(self) -> MSIBaseLoader:
+    def loader(self) -> MSIBaseReader:
         """Exposes the internal bound file storage reader interface."""
         return self._loader
 

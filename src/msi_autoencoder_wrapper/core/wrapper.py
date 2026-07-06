@@ -8,7 +8,7 @@ import os
 import json
 import torch
 from typing import Union, Dict, Any, Optional, List
-from ..utils.logger import get_logger
+from ..utils.logger import get_custom_logger
 
 ## mixins 
 from .mixins.workspace_mixin import WorkspaceMixin
@@ -23,19 +23,19 @@ from .utils.exceptions import (
 )
 
 ## Other modules 
-from ..loader.manager import ReaderManager
-from ..binners.manager import BinningManager
+from ..readers.manager import ReaderManager
+from ..binners.manager import BinnerManager
 from ..models.architecture.manager import ArchitectureManager
 from ..models.datasets.manager import DatasetManager
 from ..training.manager import TrainingManager
 
-logger = get_logger(__name__)
+logger = get_custom_logger(__name__)
 
 
 class MSIAutoEncoderWrapper(
     ReadersMixin,       # I/O functionality - `readers` module  
-    TrainingMixin,      # 
-    InferenceMixin,     # 
+    # TrainingMixin,      # 
+    # InferenceMixin,     # 
     WorkspaceMixin      # Folder automation - `core/mixins/workspace_mixin` module
     ):
     """
@@ -87,7 +87,7 @@ class MSIAutoEncoderWrapper(
         
         # Session internal states
         ## set device
-        self.device: str = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device: str = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
 
         ## Other states
         self.model: Optional[torch.nn.Module] = None

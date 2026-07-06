@@ -4,12 +4,12 @@ Mixin module extending the main MSI wrapper with safe dataset reader and binning
 
 from typing import Any, Optional
 from pathlib import Path
-from ...utils.logger import get_logger
+from ...utils.logger import get_custom_logger
 from ...readers.manager import ReaderManager as ReaderManager
-from ...binners.manager import BinningManager
+from ...binners.manager import BinnerManager
 from ..utils.validators import resolve_component
 
-logger = get_logger(__name__)
+logger = get_custom_logger(__name__)
 
 
 class ReadersMixin:

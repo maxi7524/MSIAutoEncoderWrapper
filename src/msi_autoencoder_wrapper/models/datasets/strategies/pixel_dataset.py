@@ -5,7 +5,7 @@ import numpy as np
 # Purely relative imports linking back to interface and registry contexts
 from ..manager import DatasetManager
 from .base_dataset import MSIBaseDataset
-from ....loader.strategies.base_loader import MSIBaseLoader
+from ....loader.strategies.base_loader import MSIBaseReader
 from ....binners.binners_strategies.base_binner import MSIBaseBinner
 
 
@@ -19,12 +19,12 @@ class PixelDataset(MSIBaseDataset):
     homogeneous intensity vectors aligned directly to the verified master grid-x-axis.
     """
 
-    def __init__(self, loader: MSIBaseLoader, binner: MSIBaseBinner) -> None:
+    def __init__(self, loader: MSIBaseReader, binner: MSIBaseBinner) -> None:
         """
         Constructs the independent pixel sampling dataset pipeline layer.
 
         :param loader: Active file reader subclass handle managing native binary matrix tracking.
-        :type loader: MSIBaseLoader
+        :type loader: MSIBaseReader
         :param binner: Active processing manager specifying target grid-x-axis ticks boundaries.
         :type binner: MSIBaseBinner
         """

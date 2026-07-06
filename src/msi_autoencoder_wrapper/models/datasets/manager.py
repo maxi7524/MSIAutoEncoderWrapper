@@ -2,7 +2,7 @@ from typing import Type, Dict, Any, Union
 
 # Purely relative imports within the package hierarchy
 from ...utils.logger import get_custom_logger
-from ...loader.strategies.base_loader import MSIBaseLoader
+from ...readers.strategies.base_reader import MSIBaseReader
 from ...binners.binners_strategies.base_binner import MSIBaseBinner
 from .strategies.base_dataset import MSIBaseDataset
 
@@ -42,7 +42,7 @@ class DatasetManager:
     def build_dataset(
         cls,
         setup: Union[dict[str, Any], MSIBaseDataset],
-        loader: MSIBaseLoader,
+        loader: MSIBaseReader,
         binner: MSIBaseBinner
     ) -> MSIBaseDataset:
         """
@@ -54,7 +54,7 @@ class DatasetManager:
         :param setup: Dataset configuration specifications map or an explicit active instance.
         :type setup: dict or MSIBaseDataset
         :param loader: Bound storage driver instance executing file I/O operations.
-        :type loader: MSIBaseLoader
+        :type loader: MSIBaseReader
         :param binner: Active forward transformation component managing grid-x-axis mappings.
         :type binner: MSIBaseBinner
         :return: Structural-type validated dataset engine instance integrated into PyTorch workflows.
