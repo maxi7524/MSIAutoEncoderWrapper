@@ -1,5 +1,5 @@
 from typing import Type, Dict, Any
-from .strategies.base_loader import MSIBaseLoader
+from .strategies.base_reader import MSIBaseReader
 
 
 class LoaderManager:
@@ -12,7 +12,18 @@ class LoaderManager:
 
     # Driver tracking registration mapping
     ## Internal data ledger tracking valid abstract file system interpreter blueprints
-    _REGISTRY: Dict[str, Type[MSIBaseLoader]] = {}
+    _REGISTRY: Dict[str, Type[MSIBaseReader]] = {}
+
+    @classmethod
+    @property
+    def REGISTRY(cls) -> Dict[str, Type[MSIBaseReader]]:
+        """
+        Exposes read-only class property referencing internally registered strategy maps hooks.
+        
+        :return: Mapping tracking registered structural string indicators against concrete object definitions.
+        :rtype: Dict[str, Type[MSIBaseReader]]
+        """
+        return cls._REGISTRY
 
     @classmethod
     def register_loader(cls, name: str) -> Any:
@@ -24,22 +35,22 @@ class LoaderManager:
         :return: Standard structural inner modifier wrapper closure.
         :rtype: Callable
         """
-        def decorator(subclass: Type[MSIBaseLoader]) -> Type[MSIBaseLoader]:
+        def decorator(subclass: Type[MSIBaseReader]) -> Type[MSIBaseReader]:
             # Register structural mapping class handler
             cls._REGISTRY[name] = subclass
             return subclass
         return decorator
 
     @classmethod
-    def get_loader(cls, name: str, **kwargs: Any) -> MSIBaseLoader:
+    def get_loader(cls, name: str, **kwargs: Any) -> MSIBaseReader:
         """
         Resolves driver classes and executes safe instantiation setups using custom parameter maps.
 
         :param name: Target lookup key for the requested I/O driver strategy.
         :type name: str
         :param kwargs: Property keyword attributes delegated directly into class loaders.
-        :return: Initialized concrete implementation sub-type inheriting from MSIBaseLoader.
-        :rtype: msi_lib.loader.strategies.base_loader.MSIBaseLoader
+        :return: Initialized concrete implementation sub-type inheriting from MSIBaseReader.
+        :rtype: msi_lib.loader.strategies.base_loader.MSIBaseReader
         :raises KeyError: If no structural loader matches the requested string query name.
         """
         # Validate entry availability within driver cache
