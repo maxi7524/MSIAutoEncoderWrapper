@@ -1,6 +1,19 @@
 """
 Workspace Management Mixin and Proxy for the MSI Library Facade.
 Handles robust path configurations, custom layouts, and automated directory provisioning.
+
+Default Directory Layout Structure:
+===================================
+project_path/
+├── imgs/                          # Raw input image datasets (.imzML / .ibd)
+└── models/
+    └── <model_name>/              # Primary isolated machine learning model folder
+        └── <img_name>/            # Nested subdirectory assigned to a target image context
+            ├── config/            # Segregated operational configurations and weights storage
+            │   ├── config.json    # Binner, model parameters, and execution blueprints
+            │   ├── weights.pt     # Compiled PyTorch graph binary checkpoint weights
+            │   └── history.json   # Training performance history trace metric logs
+            └── latent/            # Generated spatial compressed latent space target representations
 """
 
 from pathlib import Path
@@ -10,6 +23,10 @@ from ..utils.exceptions import WorkspaceConfigError
 
 logger = get_custom_logger(__name__)
 
+
+# --------------------------------------------------
+# Section: WorkspaceProxy Context Management
+# --------------------------------------------------
 
 class WorkspaceProxy:
     """
@@ -132,6 +149,11 @@ class WorkspaceProxy:
         self.active_img_name = None
         self.active_img_names = None
 
+
+# --------------------------------------------------
+# Section: Path and Directory Accessors
+# --------------------------------------------------
+
     def get_project_path(self) -> Path:
         """
         Retrieve absolute root workspace reference directory.
@@ -171,7 +193,7 @@ class WorkspaceProxy:
             raise WorkspaceConfigError("Active model context is uninitialized.")
         return self.get_models_root() / self.active_model_name
 
-    def get_active_image_dir(self, img_name: Optional[str] = None) -> Path:
+    def get_active_model_image_dir(self, img_name: Optional[str] = None) -> Path:
         """
         Calculate nested operational structure matching specific model coupled with a dataset target.
 
@@ -195,7 +217,7 @@ class WorkspaceProxy:
         :return: Path to configuration folder.
         :rtype: Path
         """
-        return self.get_active_image_dir(img_name=img_name) / self._layout["model_config_subdir"]
+        return self.get_active_model_image_dir(img_name=img_name) / self._layout["model_config_subdir"]
 
     def get_latent_dir(self, img_name: Optional[str] = None) -> Path:
         """
@@ -206,7 +228,32 @@ class WorkspaceProxy:
         :return: Path to latent output folder.
         :rtype: Path
         """
-        return self.get_active_image_dir(img_name=img_name) / self._layout["model_latent_subdir"]
+        return self.get_active_model_image_dir(img_name=img_name) / self._layout["model_latent_subdir"]
+
+
+# --------------------------------------------------
+# Section: Raw Dataset Path Resolution
+# --------------------------------------------------
+
+    def get_active_image_file_path(self, extension: str = ".imzML") -> Path:
+        """
+        Calculate the full file path pointing directly to the active raw MSI dataset file.
+
+        :param extension: Target file format string specifier (e.g., '.imzML' or '.ibd'). Defaults to '.imzML'.
+        :type extension: str
+        :return: Complete Path target reference mapping to the requested raw input image dataset file.
+        :rtype: Path
+        :raises WorkspaceConfigError: If active image context is uninitialized.
+        """
+        if not self.active_img_name:
+            raise WorkspaceConfigError("Inference/Loading blocked: Active image context is uninitialized.")
+        ext = extension if extension.startswith(".") else f".{extension}"
+        return self.get_imgs_dir() / f"{self.active_img_name}{ext}"
+
+
+# --------------------------------------------------
+# Section: OS Directory Provisioning Execution
+# --------------------------------------------------
 
     def create_required_directories(self) -> None:
         """
@@ -239,6 +286,44 @@ class WorkspaceProxy:
             logger.error("OS directory provisioning interrupted: %s", str(e))
             raise WorkspaceConfigError(f"Failed to securely provision workspace directories: {e}")
 
+
+# --------------------------------------------------
+# Section: Structural Visualization Utilities
+# --------------------------------------------------
+
+    def __str__(self) -> str:
+        """
+        Defines the native string representation of the WorkspaceProxy configuration.
+        Constructs the current filesystem schema block for terminal logging and print output.
+        """
+        model_part = self.active_model_name or "<model_name>"
+        img_part = self.active_img_name or "<img_name>"
+        
+        lines = [
+            f"{self.project_path}/",
+            f"├── {self._layout['imgs_dir']}/",
+            f"│   └── {img_part}.imzML / {img_part}.ibd",
+            f"└── {self._layout['models_root']}/",
+            f"    └── {model_part}/",
+            f"        └── {img_part}/",
+            f"            ├── {self._layout['model_config_subdir']}/",
+            f"            │   ├── config.json",
+            f"            │   ├── weights.pt",
+            f"            │   └── history.json",
+            f"            └── {self._layout['model_latent_subdir']}/"
+        ]
+        return "\n".join(lines)
+
+    def print_workspace_layout(self) -> None:
+        """
+        Dynamically prints the project workspace file layout tree structure to stdout based on the current
+        active model and image context variables. Useful for verification inside interactive notebooks.
+        """
+        print(self)
+
+# --------------------------------------------------
+# Section: WorkspaceMixin Injection Hook
+# --------------------------------------------------
 
 class WorkspaceMixin:
     """
