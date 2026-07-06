@@ -2,13 +2,13 @@ from pathlib import Path
 import numpy as np
 import m2aia as m2
 from .base_reader import MSIBaseReader
-from ..manager import LoaderManager
+from ..manager import ReaderManager
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@LoaderManager.register_loader("M2aiaReader")
+@ReaderManager.register_loader("M2aiaReader")
 class M2aiaReader(MSIBaseReader):
     """
     Concrete data loader adapter linking native binary C++ M2aia bindings to the library ecosystem.

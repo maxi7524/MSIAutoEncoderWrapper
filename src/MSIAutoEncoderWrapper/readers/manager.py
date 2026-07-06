@@ -2,7 +2,7 @@ from typing import Type, Dict, Any
 from .strategies.base_reader import MSIBaseReader
 
 
-class LoaderManager:
+class ReaderManager:
     """
     Central registration gateway managing native file system data parsers and readers.
     
@@ -12,18 +12,7 @@ class LoaderManager:
 
     # Driver tracking registration mapping
     ## Internal data ledger tracking valid abstract file system interpreter blueprints
-    _REGISTRY: Dict[str, Type[MSIBaseReader]] = {}
-
-    @classmethod
-    @property
-    def REGISTRY(cls) -> Dict[str, Type[MSIBaseReader]]:
-        """
-        Exposes read-only class property referencing internally registered strategy maps hooks.
-        
-        :return: Mapping tracking registered structural string indicators against concrete object definitions.
-        :rtype: Dict[str, Type[MSIBaseReader]]
-        """
-        return cls._REGISTRY
+    REGISTRY: Dict[str, Type[MSIBaseReader]] = {}
 
     @classmethod
     def register_loader(cls, name: str) -> Any:
@@ -37,7 +26,7 @@ class LoaderManager:
         """
         def decorator(subclass: Type[MSIBaseReader]) -> Type[MSIBaseReader]:
             # Register structural mapping class handler
-            cls._REGISTRY[name] = subclass
+            cls.REGISTRY[name] = subclass
             return subclass
         return decorator
 
@@ -54,8 +43,8 @@ class LoaderManager:
         :raises KeyError: If no structural loader matches the requested string query name.
         """
         # Validate entry availability within driver cache
-        if name not in cls._REGISTRY:
-            raise KeyError(f"Loader '{name}' not found. Available: {list(cls._REGISTRY.keys())}")
+        if name not in cls.REGISTRY:
+            raise KeyError(f"Loader '{name}' not found. Available: {list(cls.REGISTRY.keys())}")
         
         # Factory initialization sequence
-        return cls._REGISTRY[name](**kwargs)
+        return cls.REGISTRY[name](**kwargs)

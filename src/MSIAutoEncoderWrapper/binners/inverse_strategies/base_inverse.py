@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from ..binners_strategies.base_binner import MSIBaseBinner
-
+from typing import Any 
 
 class MSIBaseInverseBinner(ABC):
     """

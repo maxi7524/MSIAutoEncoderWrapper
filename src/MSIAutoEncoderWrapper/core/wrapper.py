@@ -12,6 +12,7 @@ from ..utils.logger import get_logger
 
 ## mixins 
 from .mixins.workspace_mixin import WorkspaceMixin
+from .mixins.readers_mixin import ReadersMixin
 
 ## exceptions handling 
 from .utils.validators import validate_components
@@ -22,7 +23,7 @@ from .utils.exceptions import (
 )
 
 ## Other modules 
-from ..loader.manager import LoaderManager
+from ..loader.manager import ReaderManager
 from ..binners.manager import BinningManager
 from ..models.architecture.manager import ArchitectureManager
 from ..models.datasets.manager import DatasetManager
@@ -31,7 +32,12 @@ from ..training.manager import TrainingManager
 logger = get_logger(__name__)
 
 
-class MSIAutoEncoderWrapper:
+class MSIAutoEncoderWrapper(
+    ReadersMixin,       # I/O functionality - `readers` module  
+    TrainingMixin,      # 
+    InferenceMixin,     # 
+    WorkspaceMixin      # Folder automation - `core/mixins/workspace_mixin` module
+    ):
     """
     Main Facade class that integrates data loading, binning, modeling, and training into a single workspace session.
     
@@ -39,7 +45,7 @@ class MSIAutoEncoderWrapper:
     state tracking, configuration persistence, and checkpoint loading.
 
     Attributes:
-    #TODO(documentation) - after library restructurization
+    #TODO(documentation) - after library restructurization write all necessary infromation here
         project_path (str): Absolute path to the active project working directory.
         device (str): PyTorch compute device ('cuda', 'cpu', etc.).
         dirs (Dict[str, str]): Evaluated absolute paths for project subdirectories.
@@ -78,18 +84,15 @@ class MSIAutoEncoderWrapper:
         ## Core runtime component containers (All loaded objects stay alive in memory dictionaries)
         self.loaders: Dict[str, Any] = {}
         self.binners: Dict[str, Any] = {}
-        self.model: Optional[torch.nn.Module] = None
         
-        # training 
+        # Session internal states
         ## set device
         self.device: str = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
-        
-    
-        # Session internal states
-        ## TODO - maybe depracated 
-        self.config: Dict[str, Any] = {}
+
+        ## Other states
         self.model: Optional[torch.nn.Module] = None
         self.history_tracker: Optional[Dict[str, Any]] = None
+        self.config: Dict[str, Any] = {}
         
         logger.info("MSI AutoEncoder Facade workspace initialized on device: %s", device)
 
