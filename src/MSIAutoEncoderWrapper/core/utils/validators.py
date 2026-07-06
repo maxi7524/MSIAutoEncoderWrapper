@@ -4,7 +4,7 @@ Validation utilities for checking the existence of runtime objects and directory
 
 import os
 from pathlib import Path
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Dict, Type
 from .exceptions import ValidationError
 
 def validate_components(items_to_validate: List[Tuple[Any, str]]) -> None:
@@ -51,3 +51,38 @@ def validate_dir_writable(dir_path: Path) -> None:
                 if not os.access(parent, os.W_OK):
                     raise PermissionError(f"Parent directory '{parent}' is not writable.")
                 break
+
+def resolve_component(
+    target: Any, 
+    registry: Dict[str, Type], 
+    component_type: str,
+    **kwargs: Any
+) -> Any:
+    """
+    Resolves a component strategy either from an active instance or via registry lookup name.
+
+    :param target: Concrete instantiated object or unique string registry identifier lookup key.
+    :type target: Any
+    :param registry: Reference targeting internal manager class driver mapping stores (_REGISTRY).
+    :type registry: Dict[str, Type]
+    :param component_type: Explanatory name of the managed pipeline component for logging.
+    :type component_type: str
+    :param kwargs: Arbitrary initialization key-value parameters passed onto factory constructors.
+    :return: Validated instantiated strategy engine type matching structural criteria.
+    :rtype: Any
+    :raises ProjectConfigError: If string identifier is absent from registration registries.
+    """
+    from .exceptions import ProjectConfigError
+
+    if isinstance(target, str):
+        if target not in registry:
+            raise ProjectConfigError(
+                f"Requested {component_type} identifier '{target}' is not registered. "
+                f"Available drivers: {list(registry.keys())}"
+            )
+        return registry[target](**kwargs)
+    
+    if target is None:
+        raise ProjectConfigError(f"Target configuration reference for {component_type} cannot be None.")
+        
+    return target
