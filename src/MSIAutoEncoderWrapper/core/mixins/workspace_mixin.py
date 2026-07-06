@@ -4,7 +4,7 @@ Handles robust path configurations, custom layouts, and automated directory prov
 """
 
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 from ...utils.logger import get_logger
 from ..utils.exceptions import WorkspaceConfigError
 
