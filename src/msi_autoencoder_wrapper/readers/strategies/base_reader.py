@@ -24,8 +24,6 @@ class MSIBaseReader(ABC):
         self.file_path = Path(file_path)
         ## Package foundational configuration metadata details for serialization
         self._config: dict[str, Any] = {"file_path": str(file_path)}
-        self._binner_ref: Any = None
-        self._inverse_binner_ref: Any = None
 
     def GetConfig(self) -> dict[str, Any]:
         """
@@ -35,32 +33,6 @@ class MSIBaseReader(ABC):
         :rtype: dict
         """
         return self._config
-
-    def attach_binners(self, binner: Any = None, inverse_binner: Any = None) -> None:
-        """
-        Injects running execution reference hooks targeting active pipeline compression managers.
-
-        :param binner: Primary spectrum forward compression binning engine instance, defaults to None.
-        :type binner: Any, optional
-        :param inverse_binner: Utilitarian reverse reconstruction spatial un-binning manager, defaults to None.
-        :type inverse_binner: Any, optional
-        """
-        if binner is not None:
-            self._binner_ref = binner
-        if inverse_binner is not None:
-            self._inverse_binner_ref = inverse_binner
-
-    def _ensure_binner(self) -> None:
-        """
-        Evaluates internal operational safety requirements before routing discrete spatial queries.
-
-        :raises ModelNotInitializedError: If grid conversion is requested without a runtime binner setup.
-        """
-        if self._binner_ref is None:
-            from ...core.utils.exceptions import ModelNotInitializedError
-            raise ModelNotInitializedError(
-                "Grid calculation interrupted: Active binning context state has not been configured inside Wrapper."
-            )
 
     @abstractmethod
     def GetXMin(self) -> float:
@@ -136,24 +108,5 @@ class MSIBaseReader(ABC):
         """
         pass
 
-    # --- GRID PROCESSING OPERATIONS DELEGATED EXPLICITLY TO ATTACHED STRATEGIES ---
-
-    def GetGridXMin(self) -> Any:
-        """Delegates optimized starting binned grid mass axis thresholds evaluation onto assigned binner."""
-        self._ensure_binner()
-        return self._binner_ref.GetXMin()
-
-    def GetGridXMax(self) -> Any:
-        """Delegates optimized terminal binned grid mass axis dimension boundary evaluation onto assigned binner."""
-        self._ensure_binner()
-        return self._binner_ref.GetXMax()
-
-    def GetGridXAxis(self) -> np.ndarray:
-        """Delegates complete evaluation of zunificated grid alignment arrays onto assigned binner."""
-        self._ensure_binner()
-        return self._binner_ref.GetXAxis()
-
-    def GetGridXAxisDepth(self) -> int:
-        """Delegates optimized grid target capacity limits calculation onto assigned binner."""
-        self._ensure_binner()
-        return self._binner_ref.GetXAxisDepth()
+ 
+ 

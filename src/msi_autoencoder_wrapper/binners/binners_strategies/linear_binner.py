@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.stats import binned_statistic
 from .base_binner import MSIBaseBinner
-from ..manager import BinningManager
+from ..binners_manager import BinningManager
 
 
 @BinningManager.register_binner("LinearBinning")

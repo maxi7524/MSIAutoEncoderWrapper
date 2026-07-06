@@ -66,38 +66,55 @@ class WorkspaceProxy:
             default_layout.update(custom_layout)
         self._layout = default_layout
 
-    def set_active_model(self, model_name: str) -> None:
-        """
-        Set the temporary working machine learning model context.
 
-        :param model_name: Unique identifier of the model architecture configuration.
-        :type model_name: str
-        :return: None
-        :rtype: None
-        :raises WorkspaceConfigError: If the model name string is empty or invalid.
-        """
-        if not model_name or not model_name.strip():
-            raise WorkspaceConfigError("Model name identifier cannot be empty.")
-        self.active_model_name = model_name
-        if self.auto_create_dirs:
-            self.create_required_directories()
+    # --------------------------------------------------
+    # Subsection: single image setup
+    # --------------------------------------------------
 
-    def set_active_image(self, img_name: str) -> None:
+    def set_active_image(self, image_name: Optional[str] = None) -> None:
         """
-        Set the temporary working single mass spectrometry image context.
+        Sets the active image context, resolving raw paths, workspace images, or defaults.
 
-        :param img_name: Unique identifier of the image file target.
+        :param image_name: Name of the image or direct file path. Falls back to default if None.
+        :type image_name: Optional[str]
+        """
+        # Context image resolution sequence
+        ## Check if image input is provided or needs fallback
+        if image_name is None:
+            ### Fallback to predefined default image profile
+            logger.info("No image name provided. Falling back to default workspace image configuration.")
+            self._active_image = "default_image"
+            return
+
+        image_path = Path(image_name)
+
+        ## Discriminate between full disk path triggers and standalone keys
+        if image_path.exists() or image_path.is_absolute() or len(image_path.parts) > 1:
+            ### Resolve direct raw filesystem path input
+            logger.info("Resolving direct filesystem path context for image: %s", str(image_name))
+            self._active_image = image_path.stem
+        else:
+            ### Resolve relative key mapping inside standard workspace image repository
+            imgs_dir = self.project_path / self.layout.get("imgs", "imgs")
+            target_mapped_path = imgs_dir / image_name
+            logger.info("Mapping relative image handle against workspace repository path: %s", str(target_mapped_path))
+            self._active_image = image_path.stem
+
+    def set_default_image(self, img_name: str) -> None:
+        """
+        Establish a global fallback default image key when parameters are omitted.
+
+        :param img_name: Unique identifier of the fallback image target.
         :type img_name: str
         :return: None
         :rtype: None
-        :raises WorkspaceConfigError: If the image name string is empty or invalid.
         """
-        if not img_name or not img_name.strip():
-            raise WorkspaceConfigError("Image name identifier cannot be empty.")
-        self.active_img_name = img_name
-        self.active_img_names = None  # Clear multi-image context to avoid conflicts
-        if self.auto_create_dirs:
-            self.create_required_directories()
+        self.default_img_name = img_name
+
+
+    # --------------------------------------------------
+    # Subsection: multiple image setup
+    # --------------------------------------------------
 
     def set_active_images(self, img_names: List[str]) -> None:
         """
@@ -116,16 +133,26 @@ class WorkspaceProxy:
         if self.auto_create_dirs:
             self.create_required_directories()
 
-    def set_default_image(self, img_name: str) -> None:
-        """
-        Establish a global fallback default image key when parameters are omitted.
 
-        :param img_name: Unique identifier of the fallback image target.
-        :type img_name: str
+    # --------------------------------------------------
+    # Subsection: model setup
+    # --------------------------------------------------
+
+    def set_active_model(self, model_name: str) -> None:
+        """
+        Set the temporary working machine learning model context.
+
+        :param model_name: Unique identifier of the model architecture configuration.
+        :type model_name: str
         :return: None
         :rtype: None
+        :raises WorkspaceConfigError: If the model name string is empty or invalid.
         """
-        self.default_img_name = img_name
+        if not model_name or not model_name.strip():
+            raise WorkspaceConfigError("Model name identifier cannot be empty.")
+        self.active_model_name = model_name
+        if self.auto_create_dirs:
+            self.create_required_directories()
 
     def set_default_model(self, model_name: str) -> None:
         """
@@ -137,6 +164,10 @@ class WorkspaceProxy:
         :rtype: None
         """
         self.default_model_name = model_name
+
+    # --------------------------------------------------
+    # Subsection: clear context
+    # --------------------------------------------------
 
     def clear_active_context(self) -> None:
         """
@@ -153,6 +184,10 @@ class WorkspaceProxy:
 # --------------------------------------------------
 # Section: Path and Directory Accessors
 # --------------------------------------------------
+
+    # --------------------------------------------------
+    # Subsection: Project folder
+    # --------------------------------------------------
 
     def get_project_path(self) -> Path:
         """
@@ -180,6 +215,11 @@ class WorkspaceProxy:
         :rtype: Path
         """
         return self.project_path / self._layout["models_root"]
+    
+
+    # --------------------------------------------------
+    # Subsection: Active configuration (model + img + latent) 
+    # --------------------------------------------------
 
     def get_active_model_dir(self) -> Path:
         """

@@ -12,7 +12,8 @@ from ..utils.logger import get_custom_logger
 
 ## mixins 
 from .mixins.workspace_mixin import WorkspaceMixin
-from .mixins.readers_mixin import ReadersMixin
+from .mixins.reader_manager import ReadersManagerMixin
+from .mixins.active_reader_mixin import ActiveReaderMixin
 
 ## exceptions handling 
 from .utils.validators import validate_components
@@ -23,8 +24,8 @@ from .utils.exceptions import (
 )
 
 ## Other modules 
-from ..readers.manager import ReaderManager
-from ..binners.manager import BinnerManager
+from ..readers.readers_manager import ReaderManager
+from ..binners.binners_manager import BinnerManager
 from ..models.architecture.manager import ArchitectureManager
 from ..models.datasets.manager import DatasetManager
 from ..training.manager import TrainingManager
@@ -33,10 +34,12 @@ logger = get_custom_logger(__name__)
 
 
 class MSIAutoEncoderWrapper(
-    ReadersMixin,       # I/O functionality - `readers` module  
-    # TrainingMixin,      # 
-    # InferenceMixin,     # 
-    WorkspaceMixin      # Folder automation - `core/mixins/workspace_mixin` module
+    ReadersManagerMixin,  # Configuration and multi-image registries ledger state database
+    ActiveReaderMixin,    # Dynamic transparent routing command proxy for the active target file
+    # Model setup mixin,        # mixin repsonsible for model instantiation
+    # TrainingMixin,        # training module
+    # InferenceMixin,       # inference module
+    WorkspaceMixin        # Folder automation - `core/mixins/workspace_mixin` module
     ):
     """
     Main Facade class that integrates data loading, binning, modeling, and training into a single workspace session.
@@ -59,7 +62,9 @@ class MSIAutoEncoderWrapper(
         project_path: str, 
         auto_create_dirs: bool = True, 
         custom_layout: Optional[Dict[str, str]] = None,
-        device: str = None
+        device: str = None,
+        *args: Any,
+        **kwargs: Any
     ):
         """
         Initialize the high-level MSI pipeline orchestration engine.
@@ -78,7 +83,9 @@ class MSIAutoEncoderWrapper(
         super().__init__(
             project_path=project_path, 
             auto_create_dirs=auto_create_dirs, 
-            custom_layout=custom_layout
+            custom_layout=custom_layout,
+            *args,
+            **kwargs
         )
 
         ## Core runtime component containers (All loaded objects stay alive in memory dictionaries)
