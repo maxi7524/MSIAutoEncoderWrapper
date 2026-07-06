@@ -6,8 +6,8 @@ import pprint
 from typing import Dict, Any, Optional
 from pathlib import Path
 from ...utils.logger import get_custom_logger
-from ...readers.readers_manager import ReaderManager
-from ...binners.binners_manager import BinnerManager
+from ...readers import ReaderManager
+from ...binners import BinnerManager
 
 logger = get_custom_logger(__name__)
 

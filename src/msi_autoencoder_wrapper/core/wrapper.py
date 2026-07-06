@@ -12,7 +12,7 @@ from ..utils.logger import get_custom_logger
 
 ## mixins 
 from .mixins.workspace_mixin import WorkspaceMixin
-from .mixins.reader_manager import ReadersManagerMixin
+from .mixins.reader_manager_mixin import ReadersManagerMixin
 from .mixins.active_reader_mixin import ActiveReaderMixin
 
 ## exceptions handling 
