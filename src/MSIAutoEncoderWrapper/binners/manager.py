@@ -19,9 +19,9 @@ class BinnerManager:
 
     # Global component registries
     ## Dictionary storing mappings from unique identifiers to forward binner classes
-    _BINNER_REGISTRY: Dict[str, Type[MSIBaseBinner]] = {}
+    BINNER_REGISTRY: Dict[str, Type[MSIBaseBinner]] = {}
     ## Dictionary storing mappings from unique identifiers to inverse binner classes
-    _INVERSE_REGISTRY: Dict[str, Type[MSIBaseInverseBinner]] = {}
+    INVERSE_REGISTRY: Dict[str, Type[MSIBaseInverseBinner]] = {}
 
     @classmethod
     def register_binner(cls, name: str) -> Any:
@@ -36,7 +36,7 @@ class BinnerManager:
         def decorator(subclass: Type[MSIBaseBinner]) -> Type[MSIBaseBinner]:
             # Registry updates
             ## Map the dynamic string token directly to the type constructor reference
-            cls._BINNER_REGISTRY[name] = subclass
+            cls.BINNER_REGISTRY[name] = subclass
             return subclass
         return decorator
 
@@ -53,7 +53,7 @@ class BinnerManager:
         def decorator(subclass: Type[MSIBaseInverseBinner]) -> Type[MSIBaseInverseBinner]:
             # Registry updates
             ## Map the dynamic string token directly to the type constructor reference
-            cls._INVERSE_REGISTRY[name] = subclass
+            cls.INVERSE_REGISTRY[name] = subclass
             return subclass
         return decorator
 
@@ -71,14 +71,14 @@ class BinnerManager:
         """
         # Strategy lookup block
         ## Validate existence of target component key in registration cache
-        if name not in cls._BINNER_REGISTRY:
-            error_msg = f"Binner '{name}' not found in registry. Available: {list(cls._BINNER_REGISTRY.keys())}"
+        if name not in cls.BINNER_REGISTRY:
+            error_msg = f"Binner '{name}' not found in registry. Available: {list(cls.BINNER_REGISTRY.keys())}"
             logger.error(error_msg)
             raise KeyError(error_msg)
         
         # Instance generation pipeline
         ## Resolve the constructor class from mapping and initialize with provided parameters
-        return cls._BINNER_REGISTRY[name](**kwargs)
+        return cls.BINNER_REGISTRY[name](**kwargs)
 
     @classmethod
     def get_inverse_binner(cls, name: str, **kwargs: Any) -> MSIBaseInverseBinner:
@@ -94,11 +94,11 @@ class BinnerManager:
         """
         # Strategy lookup block
         ## Validate existence of target component key in registration cache
-        if name not in cls._INVERSE_REGISTRY:
-            error_msg = f"Inverse Binner '{name}' not found in registry. Available: {list(cls._INVERSE_REGISTRY.keys())}"
+        if name not in cls.INVERSE_REGISTRY:
+            error_msg = f"Inverse Binner '{name}' not found in registry. Available: {list(cls.INVERSE_REGISTRY.keys())}"
             logger.error(error_msg)
             raise KeyError(error_msg)
         
         # Instance generation pipeline
         ## Resolve the constructor class from mapping and initialize with provided parameters
-        return cls._INVERSE_REGISTRY[name](**kwargs)
+        return cls.INVERSE_REGISTRY[name](**kwargs)

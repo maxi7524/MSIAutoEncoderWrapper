@@ -1,84 +1,50 @@
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Any 
+from typing import Any
+
 
 class MSIBaseBinner(ABC):
     """
-    Abstract Base Class establishing structural interface for Mass Spectrometry Imaging binners.
-    
-    .. note::
-       All subclasses must enforce a uniform m/z coordinate grid projection layout to guarantee
-       input dimension compatibility across Convolutional Neural Network execution steps.
+    Abstract Base Class establishing structural interface benchmarks for forward spectral binning algorithms.
     """
-    #TODO(dokumentacja): MSI Binner, przenieść dokumentacje z oryginalnego pliku 
 
     def __init__(self) -> None:
-        """
-        Initializes foundational state vectors and configuration mappings for serialization.
-        """
-        # Metadata storage initialization
-        ## Dictionary blueprint intended to encapsulate parameter configurations for replicability
         self._config: dict[str, Any] = {}
 
     def GetConfig(self) -> dict[str, Any]:
-        """
-        Retrieves serialized parameter properties required to replicate the instance state.
-
-        :return: Configuration parameters mapping containing structural parameters.
-        :rtype: dict
-        """
+        """Exposes configuration parameter properties required for serialization tasks."""
         return self._config
 
     @abstractmethod
     def __call__(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         """
-        Transforms irregular spectrum coordinates into the master m/z index array grid.
+        Projects irregular mass-to-charge spectrometry arrays onto the uniform grid coordinates.
 
-        :param xs: Flat array containing the raw experimental mass-to-charge (m/z) positions.
+        :param xs: One-dimensional array containing raw experimental mass-to-charge (m/z) positions.
         :type xs: np.ndarray
-        :param ys: Flat array containing corresponding empirical peak intensity definitions.
+        :param ys: One-dimensional array containing corresponding raw empirical peak intensity metrics.
         :type ys: np.ndarray
-        :return: aligned intensity vector compliant with targeted deep learning input layers.
+        :return: Evenly mapped normalized intensity response vector.
         :rtype: np.ndarray
         """
         pass
 
     @abstractmethod
     def GetXMin(self) -> float:
-        """
-        Retrieves the absolute lower operational boundary of the master m/z coordinate axis.
-
-        :return: Lower bound mass spectrometry index value.
-        :rtype: float
-        """
+        """Retrieves absolute starting floor mass boundary threshold configured across the shared grid."""
         pass
 
     @abstractmethod
     def GetXMax(self) -> float:
-        """
-        Retrieves the absolute upper operational boundary of the master m/z coordinate axis.
-
-        :return: Upper bound mass spectrometry index value.
-        :rtype: float
-        """
+        """Retrieves absolute terminal ceiling mass boundary threshold configured across the shared grid."""
         pass
 
     @abstractmethod
     def GetXAxis(self) -> np.ndarray:
-        """
-        Retrieves the shared, master coordinate m/z axis alignment array vector.
-
-        :return: One-dimensional vector defining regular grid sampling coordinates.
-        :rtype: np.ndarray
-        """
+        """Retrieves the unified master grid alignment reference array matrix containing m/z points."""
         pass
 
     @abstractmethod
     def GetXAxisDepth(self) -> int:
-        """
-        Retrieves total structural capacity of the regular grid representing input feature dimensions.
-
-        :return: Absolute count of index positions available on the current operational master axis.
-        :rtype: int
-        """
+        """Computes total absolute feature dimension channels length available within binned spaces."""
         pass
