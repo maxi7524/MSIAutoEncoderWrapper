@@ -5,10 +5,10 @@ Handles robust path configurations, custom layouts, and automated directory prov
 
 from pathlib import Path
 from typing import Dict, Optional, Any, List
-from ...utils.logger import get_logger
+from ...utils.logger import get_custom_logger
 from ..utils.exceptions import WorkspaceConfigError
 
-logger = get_logger(__name__)
+logger = get_custom_logger(__name__)
 
 
 class WorkspaceProxy:

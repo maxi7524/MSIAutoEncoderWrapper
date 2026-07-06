@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "MSIAutoEncoderWrapper"
+name = "msi_autoencoder_wrapper"
 version = "0.0.1"
 description = "MIMUW love forever - Autoencoder wrapper for MSI data"
 readme = "README.md"
