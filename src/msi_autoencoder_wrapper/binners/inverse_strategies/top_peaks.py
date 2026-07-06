@@ -1,7 +1,7 @@
 import numpy as np
 from .base_inverse import MSIBaseInverseBinner
 from ..binners_strategies.base_binner import MSIBaseBinner
-from ..manager import BinningManager
+from ..binners_manager import BinningManager
 
 
 @BinningManager.register_inverse_binner("TopPeaksInverseBinner")

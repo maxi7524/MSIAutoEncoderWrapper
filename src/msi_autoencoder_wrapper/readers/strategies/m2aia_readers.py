@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import m2aia as m2
 from .base_reader import MSIBaseReader
-from ..manager import ReaderManager
+from ..readers_manager import ReaderManager
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
