@@ -1,10 +1,10 @@
 import numpy as np
-from .base_inverse import MSIBaseInverseBinner
-from ..binners_strategies.base_binner import MSIBaseBinner
-from ..binners_manager import BinningManager
+from ..base_inverse import MSIBaseInverseBinner
+from ..base_binner import MSIBaseBinner
+from ..binners_manager import BinnerManager
 
 
-@BinningManager.register_inverse_binner("TopPeaksInverseBinner")
+@BinnerManager.register_inverse_binner("TopPeaksInverseBinner")
 class TopPeaksInverseBinner(MSIBaseInverseBinner):
     """
     Resolution reduction algorithm tracking top peak heights across non-overlapping contextual coordinate masks.

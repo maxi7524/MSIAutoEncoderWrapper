@@ -1,11 +1,11 @@
 from pathlib import Path
 import numpy as np
 import m2aia as m2
-from .base_reader import MSIBaseReader
+from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
-from ...utils.logger import get_logger
+from ...utils.logger import get_custom_logger
 
-logger = get_logger(__name__)
+logger = get_custom_logger(__name__)
 
 
 @ReaderManager.register_loader("M2aiaReader")

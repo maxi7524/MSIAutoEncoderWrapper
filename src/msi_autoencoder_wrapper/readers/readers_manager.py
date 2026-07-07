@@ -1,6 +1,8 @@
 from typing import Type, Dict, Any
-from .strategies.base_reader import MSIBaseReader
+from .base_reader import MSIBaseReader
+from ..utils.logger import get_custom_logger
 
+logger = get_custom_logger(__name__)
 
 class ReaderManager:
     """
@@ -31,7 +33,7 @@ class ReaderManager:
         return decorator
 
     @classmethod
-    def get_loader(cls, name: str, **kwargs: Any) -> MSIBaseReader:
+    def get_reader(cls, name: str, **kwargs: Any) -> MSIBaseReader:
         """
         Resolves driver classes and executes safe instantiation setups using custom parameter maps.
 
@@ -39,7 +41,7 @@ class ReaderManager:
         :type name: str
         :param kwargs: Property keyword attributes delegated directly into class loaders.
         :return: Initialized concrete implementation sub-type inheriting from MSIBaseReader.
-        :rtype: msi_lib.loader.strategies.base_loader.MSIBaseReader
+        :rtype: MSIBaseReader
         :raises KeyError: If no structural loader matches the requested string query name.
         """
         # Validate entry availability within driver cache
@@ -48,3 +50,19 @@ class ReaderManager:
         
         # Factory initialization sequence
         return cls.REGISTRY[name](**kwargs)
+
+    # --------------------------------------------------
+    # Section: Automated Strategy Discovery
+    # --------------------------------------------------
+
+    @classmethod
+    def discover_strategies(cls) -> None:
+        """
+        Explicitly imports local strategy packages. 
+        Dynamic scanning inside strategies/__init__.py triggers automatic registration.
+        """
+        try:
+            from . import strategies
+            logger.info("ReaderManager successfully auto-discovered and registered strategy drivers.")
+        except Exception as e:
+            logger.exception("ReaderManager critical failure during automatic strategy discovery: %s", e)

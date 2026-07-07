@@ -66,7 +66,7 @@ class ActiveReaderProxy:
             r_cfg = ledger_entry.get("reader", {})
             if r_cfg.get("instance_name"):
                 logger.debug("Lazy-loading reader engine component via factory identifier: %s", r_cfg["instance_name"])
-                self._active_reader = ReaderManager.get_loader(
+                self._active_reader = ReaderManager.get_reader(
                     r_cfg["instance_name"],
                     **r_cfg.get("instance_params", {})
                 )
