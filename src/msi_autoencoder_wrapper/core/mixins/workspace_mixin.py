@@ -54,7 +54,7 @@ class WorkspaceProxy:
         self.active_img_names: Optional[List[str]] = None
         self._active_img_custom_path: Optional[Path] = None
 
-        # Global persistent fallbacks (Default values)
+        # Global persistent fallbacks (Default values - can be standalone tokens or paths)
         self.default_img_name: Optional[str] = None
         self.default_model_name: Optional[str] = None
 
@@ -188,14 +188,15 @@ class WorkspaceProxy:
         if self.auto_create_dirs:
             self.create_required_directories()
 
-    def set_default_image(self, img_name: str) -> None:
+    def set_default_image(self, img_name_or_path: str) -> None:
         """
-        Establish a global fallback default image key when parameters are omitted.
+        Establish a global fallback default image key or file path when parameters are omitted.
+        Supports both standalone identifiers (within workspace) and full system paths (outside workspace).
 
-        :param img_name: Unique identifier of the fallback image target.
-        :type img_name: str
+        :param img_name_or_path: Unique identifier or absolute/relative path of the fallback image target.
+        :type img_name_or_path: str
         """
-        self.default_img_name = img_name
+        self.default_img_name = img_name_or_path
 
 
     # --------------------------------------------------
@@ -412,8 +413,6 @@ class WorkspaceProxy:
         Safely instantiates all structural subdirectories required by the active execution context.
         Uses exist_ok=True to protect existing runtime binary artifacts and files from corruption.
 
-        :return: None
-        :rtype: None
         :raises WorkspaceConfigError: If disk provisioning fails due to OS or permission faults.
         """
         try:
