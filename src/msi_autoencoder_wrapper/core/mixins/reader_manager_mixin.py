@@ -6,8 +6,8 @@ import pprint
 from typing import Dict, Any, Optional
 from pathlib import Path
 from ...utils.logger import get_custom_logger
-from ...readers import ReaderManager
-from ...binners import BinnerManager
+from ...readers.readers_manager import ReaderManager
+from ...binners.binners_manager import BinnerManager
 
 logger = get_custom_logger(__name__)
 
@@ -28,6 +28,13 @@ class ReadersManagerProxy:
         # Initialize internal ledger tracking configurations per unique image key
         ## Central data storage mapping image targets to strategy descriptors
         self.config_ledger: Dict[str, Dict[str, Any]] = {}
+
+        # --------------------------------------------------
+        # Subsection: Automatic Registration Enforcement
+        # --------------------------------------------------
+        logger.info("Enforcing automatic module discovery for reader and binner registries.")
+        ReaderManager.discover_strategies()
+        BinnerManager.discover_strategies()
 
     # --------------------------------------------------
     # Subsection: Setters - reader 

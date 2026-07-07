@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.stats import binned_statistic
-from .base_binner import MSIBaseBinner
-from ..binners_manager import BinningManager
+from ..base_binner import MSIBaseBinner
+from ..binners_manager import BinnerManager
 
 
-@BinningManager.register_binner("LinearBinning")
+@BinnerManager.register_binner("LinearBinning")
 class LinearBinning(MSIBaseBinner):
     """
     Concrete processing strategy executing fast linear quantization via equidistant mass-to-charge bins.
