@@ -148,7 +148,7 @@ class ReadersManagerProxy:
     # Subsection: Getters - readers 
     # --------------------------------------------------
 
-    def get_available_readers(self, print_return: bool = True) -> Dict[str, Dict[str, Any]]:
+    def get_available_readers(self, print_return: bool = True, return_value: bool=False) -> Dict[str, Dict[str, Any]]:
         """
         Extracts documentation strings across all registered data streaming readers.
 
@@ -163,14 +163,15 @@ class ReadersManagerProxy:
             registry=ReaderManager.REGISTRY,
             title="REGISTERED MSI READERS & PARAMETERS",
             key_label="Reader Key",
-            print_return=print_return
+            print_return=print_return,
+            return_value=return_value
         )
         
     # --------------------------------------------------
     # Subsection: Getters - binners 
     # --------------------------------------------------
 
-    def get_available_binners(self, print_return: bool = True) -> Dict[str, Dict[str, Any]]:
+    def get_available_binners(self, print_return: bool = True, return_value: bool=False) -> Dict[str, Dict[str, Any]]:
         """
         Extracts documentation strings across all registered forward compression binners.
 
@@ -185,10 +186,11 @@ class ReadersManagerProxy:
             registry=BinnerManager.BINNER_REGISTRY,
             title="REGISTERED MSI FORWARD BINNERS & PARAMETERS",
             key_label="Binner Key",
-            print_return=print_return
+            print_return=print_return,
+            return_value=return_value
         )
 
-    def get_available_inverse_binners(self, print_return: bool = True) -> Dict[str, Dict[str, Any]]:
+    def get_available_inverse_binners(self, print_return: bool = True, return_value: bool=False) -> Dict[str, Dict[str, Any]]:
         """
         Extracts documentation strings across all registered reverse spatial binners.
 
@@ -203,7 +205,8 @@ class ReadersManagerProxy:
             registry=BinnerManager.INVERSE_REGISTRY,
             title="REGISTERED MSI INVERSE BINNERS & PARAMETERS",
             key_label="Inverse Binner Key",
-            print_return=print_return
+            print_return=print_return,
+            return_value=return_value
         )
     
     # --------------------------------------------------
@@ -255,7 +258,8 @@ class ReadersManagerProxy:
             registry: Dict[str, Any], 
             title: str, 
             key_label: str, 
-            print_return: bool
+            print_return: bool,
+            return_value: bool
         ) -> Dict[str, Dict[str, Any]]:
         """
         Internal helper utility to extract documentation and constructor signatures across registries.
@@ -268,6 +272,8 @@ class ReadersManagerProxy:
         :type key_label: str
         :param print_return: Flag determining whether data logs are pushed to stdout streams.
         :type print_return: bool
+        :param return_value: Flag determining whether return dict with data logs.
+        :type return_value: bool
         :return: Deeply nested mapping matching strategy aliases to structural property states.
         :rtype: Dict[str, Dict[str, Any]]
         """
