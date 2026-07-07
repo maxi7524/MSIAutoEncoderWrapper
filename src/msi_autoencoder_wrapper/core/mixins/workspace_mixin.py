@@ -16,6 +16,7 @@ project_path/
             └── latent/            # Generated spatial compressed latent space target representations
 """
 
+import os
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 from ...utils.logger import get_custom_logger
@@ -51,6 +52,7 @@ class WorkspaceProxy:
         self.active_model_name: Optional[str] = None
         self.active_img_name: Optional[str] = None
         self.active_img_names: Optional[List[str]] = None
+        self._active_img_custom_path: Optional[Path] = None
 
         # Global persistent fallbacks (Default values)
         self.default_img_name: Optional[str] = None
@@ -66,6 +68,79 @@ class WorkspaceProxy:
             default_layout.update(custom_layout)
         self._layout = default_layout
 
+    # --------------------------------------------------
+    # Subsection: System Path Resolution & Validation Helpers
+    # --------------------------------------------------
+
+    def is_path_in_workspace(self, path: Path) -> bool:
+        """
+        Checks if the given path is located within the project workspace directory.
+        Handles both absolute paths and relative configurations dynamically.
+
+        :param path: Path to inspect.
+        :type path: Path
+        :return: True if path belongs inside project_path, False otherwise.
+        :rtype: bool
+        """
+        try:
+            resolved_project = self.project_path.resolve()
+            resolved_path = Path(path).resolve()
+            return resolved_project in resolved_path.parents or resolved_path == resolved_project
+        except Exception:
+            # Fallback in case of strict environment resolution limitations
+            try:
+                abs_project = self.project_path.absolute()
+                abs_path = Path(path).absolute()
+                return abs_project in abs_path.parents or abs_path == abs_project
+            except Exception:
+                return False
+
+    def validate_path(self, path: Path, check_writable: bool = False, should_exist: bool = True) -> bool:
+        """
+        Validates system paths for existence, accessibility, or write permissions.
+
+        :param path: Path target to check.
+        :type path: Path
+        :param check_writable: If True, ensures destination has OS write permissions. Defaults to False.
+        :type check_writable: bool
+        :param should_exist: If True, asserts path availability on disk. Defaults to True.
+        :type should_exist: bool
+        :return: True if validation succeeds.
+        :rtype: bool
+        :raises WorkspaceConfigError: If path checks fail structural constraints.
+        """
+        if should_exist and not path.exists():
+            raise WorkspaceConfigError(f"System path validation failed. Destination does not exist: {path}")
+            
+        if check_writable:
+            target_dir = path if path.is_dir() else path.parent
+            if target_dir.exists() and not os.access(target_dir, os.W_OK):
+                raise WorkspaceConfigError(f"System path validation failed. Target directory is not writable: {target_dir}")
+        return True
+
+    def validate_active_context_paths(self, check_weights: bool = False) -> None:
+        """
+        Validates the correctness and physical presence of critical files for the active context.
+        Ensures the raw imagery files exist, and optionally validates compiled model weights.
+
+        :param check_weights: If True, asserts .pt checkpoint presence in model layout. Defaults to False.
+        :type check_weights: bool
+        """
+        if not self.active_img_name:
+            raise WorkspaceConfigError("Active validation context blocked: No active image context has been set.")
+
+        # Check raw input (.imzML)
+        img_path = self.get_active_image_file_path(extension=".imzML")
+        if img_path and not img_path.exists():
+            raise WorkspaceConfigError(f"Active image context mapping failed: Missing raw dataset file: {img_path}")
+
+        # Check model requirements
+        if self.active_model_name:
+            self.validate_path(self.get_active_model_dir(), should_exist=True)
+            if check_weights:
+                weights_file = self.get_config_dir() / "weights.pt"
+                if not weights_file.exists():
+                    raise WorkspaceConfigError(f"Execution context fault: Required model checkpoint weights missing: {weights_file}")
 
     # --------------------------------------------------
     # Subsection: single image setup
@@ -78,27 +153,40 @@ class WorkspaceProxy:
         :param image_name: Name of the image or direct file path. Falls back to default if None.
         :type image_name: Optional[str]
         """
-        # Context image resolution sequence
-        ## Check if image input is provided or needs fallback
         if image_name is None:
-            ### Fallback to predefined default image profile
-            logger.info("No image name provided. Falling back to default workspace image configuration.")
-            self._active_image = "default_image"
-            return
+            if self.default_img_name:
+                logger.info("No image name provided. Falling back to default workspace image configuration.")
+                image_name = self.default_img_name
+            else:
+                logger.info("Active image configuration cleared. No default context available.")
+                self.active_img_name = None
+                self._active_img_custom_path = None
+                return
 
         image_path = Path(image_name)
 
         ## Discriminate between full disk path triggers and standalone keys
-        if image_path.exists() or image_path.is_absolute() or len(image_path.parts) > 1:
+        if image_path.is_absolute() or len(image_path.parts) > 1 or image_path.exists():
             ### Resolve direct raw filesystem path input
             logger.info("Resolving direct filesystem path context for image: %s", str(image_name))
-            self._active_image = image_path.stem
+            self.active_img_name = image_path.stem
+            
+            ### Manage system mapping based on layout association
+            if self.is_path_in_workspace(image_path):
+                self._active_img_custom_path = None
+                logger.info("Image path successfully validated inside active workspace root.")
+            else:
+                # Save the base path without extensions for external system paths
+                self._active_img_custom_path = image_path.parent / image_path.stem
+                logger.info("External filesystem path detected. Image context mapped outside of workspace.")
         else:
             ### Resolve relative key mapping inside standard workspace image repository
-            imgs_dir = self.project_path / self.layout.get("imgs", "imgs")
-            target_mapped_path = imgs_dir / image_name
-            logger.info("Mapping relative image handle against workspace repository path: %s", str(target_mapped_path))
-            self._active_image = image_path.stem
+            logger.info("Mapping relative image handle against workspace repository path: %s", str(image_name))
+            self.active_img_name = image_path.stem
+            self._active_img_custom_path = None
+
+        if self.auto_create_dirs:
+            self.create_required_directories()
 
     def set_default_image(self, img_name: str) -> None:
         """
@@ -106,8 +194,6 @@ class WorkspaceProxy:
 
         :param img_name: Unique identifier of the fallback image target.
         :type img_name: str
-        :return: None
-        :rtype: None
         """
         self.default_img_name = img_name
 
@@ -122,14 +208,13 @@ class WorkspaceProxy:
 
         :param img_names: List of unique identifiers of the target image files.
         :type img_names: List[str]
-        :return: None
-        :rtype: None
         :raises WorkspaceConfigError: If the image names list is empty or invalid.
         """
         if not img_names:
             raise WorkspaceConfigError("Image names list cannot be empty.")
         self.active_img_names = img_names
         self.active_img_name = None  # Clear single-image context to avoid conflicts
+        self._active_img_custom_path = None
         if self.auto_create_dirs:
             self.create_required_directories()
 
@@ -144,8 +229,6 @@ class WorkspaceProxy:
 
         :param model_name: Unique identifier of the model architecture configuration.
         :type model_name: str
-        :return: None
-        :rtype: None
         :raises WorkspaceConfigError: If the model name string is empty or invalid.
         """
         if not model_name or not model_name.strip():
@@ -160,8 +243,6 @@ class WorkspaceProxy:
 
         :param model_name: Unique identifier of the fallback model architecture.
         :type model_name: str
-        :return: None
-        :rtype: None
         """
         self.default_model_name = model_name
 
@@ -172,13 +253,11 @@ class WorkspaceProxy:
     def clear_active_context(self) -> None:
         """
         Resets the temporary working context attributes back to None after method execution.
-
-        :return: None
-        :rtype: None
         """
         self.active_model_name = None
         self.active_img_name = None
         self.active_img_names = None
+        self._active_img_custom_path = None
 
 
 # --------------------------------------------------
@@ -216,9 +295,36 @@ class WorkspaceProxy:
         """
         return self.project_path / self._layout["models_root"]
     
+    # --------------------------------------------------
+    # Subsection: Default getters
+    # --------------------------------------------------
+
+    def get_default_image(self) -> Path:
+        """
+        Calculate default image path reference.
+
+        :return: Path to specific model directory.
+        :rtype: Path
+        :raises WorkspaceConfigError: If active model context is uninitialized.
+        """
+        if not self.active_model_name:
+            raise WorkspaceConfigError("Active model context is uninitialized.")
+        return self.get_models_root() / self.active_model_name
+    
+    def get_default_model(self) -> Path:
+        """
+        Calculate default image path reference.
+
+        :return: Path to specific model directory.
+        :rtype: Path
+        :raises WorkspaceConfigError: If active model context is uninitialized.
+        """
+        if not self.active_model_name:
+            raise WorkspaceConfigError("Active model context is uninitialized.")
+        return self.get_models_root() / self.active_model_name
 
     # --------------------------------------------------
-    # Subsection: Active configuration (model + img + latent) 
+    # Subsection: Active getters (model + img + latent) 
     # --------------------------------------------------
 
     def get_active_model_dir(self) -> Path:
@@ -275,19 +381,25 @@ class WorkspaceProxy:
 # Section: Raw Dataset Path Resolution
 # --------------------------------------------------
 
-    def get_active_image_file_path(self, extension: str = ".imzML") -> Path:
+    def get_active_image_file_path(self, extension: str = ".imzML") -> Optional[Path]:
         """
         Calculate the full file path pointing directly to the active raw MSI dataset file.
+        Returns None safely if the context has not been explicitly initialized.
 
         :param extension: Target file format string specifier (e.g., '.imzML' or '.ibd'). Defaults to '.imzML'.
         :type extension: str
-        :return: Complete Path target reference mapping to the requested raw input image dataset file.
-        :rtype: Path
-        :raises WorkspaceConfigError: If active image context is uninitialized.
+        :return: Complete Path target reference mapping to raw input dataset, or None if context is empty.
+        :rtype: Optional[Path]
         """
         if not self.active_img_name:
-            raise WorkspaceConfigError("Inference/Loading blocked: Active image context is uninitialized.")
+            return None
+            
         ext = extension if extension.startswith(".") else f".{extension}"
+        
+        # If an external filesystem path was provided, use it directly
+        if self._active_img_custom_path is not None:
+            return self._active_img_custom_path.with_suffix(ext)
+            
         return self.get_imgs_dir() / f"{self.active_img_name}{ext}"
 
 
