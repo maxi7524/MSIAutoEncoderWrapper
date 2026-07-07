@@ -17,7 +17,7 @@ from .mixins.active_reader_mixin import ActiveReaderMixin
 
 ## exceptions handling 
 from .utils.validators import validate_components
-from .utils.exceptions import (
+from ..utils.exceptions import (
     ProjectConfigError, 
     ModelNotInitializedError, 
     IncompatibleInterfaceError

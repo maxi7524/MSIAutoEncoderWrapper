@@ -5,7 +5,7 @@ Validation utilities for checking the existence of runtime objects and directory
 import os
 from pathlib import Path
 from typing import List, Tuple, Any, Dict, Type
-from .exceptions import ValidationError
+from ...utils.exceptions import ValidationError
 
 def validate_components(items_to_validate: List[Tuple[Any, str]]) -> None:
     """
@@ -72,7 +72,7 @@ def resolve_component(
     :rtype: Any
     :raises ProjectConfigError: If string identifier is absent from registration registries.
     """
-    from .exceptions import ProjectConfigError
+    from ...utils.exceptions import ProjectConfigError
 
     if isinstance(target, str):
         if target not in registry:

@@ -7,7 +7,7 @@ import numpy as np
 from ...utils.logger import get_custom_logger
 from ...readers.readers_manager import ReaderManager
 from ...binners.binners_manager import BinnerManager
-from ..utils.exceptions import ValidationError
+from ...utils.exceptions import ValidationError
 
 logger = get_custom_logger(__name__)
 
