@@ -300,21 +300,23 @@ class WorkspaceProxy:
     # Subsection: Default getters
     # --------------------------------------------------
 
+    #TODO - those are not implemented (i got bullshit last time )
+
     def get_default_image(self) -> Path:
         """
         Calculate default image path reference.
 
-        :return: Path to specific model directory.
+        :return: Path to the default image file inside the images directory.
         :rtype: Path
-        :raises WorkspaceConfigError: If active model context is uninitialized.
+        :raises WorkspaceConfigError: If default image context is uninitialized.
         """
-        if not self.active_model_name:
-            raise WorkspaceConfigError("Active model context is uninitialized.")
-        return self.get_models_root() / self.active_model_name
+        if not self.default_img_name:
+            raise WorkspaceConfigError("Default image name context is uninitialized.")
+        return self.get_imgs_root() / self.default_img_name
     
     def get_default_model(self) -> Path:
         """
-        Calculate default image path reference.
+        Calculate default model directory path reference.
 
         :return: Path to specific model directory.
         :rtype: Path
@@ -325,7 +327,7 @@ class WorkspaceProxy:
         return self.get_models_root() / self.active_model_name
 
     # --------------------------------------------------
-    # Subsection: Active getters (model + img + latent) 
+    # Subsection: Active getters workspace (model + img + latent) 
     # --------------------------------------------------
 
     def get_active_model_dir(self) -> Path:
@@ -379,8 +381,17 @@ class WorkspaceProxy:
 
 
 # --------------------------------------------------
-# Section: Raw Dataset Path Resolution
+# Section: Active getters imzML paths & names 
 # --------------------------------------------------
+
+    def get_active_image_name(self) -> Optional[str]:
+        """
+        Retrieves the raw string identifier of the currently active dataset image context.
+
+        :return: The active image name string, or None if no image context is currently set.
+        :rtype: Optional[str]
+        """
+        return self.active_img_name
 
     def get_active_image_file_path(self, extension: str = ".imzML") -> Optional[Path]:
         """
@@ -402,6 +413,15 @@ class WorkspaceProxy:
             return self._active_img_custom_path.with_suffix(ext)
             
         return self.get_imgs_dir() / f"{self.active_img_name}{ext}"
+
+    def get_active_model_name(self) -> Optional[str]:
+        """
+        Retrieves the raw string identifier of the currently active machine learning model context.
+
+        :return: The active model name string, or None if no model context is currently set.
+        :rtype: Optional[str]
+        """
+        return self.active_model_name
 
 
 # --------------------------------------------------
