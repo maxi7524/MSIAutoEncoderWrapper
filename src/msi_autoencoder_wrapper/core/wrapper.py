@@ -13,7 +13,7 @@ from ..utils.logger import get_custom_logger
 ## mixins 
 from .mixins.workspace_mixin import WorkspaceMixin
 from .mixins.reader_manager_mixin import ReadersManagerMixin
-from .mixins.active_reader_mixin import ActiveReaderMixin
+from .mixins.active_context_mixin import ActiveContextMixin
 
 ## exceptions handling 
 from ..utils.validators import validate_components
@@ -35,7 +35,7 @@ logger = get_custom_logger(__name__)
 
 class MSIAutoEncoderWrapper(
     ReadersManagerMixin,  # Configuration and multi-image registries ledger state database
-    ActiveReaderMixin,    # Dynamic transparent routing command proxy for the active target file
+    ActiveContextMixin,    # Dynamic transparent routing command proxy for the active target file
     # Model setup mixin,        # mixin repsonsible for model instantiation
     # TrainingMixin,        # training module
     # InferenceMixin,       # inference module
