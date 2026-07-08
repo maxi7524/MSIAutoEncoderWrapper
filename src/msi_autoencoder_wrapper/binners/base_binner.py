@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Any
+from typing import Any, Optional
 
 
 class MSIBaseBinner(ABC):
@@ -8,8 +8,15 @@ class MSIBaseBinner(ABC):
     Abstract Base Class establishing structural interface benchmarks for forward spectral binning algorithms.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, active_context: Optional[Any] = None) -> None:
+        """
+        Initializes the abstract binner base with an optional active context bridge.
+
+        :param active_context: Active execution session proxy tracking live datasets.
+        :type active_context: Optional[Any]
+        """
         self._config: dict[str, Any] = {}
+        self.active_context = active_context
 
     def GetConfig(self) -> dict[str, Any]:
         """Exposes configuration parameter properties required for serialization tasks."""

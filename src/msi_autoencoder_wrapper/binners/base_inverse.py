@@ -1,29 +1,33 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from .base_binner import MSIBaseBinner
-from typing import Any 
+from typing import Any, Optional
 
 class MSIBaseInverseBinner(ABC):
     """
     Abstract Base Class establishing architectural interfaces for reverse signal reconstructors.
-    
-    .. note::
-       Inverse binners operate on synthetic model predictions to filter or reconstruct empirical
-       ion positions back into alternative coordinates or reduced sparse lists.
     """
 
-    def __init__(self, binner: MSIBaseBinner) -> None:
+    def __init__(self, binner: Optional[MSIBaseBinner] = None, active_context: Optional[Any] = None) -> None:
         """
         Binds the structural forward master grid tracking object to the inverse processing pipeline.
 
-        :param binner: Active forward binner strategy tracking structural grid geometry.
-        :type binner: msi_lib.binners.binners_strategies.base_binner.MSIBaseBinner
+        :param binner: Active forward binner strategy. Falls back to active_context lookup if None.
+        :type binner: Optional[MSIBaseBinner]
+        :param active_context: Active execution session proxy tracking live datasets.
+        :type active_context: Optional[Any]
+        :raises ValueError: If no binner can be resolved directly or from the context.
         """
-        # Structural binding sequence
-        ## Retain reference to forward component to coordinate matching coordinate retrieval steps
-        self._Binner = binner
-        ## Isolated config mapping for parameter encapsulation
         self._config: dict[str, Any] = {}
+        self.active_context = active_context
+        
+        # Resolve binner instance via direct injection or session context proxy
+        if binner is not None:
+            self._Binner = binner
+        elif active_context and getattr(active_context, "binner", None) is not None:
+            self._Binner = active_context.binner
+        else:
+            raise ValueError("Inverse Binner requires an explicit binner instance or a running active context with a registered binner.")
 
     def GetConfig(self) -> dict[str, Any]:
         """

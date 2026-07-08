@@ -1,6 +1,7 @@
 from pathlib import Path
 import numpy as np
 import m2aia as m2
+from typing import Optional, Any
 from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
@@ -17,7 +18,7 @@ class M2aiaReader(MSIBaseReader):
     for standard imzML structures wrapped by the M2aia processing API.
     """
 
-    def __init__(self, file_path: Path | str) -> None:
+    def __init__(self, file_path: Path | str, active_context: Optional[Any] = None) -> None:
         """
         Executes binary interface connection routines targeting storage targets on disk.
 
@@ -33,9 +34,9 @@ class M2aiaReader(MSIBaseReader):
         
         try:
             self._img = m2.ImzMLReader(str(self.file_path))
-            self._img.LoadImage()
+            self._img.Load()
         except Exception as e:
-            from ...core.utils.exceptions import ProjectConfigError
+            from ...utils.exceptions import ProjectConfigError
             raise ProjectConfigError(f"Critical M2aia engine failure opening target file {file_path}: {e}")
 
     def GetXMin(self) -> float:
