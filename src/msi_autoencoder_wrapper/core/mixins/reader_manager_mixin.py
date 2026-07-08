@@ -4,11 +4,11 @@ Module managing storage configurations, multi-image registries, and data reader 
 
 import inspect
 import pprint
-from typing import Dict, Any, Optional, Union 
+from typing import Dict, Any, Optional, Union, Type
 from pathlib import Path
 from ..utils.decorators import manage_image_context
 from ...utils.logger import get_custom_logger
-from ...utils.validators import validate_constructor_kwargs, resolve_component
+from ...utils.validators import validate_constructor_kwargs, resolve_component, inject_default_binner_parameters
 from ...readers.readers_manager import ReaderManager
 from ...binners.binners_manager import BinnerManager
 
@@ -279,6 +279,11 @@ class ReadersManagerProxy:
             if active_forward_binner:
                 kwargs["binner"] = active_forward_binner
                 logger.debug("Dependency injection active: Injected matching forward binner instance into constructor parameters.")
+
+        ## Pass the active context proxy automatically if the component can accept it
+        if "active_context" not in kwargs:
+            kwargs["active_context"] = self._wrapper.active_context
+            logger.debug("Unified Context injection active for component: %s", component_type)
 
         # Workspace structure validation
         ## Trigger directory structural updates to prepare dedicated configuration layout folders
