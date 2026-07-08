@@ -10,12 +10,13 @@ logger = get_custom_logger(__name__)
 
 
 # --------------------------------------------------
-# Section: ActiveReaderProxy Operational Bridge
+# Section: ActiveContextProxy Operational Bridge
 # --------------------------------------------------
 
-class ActiveReaderProxy:
+class ActiveContextProxy:
     """
-    Command proxy coordinating runtime execution, lazy loading, and instance exposure for the active image.
+    Stateful boundary proxy representing the currently selected image execution context.
+    Provides direct, lazy-loaded access to memory-resident pipelines (Readers, Binners, Latent spaces).
     """
 
     def __init__(self, wrapper_ref: Any) -> None:
@@ -32,6 +33,7 @@ class ActiveReaderProxy:
         self._cached_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
+        #TODO(future) - in future we should add here different _cached valeus as latent space etc. 
 
     
 # --------------------------------------------------
@@ -48,7 +50,7 @@ class ActiveReaderProxy:
         :return: Implemented data reader object instance.
         :rtype: Any
         """
-        self._sync_active_pipeline()
+        self._sync_active_context()
         return self._cached_reader
 
     @property
@@ -61,7 +63,7 @@ class ActiveReaderProxy:
         :return: Implemented forward spectrum binner object instance, or None if unconfigured.
         :rtype: Any
         """
-        self._sync_active_pipeline()
+        self._sync_active_context()
         return self._cached_binner
 
     @property
@@ -74,7 +76,7 @@ class ActiveReaderProxy:
         :return: Implemented reverse reconstruction binner object instance, or None if unconfigured.
         :rtype: Any
         """
-        self._sync_active_pipeline()
+        self._sync_active_context()
         return self._cached_inverse_binner
 
 # --------------------------------------------------
@@ -101,7 +103,7 @@ class ActiveReaderProxy:
         self._cached_inverse_binner = None
         self._instantiated_image_key = None
 
-    def _sync_active_pipeline(self) -> None:
+    def _sync_active_context(self) -> None:
         """
         Synchronizes initialized binary objects against the current active image token in workspace.
 
@@ -145,7 +147,7 @@ class ActiveReaderProxy:
 # Section: ActiveReaderMixin Injection Hook
 # --------------------------------------------------
 
-class ActiveReaderMixin:
+class ActiveContextMixin:
     """
     Mixin class injecting execution workspace proxy controls targeting active image dataset streaming.
     """
@@ -156,5 +158,5 @@ class ActiveReaderMixin:
         """
         # Module instantiation hook
         ## Set active reader command bridge attribute reference proxy
-        self.active_reader = ActiveReaderProxy(wrapper_ref=self)
+        self.active_context = ActiveContextProxy(wrapper_ref=self)
         super().__init__(*args, **kwargs)
