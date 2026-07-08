@@ -55,7 +55,7 @@ class ReadersManagerProxy:
         Registers and configures an input data reader strategy for an image context.
 
         Accepts either a unique registered string token identifier or a pre-initialized
-        concrete instance object. Context resolution and filesystem synchronization are
+        concrete instance object. Context resolution and filesystem path injections are
         delegated directly down to the internal component registration system.
 
         :param reader_name_or_instance: Registered strategy identifier string or an initialized reader object.
@@ -222,7 +222,6 @@ class ReadersManagerProxy:
     # Subsection: Helpers - setters
     # --------------------------------------------------
 
-    # Component registration sub-system
     @manage_image_context
     def _set_component(
         self, 
@@ -265,14 +264,38 @@ class ReadersManagerProxy:
         workspace = self._wrapper.workspace
         active_img = workspace.active_img_name
 
+        # Dependency injection layer
+        ## Automatically inject the active filesystem path if compiling a data loader reader
+        if component_type == "reader" and "file_path" not in kwargs:
+            resolved_file_path = workspace.get_active_image_file_path()
+            if resolved_file_path:
+                kwargs["file_path"] = resolved_file_path
+                logger.debug("Dependency injection active: Set 'file_path' to target: %s", resolved_file_path)
+
+        ## Automatically inject forward binner reference if compiling an inverse spectrum binner
+        if component_type == "inverse_binner" and "binner" not in kwargs:
+            self._ensure_image_bucket(active_img)
+            active_forward_binner = self.config_ledger[active_img].get("binner")
+            if active_forward_binner:
+                kwargs["binner"] = active_forward_binner
+                logger.debug("Dependency injection active: Injected matching forward binner instance into constructor parameters.")
+
+        # Workspace structure validation
         ## Trigger directory structural updates to prepare dedicated configuration layout folders
         if hasattr(workspace, "create_required_directories"):
             logger.debug("Ensuring physical layout directories exist for image context: %s", active_img)
             workspace.create_required_directories()
 
-        ## Delegate strategy selection to the unified validation framework
-        logger.info("Resolving system component '%s' under image context '%s'", component_type, active_img)
+        # Constructor signature verification
+        ## Extract target class type from registry if lookup target is provided as a string token
         target_registry = registries[component_type]
+        if isinstance(target, str) and target in target_registry:
+            logger.debug("Executing static reflection analysis against constructor of class: %s", target)
+            validate_constructor_kwargs(target_registry[target], target, kwargs)
+
+        # Strategy compilation block
+        ## Delegate strategy selection to the unified validation framework factory
+        logger.info("Resolving system component '%s' under image context '%s'", component_type, active_img)
         
         try:
             resolved_instance = resolve_component(
@@ -286,9 +309,9 @@ class ReadersManagerProxy:
             logger.error("Failed to resolve component '%s' for target context.", component_type, exc_info=True)
             raise error
 
-        ## Map the initialized component instance into the memory state database
+        # Ledger registration save sequence
+        ## Map the initialized component instance into the memory state database container
         self._ensure_image_bucket(active_img)
-
         self.config_ledger[active_img][component_type] = resolved_instance
         logger.info("Successfully registered component '%s' into ledger for image '%s'", component_type, active_img)
 

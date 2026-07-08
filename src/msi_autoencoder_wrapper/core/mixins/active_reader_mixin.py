@@ -40,7 +40,7 @@ class ActiveReaderProxy:
         """
         # Context tracking lookup execution
         ## Extract active state identifier from the connected workspace manager
-        current_img: Optional[str] = self._wrapper.workspace._active_image
+        current_img: Optional[str] = self._wrapper.workspace.get_active_image_name()
 
         if not current_img:
             raise ValidationError(["Active Image Context [Not Selected in Workspace]"])

@@ -75,5 +75,10 @@ def manage_image_context(func: Callable[..., Any]) -> Callable[..., Any]:
             
             ### Propagate the original error up the processing execution tree
             raise error
+        finally:
+            ### Clean up temporary workspace structural states to prevent context leaks
+            if hasattr(workspace, "clear_active_context"):
+                logger.debug("Operation finalized. Discharging temporary workspace image context.")
+                workspace.clear_active_context()
 
     return wrapper
