@@ -16,7 +16,7 @@ from .mixins.reader_manager_mixin import ReadersManagerMixin
 from .mixins.active_reader_mixin import ActiveReaderMixin
 
 ## exceptions handling 
-from .utils.validators import validate_components
+from .utils.validators_core import validate_components
 from ..utils.exceptions import (
     ProjectConfigError, 
     ModelNotInitializedError, 

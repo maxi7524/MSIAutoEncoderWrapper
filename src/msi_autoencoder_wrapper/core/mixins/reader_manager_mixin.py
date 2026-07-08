@@ -2,8 +2,8 @@
 Module managing storage configurations, multi-image registries, and data reader tracking structures.
 """
 
-import pprint
 import inspect
+import pprint
 from typing import Dict, Any, Optional, Union 
 from pathlib import Path
 from ...utils.logger import get_custom_logger
@@ -23,10 +23,13 @@ class ReadersManagerProxy:
     Proxy class managing configuration matrices, driver parameters, and temporary session objects across multiple images.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, wrapper_ref: Any) -> None:
         """
         Initializes the configuration ledger database holding data loader specifications.
         """
+        # Store a loose reference back to the coordinating facaded wrapper master object instance
+        self._wrapper = wrapper_ref
+
         # Initialize internal ledger tracking configurations per unique image key
         ## Central data storage mapping image targets to strategy descriptors
         self.config_ledger: Dict[str, Dict[str, Any]] = {}
@@ -42,7 +45,7 @@ class ReadersManagerProxy:
     # Subsection: Setters - reader 
     # --------------------------------------------------
 
-    def set_reader(self, img_name: str, reader_or_name: Union[str, Any], **kwargs: Any) -> None:
+    def set_reader(self, img_name: str, reader_name_or_instance: Union[str, Any], **kwargs: Any) -> None:
         """
         Sets and validates the reader configuration for a specific image context.
         
@@ -52,96 +55,63 @@ class ReadersManagerProxy:
 
         :param img_name: Clean identifier handle representing the target image.
         :type img_name: str
-        :param reader_or_name: Registered strategy string name or an already instantiated reader object.
-        :type reader_or_name: Union[str, Any]
+        :param reader_name_or_instance: Registered strategy string name or an already instantiated reader object.
+        :type reader_name_or_instance: Union[str, Any]
         :param kwargs: Keyword arguments validated and saved as execution footprints.
         :raises ValueError: If the strategy name is unregistered or missing required parameters.
         """
-        self._ensure_image_bucket(img_name)
-
-        # Handle initialized class objects passed directly
-        if not isinstance(reader_or_name, str):
-            cls_name = reader_or_name.__class__.__name__
-            if cls_name not in ReaderManager.REGISTRY:
-                logger.warning(
-                    f"Passed reader instance class '{cls_name}' is not explicitly found in ReaderManager.REGISTRY."
-                )
-            if kwargs:
-                logger.warning(
-                    f"Keyword arguments {list(kwargs.keys())} were provided but ignored "
-                    f"because an already instantiated reader object was passed."
-                )
-            self.config_ledger[img_name]["reader"] = {
-                "instance_name": cls_name,
-                "instance_params": {}
-            }
-            self.config_ledger[img_name]["tmp"]["reader_instance"] = reader_or_name
-            return
-
-        # Handle text strategy configurations with lazy signature verification
-        if reader_or_name not in ReaderManager.REGISTRY:
-            raise ValueError(
-                f"Unknown reader strategy identifier '{reader_or_name}'. "
-                f"Available strategies in REGISTRY are: {list(ReaderManager.REGISTRY.keys())}."
-            )
-
-        reader_cls = ReaderManager.REGISTRY[reader_or_name]
-        validate_constructor_kwargs(cls=reader_cls, name=reader_or_name, kwargs=kwargs)
-
-        self.config_ledger[img_name]["reader"] = {
-            "instance_name": reader_or_name,
-            "instance_params": kwargs
-        }
+        self._set_component(
+            img_name=img_name,
+            target=reader_name_or_instance,
+            registry=ReaderManager.REGISTRY,
+            ledger_key="reader",
+            component_type_label="reader",
+            kwargs=kwargs
+        )
         logger.info("Committed dataset reader configuration setup under image token context: %s", img_name)
 
     # --------------------------------------------------
     # Subsection: Setters - binners 
     # --------------------------------------------------
 
-    def set_binner(self, img_name: str, target: Any, **kwargs: Any) -> None:
+    def set_binner(self, img_name: str, binner_name_or_instance: Any, **kwargs: Any) -> None:
         """
         Registers a forward compression spectrum binner configuration into the state ledger.
 
         :param img_name: Clean identifier handle representing the target image.
         :type img_name: str
-        :param target: Registry string token name identifier or strategy class instance.
-        :type target: Any
+        :param binner_name_or_instance: Registry string token name identifier or strategy class instance.
+        :type binner_name_or_instance: Any
         """
         # Processing forward compression configuration pipeline
-        ## Ensure target image storage bucket initialization
-        self._ensure_image_bucket(img_name)
-        
-        ## Resolve component naming token signatures
-        name_str = target if isinstance(target, str) else type(target).__name__
-        
-        ## Assign specific parameter configurations inside the tracking dictionary
-        self.config_ledger[img_name]["binner"] = {
-            "instance_name": name_str,
-            "instance_params": kwargs
-        }
+        self._set_component(
+            img_name=img_name,
+            target=binner_name_or_instance,
+            registry=BinnerManager.BINNER_REGISTRY,
+            ledger_key="binner",
+            component_type_label="forward binner",
+            kwargs=kwargs
+        )
         logger.info("Committed forward spectrum binner configuration setup under image token context: %s", img_name)
 
-    def set_inverse_binner(self, img_name: str, target: Any, **kwargs: Any) -> None:
+    def set_inverse_binner(self, img_name: str, inverse_binner_name_or_instance: Any, **kwargs: Any) -> None:
         """
         Registers a reverse reconstruction spatial binner configuration into the state ledger.
 
         :param img_name: Clean identifier handle representing the target image.
         :type img_name: str
-        :param target: Registry string token name identifier or strategy class instance.
-        :type target: Any
+        :param inverse_binner_name_or_instance: Registry string token name identifier or strategy class instance.
+        :type inverse_binner_name_or_instance: Any
         """
         # Processing reverse reconstruction configuration pipeline
-        ## Ensure target image storage bucket initialization
-        self._ensure_image_bucket(img_name)
-        
-        ## Resolve component naming token signatures
-        name_str = target if isinstance(target, str) else type(target).__name__
-        
-        ## Assign specific parameter configurations inside the tracking dictionary
-        self.config_ledger[img_name]["inverse_binner"] = {
-            "instance_name": name_str,
-            "instance_params": kwargs
-        }
+        self._set_component(
+            img_name=img_name,
+            target=inverse_binner_name_or_instance,
+            registry=BinnerManager.INVERSE_REGISTRY,
+            ledger_key="inverse_binner",
+            component_type_label="inverse binner",
+            kwargs=kwargs
+        )
         logger.info("Committed reverse reconstruction binner configuration setup under image token context: %s", img_name)
 
     # --------------------------------------------------
@@ -154,6 +124,8 @@ class ReadersManagerProxy:
 
         :param print_return: If True, prints a beautifully formatted summary of available components and parameters. Defaults to True.
         :type print_return: bool
+        :param return_value: Flag determining whether return dict with data logs.
+        :type return_value: bool
         :return: Map correlating loader class names to their foundational documentation.
         :rtype: Dict[str, Dict[str, Any]]
         """
@@ -177,6 +149,8 @@ class ReadersManagerProxy:
 
         :param print_return: If True, prints a beautifully formatted summary of available components and parameters. Defaults to True.
         :type print_return: bool
+        :param return_value: Flag determining whether return dict with data logs.
+        :type return_value: bool
         :return: Map correlating compression class names to their foundational documentation.
         :rtype: Dict[str, Dict[str, Any]]
         """
@@ -196,6 +170,8 @@ class ReadersManagerProxy:
 
         :param print_return: If True, prints a beautifully formatted summary of available components and parameters. Defaults to True.
         :type print_return: bool
+        :param return_value: Flag determining whether return dict with data logs.
+        :type return_value: bool
         :return: Map correlating decompression class names to their foundational documentation.
         :rtype: Dict[str, Dict[str, Any]]
         """
@@ -231,7 +207,73 @@ class ReadersManagerProxy:
             }
 
     # --------------------------------------------------
-    # Subsection: Getters - Private Helper
+    # Subsection: Helpers - setters
+    # --------------------------------------------------
+
+    def _set_component(
+        self,
+        target: Any,
+        img_name: str,
+        registry: Dict[str, Any],
+        ledger_key: str,
+        component_type_label: str,
+        kwargs: Dict[str, Any]
+    ) -> None:
+        """
+        Centralized internal helper to manage contextual pipeline activation, type verification,
+        constructor reflection signatures, and state ledger preservation across all component types.
+        """
+
+        try:
+            # Uruchomienie metody z workspace mixin za pomocą referencji do rodzica
+            if self._wrapper and hasattr(self._wrapper, "workspace"):
+                self._wrapper.workspace.set_active_image(img_name)
+                img_name = self._wrapper.workspace.get_
+                ## Ensure target image storage bucket initialization
+                self._ensure_image_bucket(img_name)
+
+            # Handle initialized class objects passed directly
+            if not isinstance(target, str):
+                cls_name = target.__class__.__name__
+                if cls_name not in registry:
+                    logger.warning(
+                        f"Passed {component_type_label} instance class '{cls_name}' is not explicitly found in registry."
+                    )
+                if kwargs:
+                    logger.warning(
+                        f"Keyword arguments {list(kwargs.keys())} were provided but ignored "
+                        f"because an already instantiated {component_type_label} object was passed."
+                    )
+                self.config_ledger[img_name][ledger_key] = {
+                    "instance_name": cls_name,
+                    "instance_params": {}
+                }
+                return
+
+            # Handle text strategy configurations with lazy signature verification
+            if target not in registry:
+                raise ValueError(
+                    f"Unknown {component_type_label} strategy identifier '{target}'. "
+                    f"Available strategies are: {list(registry.keys())}."
+                )
+
+            component_cls = registry[target]
+            validate_constructor_kwargs(cls=component_cls, name=target, kwargs=kwargs)
+
+            ## Assign specific parameter configurations inside the tracking dictionary
+            self.config_ledger[img_name][ledger_key] = {
+                "instance_name": target,
+                "instance_params": kwargs
+            }
+            logger.info("Committed %s configuration setup under image token context: %s", component_type_label, img_name)
+
+        finally:
+            # Kontekst po całej akcji musi być bezwzględnie usuwany
+            if self._wrapper and hasattr(self._wrapper, "workspace"):
+                self._wrapper.workspace.set_active_image(None)
+
+    # --------------------------------------------------
+    # Subsection: Helpers - getters
     # --------------------------------------------------
 
     def __str__(self) -> str:
@@ -312,8 +354,10 @@ class ReadersManagerProxy:
                 else:
                     print("   - None")
             print("=" * 80 + "\n")
-
-        return result
+        if return_value:
+            return result
+        else:
+            pass
     
 
 
@@ -332,5 +376,5 @@ class ReadersManagerMixin:
         """
         # Module instantiation hook
         ## Set reader manager tracking boundary attribute reference
-        self.reader_manager = ReadersManagerProxy()
+        self.reader_manager = ReadersManagerProxy(wrapper_ref=self)
         super().__init__(*args, **kwargs)
