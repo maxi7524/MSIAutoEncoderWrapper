@@ -19,7 +19,7 @@ logger = get_custom_logger(__name__)
 # Section: ReadersManagerProxy Infrastructure
 # --------------------------------------------------
 
-class ReadersManagerProxy:
+class ContextManagerProxy:
     """
     Proxy class managing configuration matrices, driver parameters, and temporary session objects across multiple images.
     """
@@ -415,7 +415,7 @@ class ReadersManagerProxy:
 # Section: ReadersManagerMixin Injection Hook
 # --------------------------------------------------
 
-class ReadersManagerMixin:
+class ContextManagerMixin:
     """
     Mixin class designed to inject centralized reader management proxy features into the main wrapper context.
     """
@@ -426,5 +426,5 @@ class ReadersManagerMixin:
         """
         # Module instantiation hook
         ## Set reader manager tracking boundary attribute reference
-        self.reader_manager = ReadersManagerProxy(wrapper_ref=self)
+        self.context_manager = ContextManagerProxy(wrapper_ref=self)
         super().__init__(*args, **kwargs)
