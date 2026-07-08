@@ -136,7 +136,7 @@ class ActiveContextProxy:
             logger.info("Context transition detected. Synchronizing active memory structures to: %s", current_target)
             self.clear_active_context()
 
-            manager = self._wrapper.reader_manager
+            manager = self._wrapper.context_manager
             if current_target in manager.config_ledger:
                 img_bucket = manager.config_ledger[current_target]
                 self._cached_reader = img_bucket.get("reader")
