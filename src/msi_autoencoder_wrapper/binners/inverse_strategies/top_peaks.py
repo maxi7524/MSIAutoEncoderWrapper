@@ -2,6 +2,7 @@ import numpy as np
 from ..base_inverse import MSIBaseInverseBinner
 from ..base_binner import MSIBaseBinner
 from ..binners_manager import BinnerManager
+from typing import Any, Optional
 
 
 @BinnerManager.register_inverse_binner("TopPeaksInverseBinner")
@@ -10,8 +11,8 @@ class TopPeaksInverseBinner(MSIBaseInverseBinner):
     Resolution reduction algorithm tracking top peak heights across non-overlapping contextual coordinate masks.
     """
 
-    def __init__(self, binner: MSIBaseBinner, max_bins: int = 500, window_size: int = 3) -> None:
-        super().__init__(binner)
+    def __init__(self, binner: Optional[MSIBaseBinner] = None, max_bins: int = 500, window_size: int = 3, active_context: Optional[Any] = None) -> None:
+        super().__init__(binner=binner, active_context=active_context)
         self._config = {"max_bins": max_bins, "window_size": window_size}
         self._max_bins = int(max_bins)
         self._window_size = int(window_size)

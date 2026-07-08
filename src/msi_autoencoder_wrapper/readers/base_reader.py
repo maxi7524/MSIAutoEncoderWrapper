@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 import numpy as np
-from typing import Any
+from typing import Any, Optional
 
 
 class MSIBaseReader(ABC):
@@ -12,18 +12,22 @@ class MSIBaseReader(ABC):
     directly to assigned active binning engines to ensure strategic optimization.
     """
 
-    def __init__(self, file_path: Path | str) -> None:
+    def __init__(self, file_path: Path | str, active_context: Optional[Any] = None) -> None:
         """
         Initializes foundational file tracking reference handles.
 
         :param file_path: Target disk storage file path targeting mass spectrometry image data.
         :type file_path: pathlib.Path | str
+        :param active_context: Active execution session proxy tracking live datasets. Defaults to None.
+        :type active_context: Optional[Any]
         """
         # Explicit conversion routing
         ## Coerce the input path into a concrete Path object to standardize path format across OS platforms
         self.file_path = Path(file_path)
         ## Package foundational configuration metadata details for serialization
         self._config: dict[str, Any] = {"file_path": str(file_path)}
+        ## Store the structural active context reference hook to ensure design uniformity
+        self.active_context = active_context
 
     def GetConfig(self) -> dict[str, Any]:
         """

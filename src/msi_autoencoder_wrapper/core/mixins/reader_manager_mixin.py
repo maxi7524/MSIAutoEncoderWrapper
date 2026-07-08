@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, Union, Type
 from pathlib import Path
 from ..utils.decorators import manage_image_context
 from ...utils.logger import get_custom_logger
-from ...utils.validators import validate_constructor_kwargs, resolve_component, inject_default_binner_parameters
+from ...utils.validators import validate_constructor_kwargs, resolve_component
 from ...readers.readers_manager import ReaderManager
 from ...binners.binners_manager import BinnerManager
 

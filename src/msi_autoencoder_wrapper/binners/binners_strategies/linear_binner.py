@@ -2,6 +2,7 @@ import numpy as np
 from scipy.stats import binned_statistic
 from ..base_binner import MSIBaseBinner
 from ..binners_manager import BinnerManager
+from typing import Any, Optional
 
 
 @BinnerManager.register_binner("LinearBinning")
@@ -10,13 +11,30 @@ class LinearBinning(MSIBaseBinner):
     Concrete processing strategy executing fast linear quantization via equidistant mass-to-charge bins.
     """
 
-    def __init__(self, x_min: float, x_max: float, bin_step: float) -> None:
-        super().__init__()
-        self._config = {"x_min": x_min, "x_max": x_max, "bin_step": bin_step}
+    def __init__(self, bin_step: float, x_min: Optional[float] = None, x_max: Optional[float] = None, active_context: Optional[Any] = None) -> None:
+        """
+        Initializes the linear binning generator, falling back to active_context for missing boundaries.
+        """
+        super().__init__(active_context=active_context)
         
-        self.x_min = float(x_min)
-        self.x_max = float(x_max)
+        # Dynamic parameter resolution from context
+        resolved_x_min = x_min
+        resolved_x_max = x_max
+
+        if active_context and getattr(active_context, "reader", None) is not None:
+            if resolved_x_min is None:
+                resolved_x_min = active_context.reader.GetXMin()
+            if resolved_x_max is None:
+                resolved_x_max = active_context.reader.GetXMax()
+
+        if resolved_x_min is None or resolved_x_max is None:
+            raise ValueError("LinearBinning requires explicit 'x_min' and 'x_max' properties, or an active context reader session.")
+
+        self.x_min = float(resolved_x_min)
+        self.x_max = float(resolved_x_max)
         self.bin_step = float(bin_step)
+        
+        self._config = {"x_min": self.x_min, "x_max": self.x_max, "bin_step": self.bin_step}
         
         # Build strict boundary coordinates configuration matrices
         self.bin_edges = np.arange(self.x_min, self.x_max + self.bin_step, self.bin_step, dtype=np.float64)
@@ -29,7 +47,7 @@ class LinearBinning(MSIBaseBinner):
         intensities, _, _ = binned_statistic(
             xs, ys, statistic="sum", bins=self.bin_edges
         )
-        return intensities.astype(np.float32)
+        return intensities
 
     def GetXMin(self) -> float:
         return self.x_min
