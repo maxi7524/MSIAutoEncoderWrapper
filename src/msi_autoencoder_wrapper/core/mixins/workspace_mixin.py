@@ -570,7 +570,12 @@ class WorkspaceMixin:
     """
     Mixin class designed to inject project structural workspace features into the main MSI wrapper.
     """
-    def __init__(self, project_path: str, auto_create_dirs: bool = True, custom_layout: Optional[Dict[str, str]] = None, *args, **kwargs):
+    def __init__(
+            self, 
+            project_path: str, 
+            auto_create_dirs: bool = True, 
+            custom_layout: Optional[Dict[str, str]] = None, 
+            *args, **kwargs):
         """
         Initialize workspace engine instance attached directly to the hosting context object framework.
 
@@ -586,4 +591,7 @@ class WorkspaceMixin:
             auto_create_dirs=auto_create_dirs,
             custom_layout=custom_layout
         )
+        # Context binding hook
+        ## Inject the master facade instance reference into the proxy container to enable cross-proxy signaling
+        self.workspace._wrapper = self
         super().__init__(*args, **kwargs)
