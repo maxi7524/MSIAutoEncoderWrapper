@@ -111,6 +111,12 @@ class WorkspaceProxy:
             self._active_img_custom_path = custom_path
             logger.info("Active image context successfully established: %s", name)
 
+        # Trigger explicit session reset
+        ## Force the active reader proxy to wipe cached file handles to synchronize with the new active context
+        if hasattr(self, "_wrapper") and hasattr(self._wrapper, "active_reader"):
+            if hasattr(self._wrapper.active_reader, "clear_active_context"):
+                self._wrapper.active_reader.clear_active_context()
+
         # Directory provisioning step
         ## Automatically construct required subfolders if workspace is in automated mode
         if getattr(self, "auto_create_dirs", True):
@@ -561,6 +567,13 @@ class WorkspaceProxy:
         self.active_img_name = None
         self.active_img_names = None
         self._active_img_custom_path = None
+        
+        # State signaling block
+        ## Notify the coupled active reader proxy to close file handles and release RAM allocations
+        if hasattr(self, "_wrapper") and hasattr(self._wrapper, "active_reader"):
+            if hasattr(self._wrapper.active_reader, "clear_active_context"):
+                logger.debug("Signaling active reader proxy to clear binary file handles via context discharge.")
+                self._wrapper.active_reader.clear_active_context()
 
 # --------------------------------------------------
 # Section: WorkspaceMixin Injection Hook
