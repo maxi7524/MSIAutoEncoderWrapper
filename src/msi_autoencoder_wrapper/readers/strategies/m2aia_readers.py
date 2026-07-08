@@ -1,11 +1,12 @@
 from pathlib import Path
 import numpy as np
 import m2aia as m2
-from typing import Optional, Any
+from typing import Optional, Any, Dict, Tuple, Union
 from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
 
+# Logger initialization
 logger = get_custom_logger(__name__)
 
 
@@ -13,9 +14,6 @@ logger = get_custom_logger(__name__)
 class M2aiaReader(MSIBaseReader):
     """
     Concrete data loader adapter linking native binary C++ M2aia bindings to the library ecosystem.
-    
-    This strategy handles file initialization, raw binary buffer parsing, and spatial tracking
-    for standard imzML structures wrapped by the M2aia processing API.
     """
 
     def __init__(self, file_path: Path | str, active_context: Optional[Any] = None) -> None:
@@ -24,92 +22,105 @@ class M2aiaReader(MSIBaseReader):
 
         :param file_path: Exact file storage path pointing to targeted imzML files.
         :type file_path: pathlib.Path | str
-        :raises RuntimeError: If native m2aia engine fails to execute load sequences.
+        :param active_context: Active execution session proxy tracking live datasets. Defaults to None.
+        :type active_context: Optional[Any]
         """
-        # Anchor parent dependencies
-        super().__init__(file_path)
+        # Anchor parent dependencies using unified structural constructor signature
+        super().__init__(file_path, active_context=active_context)
         
         # Runtime signaling tracking telemetry
-        logger.info(f"Initializing M2aia native image reader on file target: {file_path}")
+        logger.info("Initializing M2aia native image reader on file target: %s", file_path)
         
         try:
             self._img = m2.ImzMLReader(str(self.file_path))
             self._img.Load()
-        except Exception as e:
+        except Exception as error:
             from ...utils.exceptions import ProjectConfigError
-            raise ProjectConfigError(f"Critical M2aia engine failure opening target file {file_path}: {e}")
+            logger.error("Critical native C++ library exception intercepted during loader initialization.", exc_info=True)
+            raise ProjectConfigError(f"Critical M2aia engine failure opening target file {file_path}: {error}")
+
+        # Lazy spatial lookup coordinates database cache
+        self._spatial_lookup: Optional[Dict[Tuple[int, int, int], int]] = None
 
     def GetXMin(self) -> float:
-        """
-        Extracts boundary starting values from continuous mass spectrometry profiling axis.
-
-        :return: First evaluation scalar mass value entry.
-        :rtype: float
-        """
         return float(self._img.GetXAxis()[0])
-    
+
     def GetXMax(self) -> float:
-        """
-        Extracts maximum ending parameters bound within continuous mass spectrum axis.
-
-        :return: Terminal validation mass boundary entry.
-        :rtype: float
-        """
         return float(self._img.GetXAxis()[-1])
-    
+
     def GetXAxis(self) -> np.ndarray:
-        """
-        Retrieves continuous alignment array vectors containing precise mass-to-charge configurations.
+        return self._img.GetXAxis()
 
-        :return: Aligned physical mass-to-charge spectrometry channels coordinate system array.
-        :rtype: np.ndarray
-        """
-        return np.array(self._img.GetXAxis(), dtype=np.float32)
-    
     def GetXAxisDepth(self) -> int:
-        """
-        Queries native binary structures to extract absolute spectrum measurement channel depth metrics.
-
-        :return: Cumulative capacity capability limit configuration tracking metric integer.
-        :rtype: int
-        """
         return int(self._img.GetXAxisDepth())
 
-    def __len__(self) -> int:
-        """
-        Computes total absolute count of functional spectra (pixels) recorded within tissue borders.
+    def GetNumberOfSpectra(self) -> int:
+        return int(self._img.GetNumberOfSpectra())
 
-        :return: Multi-dimensional space flat coordinate ceiling matrix size boundary tracking integer.
-        :rtype: int
+    def _ensure_spatial_lookup(self) -> None:
         """
-        return int(self._img.GetSize()[0] * self._img.GetSize()[1] * self._img.GetSize()[2])
+        Internal helper compiling a fast O(1) hash coordinate lookup registry mapping 3D points back to flat indices.
+        """
+        if self._spatial_lookup is not None:
+            return
 
-    def get_raw_spectrum(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Extracts original irregular mass spectrometry data matrices directly from binary indices pointers.
+        logger.debug("Building lazy structural spatial index lookup map for native image coordinate matching.")
+        self._spatial_lookup = {}
+        total_spectra = self.GetNumberOfSpectra()
+        
+        for idx in range(total_spectra):
+            pos_key = self.GetSpectrumPosition(idx)
+            self._spatial_lookup[pos_key] = idx
 
-        :param idx: Flat coordinate position sequential pointer targeting a single active tissue tracking node.
-        :type idx: int
-        :return: Aligned mass spectrometry response parameters arrays tracking tuple pairings (xs, ys).
-        :rtype: tuple[np.ndarray, np.ndarray]
-        """
-        xs = self._img.GetXValues(idx)
-        ys = self._img.GetYValues(idx)
+    def GetSpectrum(self, target: Union[int, Tuple[int, int, int]]) -> Tuple[np.ndarray, np.ndarray]:
+        # Handle coordinate resolution based on input argument type
+        if isinstance(target, (int, np.integer)):
+            flat_idx = int(target)
+        elif isinstance(target, tuple):
+            self._ensure_spatial_lookup()
+            flat_idx = self._spatial_lookup.get(target) # type: ignore
+            if flat_idx is None:
+                ### Return an empty spectrum sequence pairing if spatial bounds contain no measurements
+                logger.debug("Requested coordinates %s map outside the empirical tissue boundary layout.", target)
+                return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+        else:
+            raise TypeError(f"Unsupported target index descriptor type: '{type(target).__name__}'. Use flat int or a 3D coordinate tuple.")
+
+        # Execute direct native low-level C++ vector recovery commands
+        xs = self._img.GetXValues(flat_idx)
+        ys = self._img.GetYValues(flat_idx)
+        
         if xs is None or ys is None:
             return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
         return xs.astype(np.float32), ys.astype(np.float32)
 
-    def GetSpectrumPosition(self, idx: int) -> tuple[int, int, int]:
-        """
-        Queries low-level C++ file headers to map flat pointer arrays context hooks back onto biological coordinates.
-
-        :param idx: Flat vector alignment registration index tracker element.
-        :type idx: int
-        :return: Array sequence mapping values containing spatial discrete physical coordinates [X, Y, Z].
-        :rtype: tuple[int, int, int]
-        """
+    def GetSpectrumPosition(self, idx: int) -> Tuple[int, int, int]:
         pos = self._img.GetSpectrumPosition(idx)
         return int(pos[0]), int(pos[1]), int(pos[2])
+
+    def GetMetaData(self) -> Dict[str, Any]:
+        # total_spectra = self.GetNumberOfSpectra()
+        
+        # # Coordinate matrix extraction block
+        # ## Loop through coordinates to establish max bounding box geometry for the layout
+        # max_x, max_y, max_z = 0, 0, 0
+        # for idx in range(total_spectra):
+        #     x, y, z = self.GetSpectrumPosition(idx)
+        #     if x > max_x: max_x = x
+        #     if y > max_y: max_y = y
+        #     if z > max_z: max_z = z
+
+        # return {
+        #     "total_pixels": total_spectra,
+        #     "x_axis_depth": self.GetXAxisDepth(),
+        #     "x_range": (self.GetXMin(), self.GetXMax()),
+        #     "spatial_boundaries": {
+        #         "max_x": max_x + 1,
+        #         "max_y": max_y + 1,
+        #         "max_z": max_z + 1
+        #     }
+        # }
+        return self._img.GetMetaData()
 
     @property
     def native_reader(self) -> m2.ImzMLReader:
