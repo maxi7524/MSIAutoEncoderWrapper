@@ -6,8 +6,9 @@ import inspect
 import pprint
 from typing import Dict, Any, Optional, Union 
 from pathlib import Path
+from ..utils.decorators import manage_image_context
 from ...utils.logger import get_custom_logger
-from ...utils.validators import validate_constructor_kwargs
+from ...utils.validators import validate_constructor_kwargs, resolve_component
 from ...readers.readers_manager import ReaderManager
 from ...binners.binners_manager import BinnerManager
 
@@ -41,78 +42,89 @@ class ReadersManagerProxy:
         ReaderManager.discover_strategies()
         BinnerManager.discover_strategies()
 
+# --------------------------------------------------
+# Section: Public Strategy Setters
+# --------------------------------------------------
+
     # --------------------------------------------------
-    # Subsection: Setters - reader 
+    # Subsection: Setters - reader
     # --------------------------------------------------
 
-    def set_reader(self, img_name: str, reader_name_or_instance: Union[str, Any], **kwargs: Any) -> None:
+    def set_reader(self, reader_name_or_instance: Any, img_name_or_path: Optional[str] = None, **kwargs: Any) -> Any:
         """
-        Sets and validates the reader configuration for a specific image context.
-        
-        If a pre-initialized object is passed, its registry compliance is verified.
-        If a string key is provided, constructor signature validation is enforced 
-        via reflection utilities before committing to the ledger.
+        Registers and configures an input data reader strategy for an image context.
 
-        :param img_name: Clean identifier handle representing the target image.
-        :type img_name: str
-        :param reader_name_or_instance: Registered strategy string name or an already instantiated reader object.
-        :type reader_name_or_instance: Union[str, Any]
-        :param kwargs: Keyword arguments validated and saved as execution footprints.
-        :raises ValueError: If the strategy name is unregistered or missing required parameters.
+        Accepts either a unique registered string token identifier or a pre-initialized
+        concrete instance object. Context resolution and filesystem synchronization are
+        delegated directly down to the internal component registration system.
+
+        :param reader_name_or_instance: Registered strategy identifier string or an initialized reader object.
+        :type reader_name_or_instance: Any
+        :param img_name_or_path: Explicit target path or standalone image name key token. Defaults to None.
+        :type img_name_or_path: Optional[str]
+        :param kwargs: Arbitrary configuration parameters validated and passed to the constructor factory.
+        :return: Fully resolved and validated data reader component instance.
+        :rtype: Any
         """
-        self._set_component(
-            img_name=img_name,
+        # Strategy routing block
+        ## Forward execution properties directly to the unified driver registration manager
+        return self._set_component(
+            component_type="reader",
             target=reader_name_or_instance,
-            registry=ReaderManager.REGISTRY,
-            ledger_key="reader",
-            component_type_label="reader",
-            kwargs=kwargs
+            img_name_or_path=img_name_or_path,
+            **kwargs
         )
-        logger.info("Committed dataset reader configuration setup under image token context: %s", img_name)
-
+    
     # --------------------------------------------------
-    # Subsection: Setters - binners 
+    # Subsection: Setters - binners
     # --------------------------------------------------
 
-    def set_binner(self, img_name: str, binner_name_or_instance: Any, **kwargs: Any) -> None:
+    def set_binner(self, binner_name_or_instance: Any, img_name_or_path: Optional[str] = None, **kwargs: Any) -> Any:
         """
-        Registers a forward compression spectrum binner configuration into the state ledger.
+        Registers a forward spectral binning compression configuration into the project ledger.
 
-        :param img_name: Clean identifier handle representing the target image.
-        :type img_name: str
-        :param binner_name_or_instance: Registry string token name identifier or strategy class instance.
+        :param binner_name_or_instance: Registered strategy identifier string or an initialized binner object.
         :type binner_name_or_instance: Any
+        :param img_name_or_path: Explicit target path or standalone image name key token. Defaults to None.
+        :type img_name_or_path: Optional[str]
+        :param kwargs: Arbitrary configuration parameters validated and passed to the constructor factory.
+        :return: Fully resolved and validated forward spectrum binner component instance.
+        :rtype: Any
         """
-        # Processing forward compression configuration pipeline
-        self._set_component(
-            img_name=img_name,
+        # Strategy routing block
+        ## Forward execution properties directly to the unified driver registration manager
+        return self._set_component(
+            component_type="binner",
             target=binner_name_or_instance,
-            registry=BinnerManager.BINNER_REGISTRY,
-            ledger_key="binner",
-            component_type_label="forward binner",
-            kwargs=kwargs
+            img_name_or_path=img_name_or_path,
+            **kwargs
         )
-        logger.info("Committed forward spectrum binner configuration setup under image token context: %s", img_name)
 
-    def set_inverse_binner(self, img_name: str, inverse_binner_name_or_instance: Any, **kwargs: Any) -> None:
+    def set_inverse_binner(self, inverse_binner_name_or_instance: Any, img_name_or_path: Optional[str] = None, **kwargs: Any) -> Any:
         """
-        Registers a reverse reconstruction spatial binner configuration into the state ledger.
+        Registers a reverse reconstruction spatial binner configuration into the project ledger.
 
-        :param img_name: Clean identifier handle representing the target image.
-        :type img_name: str
-        :param inverse_binner_name_or_instance: Registry string token name identifier or strategy class instance.
+        :param inverse_binner_name_or_instance: Registered strategy identifier or initialized inverse binner object.
         :type inverse_binner_name_or_instance: Any
+        :param img_name_or_path: Explicit target path or standalone image name key token. Defaults to None.
+        :type img_name_or_path: Optional[str]
+        :param kwargs: Arbitrary configuration parameters validated and passed to the constructor factory.
+        :return: Fully resolved and validated inverse spectrum binner component instance.
+        :rtype: Any
         """
-        # Processing reverse reconstruction configuration pipeline
-        self._set_component(
-            img_name=img_name,
+        # Strategy routing block
+        ## Forward execution properties directly to the unified driver registration manager
+        return self._set_component(
+            component_type="inverse_binner",
             target=inverse_binner_name_or_instance,
-            registry=BinnerManager.INVERSE_REGISTRY,
-            ledger_key="inverse_binner",
-            component_type_label="inverse binner",
-            kwargs=kwargs
+            img_name_or_path=img_name_or_path,
+            **kwargs
         )
-        logger.info("Committed reverse reconstruction binner configuration setup under image token context: %s", img_name)
+
+
+# --------------------------------------------------
+# Section: Public Strategy Getters
+# --------------------------------------------------
 
     # --------------------------------------------------
     # Subsection: Getters - readers 
@@ -185,9 +197,9 @@ class ReadersManagerProxy:
             return_value=return_value
         )
     
-    # --------------------------------------------------
-    # Subsection: Helpers
-    # --------------------------------------------------
+# --------------------------------------------------
+# Section: Helpers
+# --------------------------------------------------
 
     def _ensure_image_bucket(self, img_name: str) -> None:
         """
@@ -210,67 +222,77 @@ class ReadersManagerProxy:
     # Subsection: Helpers - setters
     # --------------------------------------------------
 
+    # Component registration sub-system
+    @manage_image_context
     def _set_component(
-        self,
-        target: Any,
-        img_name: str,
-        registry: Dict[str, Any],
-        ledger_key: str,
-        component_type_label: str,
-        kwargs: Dict[str, Any]
-    ) -> None:
+        self, 
+        component_type: str, 
+        target: Any, 
+        img_name_or_path: Optional[str] = None, 
+        **kwargs: Any
+    ) -> Any:
         """
-        Centralized internal helper to manage contextual pipeline activation, type verification,
-        constructor reflection signatures, and state ledger preservation across all component types.
-        """
+        Resolves, provisions layout directories, and registers an operational component for an image context.
 
+        The image lifecycle context is implicitly synchronized via the @manage_image_context decorator.
+        Once verified, this method maps the component type to its respective central registry database,
+        triggers physical workspace verification, and instantiates or tracks the execution driver.
+
+        :param component_type: Structural category of the driver (e.g., 'reader', 'binner', 'inverse_binner').
+        :type component_type: str
+        :param target: Class string identifier lookup key or concrete pre-initialized instance object.
+        :type target: Any
+        :param img_name_or_path: Explicit target path or standalone image name key token.
+        :type img_name_or_path: Optional[str]
+        :param kwargs: Configuration variables passed onto strategy constructor factories during resolution.
+        :return: Fully resolved and functional processing component instance.
+        :rtype: Any
+        :raises ValueError: If the requested component classification is unsupported by the engine.
+        """
+        # Component manager infrastructure resolution
+        ## Define localized registry routing boundaries for known pipeline blocks
+        registries = {
+            "reader": ReaderManager.REGISTRY,
+            "binner": BinnerManager.BINNER_REGISTRY,
+            "inverse_binner": BinnerManager.INVERSE_REGISTRY
+        }
+
+        if component_type not in registries:
+            ### Handle invalid component classification anomalies
+            logger.error("Component registration blocked: Unsupported component type '%s'", component_type)
+            raise ValueError(f"Unsupported component type: {component_type}. Valid types: {list(registries.keys())}")
+
+        workspace = self._wrapper.workspace
+        active_img = workspace.active_img_name
+
+        ## Trigger directory structural updates to prepare dedicated configuration layout folders
+        if hasattr(workspace, "create_required_directories"):
+            logger.debug("Ensuring physical layout directories exist for image context: %s", active_img)
+            workspace.create_required_directories()
+
+        ## Delegate strategy selection to the unified validation framework
+        logger.info("Resolving system component '%s' under image context '%s'", component_type, active_img)
+        target_registry = registries[component_type]
+        
         try:
-            # Uruchomienie metody z workspace mixin za pomocą referencji do rodzica
-            if self._wrapper and hasattr(self._wrapper, "workspace"):
-                self._wrapper.workspace.set_active_image(img_name)
-                img_name = self._wrapper.workspace.get_
-                ## Ensure target image storage bucket initialization
-                self._ensure_image_bucket(img_name)
+            resolved_instance = resolve_component(
+                target=target,
+                registry=target_registry,
+                component_type=component_type,
+                **kwargs
+            )
+        except Exception as error:
+            ### Catch and log resolution errors before propagating exceptions
+            logger.error("Failed to resolve component '%s' for target context.", component_type, exc_info=True)
+            raise error
 
-            # Handle initialized class objects passed directly
-            if not isinstance(target, str):
-                cls_name = target.__class__.__name__
-                if cls_name not in registry:
-                    logger.warning(
-                        f"Passed {component_type_label} instance class '{cls_name}' is not explicitly found in registry."
-                    )
-                if kwargs:
-                    logger.warning(
-                        f"Keyword arguments {list(kwargs.keys())} were provided but ignored "
-                        f"because an already instantiated {component_type_label} object was passed."
-                    )
-                self.config_ledger[img_name][ledger_key] = {
-                    "instance_name": cls_name,
-                    "instance_params": {}
-                }
-                return
+        ## Map the initialized component instance into the memory state database
+        self._ensure_image_bucket(active_img)
 
-            # Handle text strategy configurations with lazy signature verification
-            if target not in registry:
-                raise ValueError(
-                    f"Unknown {component_type_label} strategy identifier '{target}'. "
-                    f"Available strategies are: {list(registry.keys())}."
-                )
+        self.config_ledger[active_img][component_type] = resolved_instance
+        logger.info("Successfully registered component '%s' into ledger for image '%s'", component_type, active_img)
 
-            component_cls = registry[target]
-            validate_constructor_kwargs(cls=component_cls, name=target, kwargs=kwargs)
-
-            ## Assign specific parameter configurations inside the tracking dictionary
-            self.config_ledger[img_name][ledger_key] = {
-                "instance_name": target,
-                "instance_params": kwargs
-            }
-            logger.info("Committed %s configuration setup under image token context: %s", component_type_label, img_name)
-
-        finally:
-            # Kontekst po całej akcji musi być bezwzględnie usuwany
-            if self._wrapper and hasattr(self._wrapper, "workspace"):
-                self._wrapper.workspace.set_active_image(None)
+        return resolved_instance
 
     # --------------------------------------------------
     # Subsection: Helpers - getters

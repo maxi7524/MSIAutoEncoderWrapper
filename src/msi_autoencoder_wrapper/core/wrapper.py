@@ -16,7 +16,7 @@ from .mixins.reader_manager_mixin import ReadersManagerMixin
 from .mixins.active_reader_mixin import ActiveReaderMixin
 
 ## exceptions handling 
-from .utils.validators_core import validate_components
+from ..utils.validators import validate_components
 from ..utils.exceptions import (
     ProjectConfigError, 
     ModelNotInitializedError, 
@@ -141,7 +141,7 @@ class MSIAutoEncoderWrapper(
     #     logger.info("Model compiled successfully and mounted onto device: %s", self.device)
     #     return self.model
 
-    def fit(self, model_name: Optional[str] = None, img_name: Optional[Union[str, List[str]]] = None) -> None:
+    def fit(self, model_name: Optional[str] = None, img_name_or_path: Optional[Union[str, List[str]]] = None) -> None:
         """
         Executes low-level optimization loops. Resolves target contexts from defaults if parameters are omitted.
 
@@ -155,7 +155,7 @@ class MSIAutoEncoderWrapper(
         """
         # 1. Fallback evaluation logic from global defaults if inputs are None
         resolved_model = model_name or self.workspace.default_model_name
-        resolved_img = img_name or self.workspace.default_img_name
+        resolved_img = img_name_or_path or self.workspace.default_img_name
 
         # 2. Collect targets for batch atomic validation check before execution block
         validate_components([

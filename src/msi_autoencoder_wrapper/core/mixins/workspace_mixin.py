@@ -146,29 +146,29 @@ class WorkspaceProxy:
     # Subsection: single image setup
     # --------------------------------------------------
 
-    def set_active_image(self, image_name: Optional[str] = None) -> None:
+    def set_active_image(self, img_name_or_path: Optional[str] = None) -> None:
         """
         Sets the active image context, resolving raw paths, workspace images, or defaults.
 
         :param image_name: Name of the image or direct file path. Falls back to default if None.
         :type image_name: Optional[str]
         """
-        if image_name is None:
+        if img_name_or_path is None:
             if self.default_img_name:
                 logger.info("No image name provided. Falling back to default workspace image configuration.")
-                image_name = self.default_img_name
+                img_name_or_path = self.default_img_name
             else:
                 logger.info("Active image configuration cleared. No default context available.")
                 self.active_img_name = None
                 self._active_img_custom_path = None
                 return
 
-        image_path = Path(image_name)
+        image_path = Path(img_name_or_path)
 
         ## Discriminate between full disk path triggers and standalone keys
         if image_path.is_absolute() or len(image_path.parts) > 1 or image_path.exists():
             ### Resolve direct raw filesystem path input
-            logger.info("Resolving direct filesystem path context for image: %s", str(image_name))
+            logger.info("Resolving direct filesystem path context for image: %s", str(img_name_or_path))
             self.active_img_name = image_path.stem
             
             ### Manage system mapping based on layout association
@@ -181,7 +181,7 @@ class WorkspaceProxy:
                 logger.info("External filesystem path detected. Image context mapped outside of workspace.")
         else:
             ### Resolve relative key mapping inside standard workspace image repository
-            logger.info("Mapping relative image handle against workspace repository path: %s", str(image_name))
+            logger.info("Mapping relative image handle against workspace repository path: %s", str(img_name_or_path))
             self.active_img_name = image_path.stem
             self._active_img_custom_path = None
 
@@ -196,6 +196,7 @@ class WorkspaceProxy:
         :param img_name_or_path: Unique identifier or absolute/relative path of the fallback image target.
         :type img_name_or_path: str
         """
+        #TODO - default image - it should take also into consideration external path
         self.default_img_name = img_name_or_path
 
 
@@ -310,9 +311,10 @@ class WorkspaceProxy:
         :rtype: Path
         :raises WorkspaceConfigError: If default image context is uninitialized.
         """
+        #TODO - default image - it should take also into consideration external path
         if not self.default_img_name:
             raise WorkspaceConfigError("Default image name context is uninitialized.")
-        return self.get_imgs_root() / self.default_img_name
+        return self.get_imgs_dir() / self.default_img_name
     
     def get_default_model(self) -> Path:
         """
