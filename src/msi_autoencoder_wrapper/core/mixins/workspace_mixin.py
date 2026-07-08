@@ -113,9 +113,9 @@ class WorkspaceProxy:
 
         # Trigger explicit session reset
         ## Force the active reader proxy to wipe cached file handles to synchronize with the new active context
-        if hasattr(self, "_wrapper") and hasattr(self._wrapper, "active_reader"):
-            if hasattr(self._wrapper.active_reader, "clear_active_context"):
-                self._wrapper.active_reader.clear_active_context()
+        if hasattr(self, "_wrapper") and hasattr(self._wrapper, "active_context"):
+            if hasattr(self._wrapper.active_context, "clear_active_context"):
+                self._wrapper.active_context.clear_active_context()
 
         # Directory provisioning step
         ## Automatically construct required subfolders if workspace is in automated mode
@@ -570,10 +570,10 @@ class WorkspaceProxy:
         
         # State signaling block
         ## Notify the coupled active reader proxy to close file handles and release RAM allocations
-        if hasattr(self, "_wrapper") and hasattr(self._wrapper, "active_reader"):
-            if hasattr(self._wrapper.active_reader, "clear_active_context"):
+        if hasattr(self, "_wrapper") and hasattr(self._wrapper, "active_context"):
+            if hasattr(self._wrapper.active_context, "clear_active_context"):
                 logger.debug("Signaling active reader proxy to clear binary file handles via context discharge.")
-                self._wrapper.active_reader.clear_active_context()
+                self._wrapper.active_context.clear_active_context()
 
 # --------------------------------------------------
 # Section: WorkspaceMixin Injection Hook
