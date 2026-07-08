@@ -5,6 +5,10 @@ Module defining the execution proxy and mixin for managing live binary pipeline 
 from typing import Any, Optional
 from ...utils.logger import get_custom_logger
 
+from ...readers.base_reader import MSIBaseReader
+from ...binners.base_binner import MSIBaseBinner
+from ...binners.base_inverse import MSIBaseInverseBinner
+
 # Logger initialization
 logger = get_custom_logger(__name__)
 
@@ -41,7 +45,7 @@ class ActiveContextProxy:
 # --------------------------------------------------
 
     @property
-    def reader(self) -> Any:
+    def reader(self) -> MSIBaseReader:
         """
         Returns the fully initialized concrete MSIBaseReader instance for the active image context.
 
@@ -54,7 +58,7 @@ class ActiveContextProxy:
         return self._cached_reader
 
     @property
-    def binner(self) -> Any:
+    def binner(self) -> Optional[MSIBaseBinner]:
         """
         Returns the fully initialized concrete MSIBaseBinner instance for the active image context.
 
@@ -67,7 +71,7 @@ class ActiveContextProxy:
         return self._cached_binner
 
     @property
-    def inverse_binner(self) -> Any:
+    def inverse_binner(self) -> Optional[MSIBaseInverseBinner]:
         """
         Returns the fully initialized concrete MSIBaseInverseBinner instance for the active image context.
 
