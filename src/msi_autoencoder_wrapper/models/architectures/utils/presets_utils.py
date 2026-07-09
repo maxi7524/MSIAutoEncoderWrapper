@@ -4,7 +4,7 @@ Statistical utility algorithms executing analytical computations over structural
 
 import numpy as np
 from typing import Any
-from ...utils.logger import get_custom_logger
+from ....utils.logger import get_custom_logger
 
 # Logger initialization
 logger = get_custom_logger(__name__)

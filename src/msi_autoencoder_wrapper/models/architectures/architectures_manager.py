@@ -6,7 +6,8 @@ import inspect
 import pkgutil
 import importlib
 import sys
-from typing import Type, Dict, Any, Optional, Union
+import os
+from typing import Type, Dict, Any, Optional, Union, List
 import torch.nn as nn
 
 from ...utils.logger import get_custom_logger
@@ -161,8 +162,6 @@ class ArchitecturesManager:
             resolved_components[category] = category_db[comp_name](**comp_params)
 
         # Graph assembly execution block
-        ## Inject resolved subcomponents directly as explicit keyword arguments to match original signature contracts
-        logger.info("Compiling network subcomponents directly into master model container: %s", model_type)
         master_model_class = cls._MODEL_REGISTRY[model_type]
         
         compiled_model = master_model_class(
@@ -175,130 +174,37 @@ class ArchitecturesManager:
         
         return compiled_model
 
-    @classmethod
-    def get_preset_blueprint(cls, model_type: str, name: str, **kwargs: Any) -> Dict[str, Any]:
-        """
-        Resolves and executes a registered preset macro to generate a complete architecture blueprint.
-
-        :param model_type: Scope identifier representing the targeted model family.
-        :type model_type: str
-        :param name: Unique configuration profile lookup token name.
-        :type name: str
-        :param kwargs: Arbitrary runtime parameters passed down to the macro preset factories.
-        :return: Complete compiled components structural blueprint setup map.
-        :rtype: Dict[str, Any]
-        """
-        if model_type not in cls._PRESET_REGISTRY or name not in cls._PRESET_REGISTRY[model_type]:
-            error_msg = f"Preset profile '{name}' not found under model family '{model_type}'."
-            logger.error(error_msg)
-            raise KeyError(error_msg)
-            
-        return cls._PRESET_REGISTRY[model_type][name](**kwargs)
-
-    # --------------------------------------------------
-    # Section: Getting available components 
-    # --------------------------------------------------
-
-    @classmethod
-    def get_available_components(cls, model_type: str, category: str) -> dict[str, str]:
-        """
-        Queries the internal multidimensional registry to extract registered strategies and signatures.
-
-        Extracts clean structural summary docstrings for runtime API discovery in notebooks.
-
-        :param model_type: Name of the targeted model family scope (e.g., 'autoencoder').
-        :type model_type: str
-        :param category: Structural layer classification slot (e.g., 'encoder', 'decoder').
-        :type category: str
-        :return: Map linking strategy lookup tokens to their respective high-level docstring summaries.
-        :rtype: dict[str, str]
-        """
-        # Dictionary inspection layer
-        type_db = cls._COMPONENT_REGISTRY.get(model_type, {})
-        category_db = type_db.get(category, {})
-        
-        summary: dict[str, str] = {}
-        
-        # Inspection loop
-        ## Scan found class types to extract documentation metadata parameters
-        for comp_name, comp_class in category_db.items():
-            doc = inspect.getdoc(comp_class)
-            summary[comp_name] = doc.split("\n")[0] if doc else "No description available."
-            
-        return summary
-
-    @classmethod
-    def get_component_details(cls, model_type: str, category: str, name: str) -> dict[str, Any]:
-        """
-        Extracts detailed constructor specifications, signature parameter maps, and complete docstrings.
-
-        :param model_type: Target model family scope token.
-        :type model_type: str
-        :param category: Structural layer category slot.
-        :type category: str
-        :param name: Strategy string lookup key identifier.
-        :type name: str
-        :return: Detailed dictionary containing constructor metadata attributes.
-        :rtype: dict[str, Any]
-        :raises KeyError: If the requested strategy configuration is missing from registries.
-        """
-        type_db = cls._COMPONENT_REGISTRY.get(model_type, {})
-        category_db = type_db.get(category, {})
-        
-        if name not in category_db:
-            raise KeyError(f"Strategy '{name}' is missing from database path: [{model_type}][{category}]")
-            
-        target_class = category_db[name]
-        init_method = getattr(target_class, "__init__", None)
-        
-        # Extract operational signatures
-        params = {}
-        if init_method:
-            sign = inspect.signature(init_method)
-            for p_name, p_obj in sign.parameters.items():
-                if p_name != "self":
-                    params[p_name] = str(p_obj.default) if p_obj.default != inspect.Parameter.empty else "REQUIRED"
-
-        return {
-            "strategy_name": name,
-            "class_type": target_class.__name__,
-            "full_docstring": inspect.getdoc(target_class) or "No documentation provided.",
-            "expected_constructor_kwargs": params
-        }
-
-    @classmethod
-    def verify_model_type_exists(cls, model_type: str) -> bool:
-        """
-        Verifies if a specific model family type is securely bound inside the primary model registry database.
-
-        :param model_type: The candidate family type token identifier string.
-        :type model_type: str
-        :return: True if registered, False otherwise.
-        :rtype: bool
-        """
-        return model_type in cls._MODEL_REGISTRY
-
-    @classmethod
-    def list_available_presets(cls, model_type: str) -> list[str]:
-        """
-        Lists all registered configuration preset profile names for a given model family scope.
-        """
-        return list(cls._PRESET_REGISTRY.get(model_type, {}).keys())
-
     # --------------------------------------------------
     # Section: Recursive Auto-Discovery Loop
     # --------------------------------------------------
 
     @classmethod
-    def discover_architectures(cls, package_path: list, package_name: str) -> None:
+    def discover_architectures(cls, package_path: Optional[List[str]] = None, package_name: Optional[str] = None) -> None:
         """
         Recursively scans package layout structures to load concrete strategies, ignoring template blueprint schemas.
 
-        :param package_path: Absolute filesystem boundary track corresponding to path properties.
-        :type package_path: list
-        :param package_name: Hierarchical module tracking string index root name.
-        :type package_name: str
+        If parameters are omitted, resolves paths automatically relative to the manager location module.
+
+        :param package_path: Absolute filesystem boundary track corresponding to path properties, defaults to None.
+        :type package_path: Optional[List[str]]
+        :param package_name: Hierarchical module tracking string index root name, defaults to None.
+        :type package_name: Optional[str]
         """
+        # Dynamic self-resolution fallback loop
+        if package_path is None or package_name is None:
+            ## Extract module parameters corresponding to the package root container
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            package_path = [base_dir]
+            
+            ### Resolve parent package hierarchical dot token definition
+            current_module = cls.__module__
+            if "." in current_module:
+                package_name = ".".join(current_module.split(".")[:-1])
+            else:
+                package_name = current_module
+                
+            logger.debug("Architectures discovery system resolved baseline roots automatically: %s", package_name)
+
         # Skanowanie pakietów składowych
         ## Dynamic extraction of submodules using standard pkgutil walkers
         for _, module_name, _ in pkgutil.walk_packages(package_path, package_name + "."):

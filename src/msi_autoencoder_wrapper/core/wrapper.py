@@ -11,9 +11,12 @@ from typing import Union, Dict, Any, Optional, List
 from ..utils.logger import get_custom_logger
 
 ## mixins 
+### IO
 from .mixins.io.workspace_mixin import WorkspaceMixin
 from .mixins.io.context_manager_mixin import ContextManagerMixin
 from .mixins.io.active_context_mixin import ActiveContextMixin
+### Models
+from .mixins.models.models_mixin import ModelsMixin
 
 ## exceptions handling 
 from ..utils.validators import validate_components
@@ -26,7 +29,7 @@ from ..utils.exceptions import (
 ## Other modules 
 from ..readers.readers_manager import ReaderManager
 from ..binners.binners_manager import BinnerManager
-from ..models.architecture.architecture_manager import ArchitectureManager
+from ..models.architectures.architectures_manager import ArchitecturesManager
 from ..models.datasets.dataset_manager import DatasetManager
 from ..training.manager import TrainingManager
 
@@ -34,12 +37,15 @@ logger = get_custom_logger(__name__)
 
 
 class MSIAutoEncoderWrapper(
+    # IO mixins
+    WorkspaceMixin,        # Folder automation - `core/mixins/workspace_mixin` module
     ContextManagerMixin,  # Configuration and multi-image registries ledger state database
     ActiveContextMixin,    # Dynamic transparent routing command proxy for the active target file
+    # model mixins
+    ModelsMixin,
     # Model setup mixin,        # mixin repsonsible for model instantiation
     # TrainingMixin,        # training module
     # InferenceMixin,       # inference module
-    WorkspaceMixin        # Folder automation - `core/mixins/workspace_mixin` module
     ):
     """
     Main Facade class that integrates data loading, binning, modeling, and training into a single workspace session.
