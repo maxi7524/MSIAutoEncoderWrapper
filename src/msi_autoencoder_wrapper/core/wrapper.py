@@ -11,9 +11,9 @@ from typing import Union, Dict, Any, Optional, List
 from ..utils.logger import get_custom_logger
 
 ## mixins 
-from .mixins.workspace_mixin import WorkspaceMixin
-from .mixins.context_manager_mixin import ContextManagerMixin
-from .mixins.active_context_mixin import ActiveContextMixin
+from .mixins.io.workspace_mixin import WorkspaceMixin
+from .mixins.io.context_manager_mixin import ContextManagerMixin
+from .mixins.io.active_context_mixin import ActiveContextMixin
 
 ## exceptions handling 
 from ..utils.validators import validate_components

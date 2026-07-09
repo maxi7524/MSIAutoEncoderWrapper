@@ -9,7 +9,7 @@ import numpy as np
 from ..dataset_manager import DatasetManager
 from ..base_dataset import MSIBaseDataset
 from ....utils.logger import get_custom_logger
-from ....core.mixins.active_context_mixin import ActiveContextProxy
+from ....core.mixins.io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
