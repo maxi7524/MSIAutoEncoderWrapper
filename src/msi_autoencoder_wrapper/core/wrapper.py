@@ -26,8 +26,8 @@ from ..utils.exceptions import (
 ## Other modules 
 from ..readers.readers_manager import ReaderManager
 from ..binners.binners_manager import BinnerManager
-from ..models.architecture.manager import ArchitectureManager
-from ..models.datasets.manager import DatasetManager
+from ..models.architecture.architecture_manager import ArchitectureManager
+from ..models.datasets.dataset_manager import DatasetManager
 from ..training.manager import TrainingManager
 
 logger = get_custom_logger(__name__)
