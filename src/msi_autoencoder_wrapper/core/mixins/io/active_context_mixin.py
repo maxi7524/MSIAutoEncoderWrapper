@@ -3,11 +3,11 @@ Module defining the execution proxy and mixin for managing live binary pipeline 
 """
 
 from typing import Any, Optional
-from ...utils.logger import get_custom_logger
+from ....utils.logger import get_custom_logger
 
-from ...readers.base_reader import MSIBaseReader
-from ...binners.base_binner import MSIBaseBinner
-from ...binners.base_inverse import MSIBaseInverseBinner
+from ....readers.base_reader import MSIBaseReader
+from ....binners.base_binner import MSIBaseBinner
+from ....binners.base_inverse import MSIBaseInverseBinner
 
 # Logger initialization
 logger = get_custom_logger(__name__)

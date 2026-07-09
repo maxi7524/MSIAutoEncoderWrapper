@@ -19,8 +19,8 @@ project_path/
 import os
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Union, Tuple
-from ...utils.logger import get_custom_logger
-from ...utils.exceptions import WorkspaceConfigError
+from ....utils.logger import get_custom_logger
+from ....utils.exceptions import WorkspaceConfigError
 
 logger = get_custom_logger(__name__)
 
