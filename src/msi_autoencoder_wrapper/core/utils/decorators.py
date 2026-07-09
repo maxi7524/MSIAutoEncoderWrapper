@@ -66,12 +66,12 @@ def manage_image_context(func: Callable[..., Any]) -> Callable[..., Any]:
             logger.error("Exception intercepted in '%s'. Triggering active reader context reset.", func.__name__, exc_info=True)
             
             ### Access active lazy-loading drivers to clear cached filesystem file handles
-            active_reader = getattr(wrapper_ref, "active_reader", None)
-            if active_reader:
-                if hasattr(active_reader, "clear_active_context"):
-                    active_reader.clear_active_context()
-                elif hasattr(active_reader, "release_active_reader"):
-                    active_reader.release_active_reader()
+            active_context = getattr(wrapper_ref, "active_context", None)
+            if active_context:
+                if hasattr(active_context, "clear_active_context"):
+                    active_context.clear_active_context()
+                elif hasattr(active_context, "clear_active_context"):
+                    active_context.clear_active_context()
             
             ### Propagate the original error up the processing execution tree
             raise error
