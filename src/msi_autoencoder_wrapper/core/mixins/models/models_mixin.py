@@ -11,6 +11,7 @@ from ....utils.logger import get_custom_logger
 from ....utils.exceptions import ValidationError
 from ....models.datasets.dataset_manager import DatasetManager
 from ....models.architectures.architectures_manager import ArchitecturesManager
+from ..io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -33,7 +34,7 @@ class ModelsManagerProxy:
         # Stateful configuration registers
         self.active_model_type: Optional[str] = None
         self._active_dataset_name: Optional[str] = None
-        self._building_buffer: Dict[str, Any] = {"heads": {}}
+        self._building_buffer: Dict[str, Any] = {}
         self._preset_name_used: Optional[str] = None
 
         # Execute unified self-discovery tracking loops during initialization
@@ -241,7 +242,7 @@ class ModelsManagerProxy:
         self._preset_name_used = None
         logger.info("Operational network architecture context locked onto family: %s", model_type)
 
-    def set_component(self, category: str, target: str, **kwargs: Any) -> None:
+    def set_component(self, category: str, strategy: str, **kwargs: Any) -> None:
         """
         Appends an individual subcomponent layer setup block to the temporary building registry.
         """
@@ -250,10 +251,10 @@ class ModelsManagerProxy:
 
         type_db = ArchitecturesManager._COMPONENT_REGISTRY.get(self.active_model_type, {})
         category_db = type_db.get(category, {})
-        if target not in category_db:
-            raise KeyError(f"Strategy '{target}' missing from registry branch: [{self.active_model_type}][{category}]")
+        if strategy not in category_db:
+            raise KeyError(f"Strategy '{strategy}' missing from registry branch: [{self.active_model_type}][{category}]")
 
-        setup_block = {"type": target, "params": kwargs}
+        setup_block = {"type": strategy, "params": kwargs}
 
         if category in ("heads", "head"):
             head_task_name = kwargs.pop("task_name", f"task_{len(self._building_buffer['heads'])}")
@@ -263,38 +264,89 @@ class ModelsManagerProxy:
             self._building_buffer[category] = setup_block
             logger.info("Registered configuration layout parameters for component: %s", category)
 
+    # Heading 1 (Model Preset Configuration Bridge)
     def set_model_preset(self, name: str, **kwargs: Any) -> None:
         """
-        Loads an automated data-driven configuration preset layout mapping.
+        Dynamically configures individual subcomponent parameters inside the model buffer using a preset.
+
+        Validates the status of the active core context and its mounted readers, extracts the factory
+        blueprint from the architecture registry, resolves parameters, and routes the generated layout
+        definitions directly into the component buffer without triggering immediate compilation.
+
+        :param name: Unique tracking token identifier for the registered architecture preset.
+        :type name: str
+        :param kwargs: Arbitrary dynamic parameter footprints used for overrides or model definitions.
+        :raises ValueError: If active_model_type is unassigned or if active_context lacks an active reader.
+        :raises KeyError: If the requested preset name is not registered for the current model family.
         """
+        # Stateful environment validation
+        ## 1. Ensure the master model category/type has been explicitly assigned
         if not self.active_model_type:
-            raise ValueError("Preset mounting rejected: Establish active model type contexts first.")
-        if not self._active_dataset_name:
-            raise ValueError("Preset mounting rejected: Target dataset must be set via set_dataset() first.")
+            logger.error("Preset injection rejected: active_model_type has not been initialized.")
+            raise ValueError(
+                "Cannot apply architecture preset: active_model_type is undefined. "
+                "Set active_model_type first."
+            )
 
-        # Temporal sampling initialization
-        logger.debug("Building short-lived dataset instance to process model preset heuristics.")
-        tmp_dataset = DatasetManager.get_dataset(
-            name=self._active_dataset_name,
-            active_context=self._wrapper.active_context
+        ## 2. Extract and validate the live session execution context from the master wrapper
+        active_context = getattr(self._wrapper, "active_context", None)
+        if not active_context or not getattr(active_context, "reader", None):
+            logger.error("Preset injection rejected: Active execution context lacks an active reader session.")
+            raise ValueError(
+                "Cannot apply architecture preset: Active execution context does not contain "
+                "an initialized data reader session. Mount an image context first."
+            )
+
+        logger.info(
+            "Initiating model preset configuration layout lookup for family: %s, preset: %s",
+            self.active_model_type,
+            name
         )
 
-        preset_db = ArchitecturesManager._PRESET_REGISTRY.get(self.active_model_type, {})
-        if name not in preset_db:
-            raise KeyError(f"Model preset profile '{name}' not found under family '{self.active_model_type}'.")
+        # Registry lookup sequence
+        ## Verify existence of the requested preset blueprint within the global architecture registry
+        preset_registry = ArchitecturesManager._PRESET_REGISTRY
+        if self.active_model_type not in preset_registry or name not in preset_registry[self.active_model_type]:
+            error_msg = f"Preset '{name}' not found for model type '{self.active_model_type}'."
+            logger.error(error_msg)
+            raise KeyError(error_msg)
 
-        # Execute automatic hyperparameter calculation macro
-        compiled_blueprints = preset_db[name](
-            msi_dataset=tmp_dataset,
-            **kwargs
-        )
+        ## Retrieve the executable factory blueprint closure from the registry database
+        preset_factory = preset_registry[self.active_model_type][name]
 
-        # Unpack blueprints maps into the active compilation buffer
-        for category, setup_map in compiled_blueprints.items():
-            self._building_buffer[category] = setup_map
+        # Preset layout execution pass
+        ## Execute the factory method passing exclusively the active context and dynamic keyword overrides
+        logger.debug("Executing preset factory blueprint with active context proxy reference.")
+        preset_layout: Dict[str, Any] = preset_factory(active_context, **kwargs)
 
+        # Component strategy extraction and buffer allocation loop
+        ## Iteratively process each logical subcomponent block returned by the configuration blueprint
+        for category, component_dict in preset_layout.items():
+            ### Secure unified interface naming properties fallback parameters
+            strategy = component_dict.get("strategy")
+            params = component_dict.get("params", {})
+
+            if not strategy:
+                logger.error("Component extraction failed: Structural block for '%s' lacks a valid strategy key.", category)
+                continue
+
+            logger.info(
+                "Preset parsing operational trace: Automatically routing component category '%s' using strategy '%s'.",
+                category,
+                strategy
+            )
+
+            ### Route definitions directly into the stateful component manager via proxy delegation
+            self.set_component(category=category, strategy=strategy, **params)
+
+        # Finalize state metadata allocation block
+        ## Register the applied preset token within the buffer trace tracking variables without compiling the graph
         self._preset_name_used = name
-        logger.info("Successfully mounted model preset package layout into buffer: %s", name)
+        logger.info(
+            "Model preset layout '%s' successfully staged into the configurations buffer. "
+            "Graph compilation deferred for user modifications.",
+            name
+        )
 
     # --------------------------------------------------
     # Section: Compilation & Validation Gate
@@ -327,8 +379,8 @@ class ModelsManagerProxy:
             logger.info("Workspace experiment name synchronized from modeling preset state: %s", fallback_name)
 
         # Heading 1 (Directory Tree Provisioning Block)
-        if getattr(workspace, "auto_create_dirs", True):
-            workspace.create_model_directories_layout()
+        if getattr(workspace, "create_required_directories", True):
+            workspace.create_required_directories()
 
         # Heading 1 (Object Materialization and PyTorch Graph Assembly)
         ## 1. Materialize concrete PyTorch dataset sampler instance
@@ -365,6 +417,48 @@ class ModelsManagerProxy:
         self._wrapper.active_dataset = compiled_dataset
 
         return compiled_network
+
+# --------------------------------------------------
+# Section: Structural Visualization Utilities
+# --------------------------------------------------
+
+    def __str__(self) -> str:
+        """
+        Generates a human-readable string representation of the currently loaded model configurations.
+
+        :return: Structured summary of the target model type, active components, and applied presets.
+        :rtype: str
+        """
+        # Heading 1 (String Formatting Orchestration Pass)
+        ## Build structural baseline representation arrays
+        preset_label = self._preset_name_used if self._preset_name_used else "None"
+        model_type_label = self.active_model_type if self.active_model_type else "None"
+        
+        summary_lines = [
+            f"ModelsManagerProxy Configuration Summary:",
+            f"  - Active Model Type : {model_type_label}",
+            f"  - Applied Preset    : {preset_label}",
+            f"  - Configured Buffer Components:"
+        ]
+
+        ## Iterate through cached structural parameters inside the active building buffer
+        if self._building_buffer:
+            for component_key, component_data in self._building_buffer.items():
+                strategy_name = component_data.get("strategy", component_data.get("type", "Unknown"))
+                summary_lines.append(f"    * {component_key} [{strategy_name}]")
+        else:
+            summary_lines.append("    * No components initialized in buffer.")
+
+        return "\n".join(summary_lines)
+
+    def print_model_config(self) -> None:
+        """
+        Explicitly prints the current structural layout ledger configuration onto stdout.
+        """
+        # Heading 1 (Stdout Stream Injection)
+        ## Execute localized serialization string evaluation
+        configuration_dump = self.__str__()
+        print(configuration_dump)
 
 
 # =====================================================================

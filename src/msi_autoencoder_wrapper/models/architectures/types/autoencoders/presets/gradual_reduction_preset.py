@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional
 from ....architectures_manager import ArchitecturesManager
 from ....utils.presets_utils import estimate_max_peak_width
 from ......utils.logger import get_custom_logger
+from ......core.mixins.io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -16,7 +17,7 @@ logger = get_custom_logger(__name__)
 
 @ArchitecturesManager.register_preset("autoencoder", "GradualReduction")
 def get_gradual_reduction_preset(
-    msi_dataset: Any, 
+    active_context: ActiveContextProxy, 
     latent_dim: int, 
     user_hyperparameters: Optional[Dict[str, Any]] = None, 
     projection_dim: int = 128,
@@ -28,8 +29,6 @@ def get_gradual_reduction_preset(
     Estimates peak envelope widths to configure matching initial convolutional fields,
     iteratively scaling hidden depths until layers dimensions compress to fit bottlenecks.
 
-    :param msi_dataset: Concrete dataset instance providing spatial profiles access.
-    :type msi_dataset: Any
     :param latent_dim: Core dimension sizing assigned to the target bottleneck space.
     :type latent_dim: int
     :param user_hyperparameters: Manual overrides configuration maps to bypass automated heuristics.
@@ -42,7 +41,7 @@ def get_gradual_reduction_preset(
     #TODO - to jes tbez snesu `estimate_max_peak_width` jest źle zaimplentowane, pomimo wyraźnej uinstrukcji i kodu który to wszystko ustawiał ....
     # Context data resolution
     ## Safely query mass axis feature layout boundaries from the provided dataset object
-    input_dim = msi_dataset.active_context.binner.GetXAxisDepth()
+    input_dim = active_context.binner.GetXAxisDepth()
     logger.info("Preset builder initiating hyperparameter execution pipeline analysis.")
 
     # Override checkpoint pass
@@ -54,7 +53,7 @@ def get_gradual_reduction_preset(
         return params
 
     # Peak envelope width statistical extraction
-    auto_kernel_1 = estimate_max_peak_width(msi_dataset, sample_size=10000)
+    auto_kernel_1 = estimate_max_peak_width(active_context, sample_size=10000)
     logger.debug("Automated peak configuration analysis selected baseline field kernel size: %s", auto_kernel_1)
 
     # Core structural block definitions
@@ -88,21 +87,23 @@ def get_gradual_reduction_preset(
     # Structural component packing framework blueprints
     return {
         "encoder": {
-            "type": "CNNEncoder",
+            "strategy": "CNNEncoder",
             "params": {
                 "input_dim": input_dim, "latent_dim": latent_dim, "channels": channels,
                 "kernels": kernels, "strides": strides, "spatial_dims": spatial_dims
             }
         },
         "decoder": {
-            "type": "CNNDecoder",
+            "strategy": "CNNDecoder",
             "params": {
                 "latent_dim": latent_dim, "channels": channels, "kernels": kernels,
                 "strides": strides, "spatial_dims": spatial_dims
             }
         },
         "projector": {
-            "type": "LinearProjector",
-            "params": {"latent_dim": latent_dim, "projection_dim": projection_dim}
+            "strategy": "LinearProjector",
+            "params": {
+                "latent_dim": latent_dim, "projection_dim": projection_dim
+            }
         }
     }

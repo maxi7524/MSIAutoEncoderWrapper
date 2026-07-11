@@ -42,7 +42,7 @@ class PixelDataset(MSIBaseDataset):
         if not self.active_context or not getattr(self.active_context, "reader", None):
             raise ValueError("PixelDataset length query failed: Active context has no valid reader session mounted.")
             
-        return len(self.active_context.reader)
+        return self.active_context.reader.GetNumberOfSpectra()
 
     def __getitem__(self, idx: int) -> Tuple[int, torch.Tensor]:
         """
@@ -58,7 +58,7 @@ class PixelDataset(MSIBaseDataset):
         binner = self.active_context.binner
 
         # Read raw variables arrays from data drivers
-        xs, ys = reader.get_raw_spectrum(idx)
+        xs, ys = reader.GetSpectrum(idx)
 
         # Transformation execution pipeline block
         try:

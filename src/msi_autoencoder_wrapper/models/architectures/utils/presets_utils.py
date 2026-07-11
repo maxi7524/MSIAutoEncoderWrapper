@@ -5,25 +5,19 @@ Statistical utility algorithms executing analytical computations over structural
 import numpy as np
 from typing import Any
 from ....utils.logger import get_custom_logger
+from ....core.mixins.io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-def estimate_max_peak_width(msi_dataset: Any, sample_size: int = 10000) -> int:
+def estimate_max_peak_width(active_context: Any, sample_size: int = 10000) -> int:
     """
     Estimates the maximum peak envelope width across a random sample of pixel profiles.
 
     Analyzes consecutive bins thresholds to gauge spatial dimensions parameters.
-
-    :param msi_dataset: Instantiated concrete dataset complying with the MSIBaseDataset contract.
-    :type msi_dataset: Any
-    :param sample_size: Upper limit boundary defining maximum sampled pixel profiles, defaults to 10000.
-    :type sample_size: int
-    :return: Estimated peak width expressed as absolute mass-to-charge grid channels count.
-    :rtype: int
     """
-    total_pixels = len(msi_dataset)
+    total_pixels = active_context.reader.GetNumberOfSpectra()
     actual_sample_size = min(total_pixels, sample_size)
     
     logger.debug("Initiating statistical peak width evaluation over a pool of %s pixels.", actual_sample_size)
@@ -35,9 +29,11 @@ def estimate_max_peak_width(msi_dataset: Any, sample_size: int = 10000) -> int:
     
     for idx in indices:
         try:
-            ### Unpack standard dataset vector entries
-            _, spectrum_tensor = msi_dataset[idx]
-            spectrum_arr = spectrum_tensor.numpy()
+            ### Unpack standard reader arrays using the correct verified contract method
+            xs, ys = active_context.reader.GetSpectrum(int(idx))
+            
+            ### Process raw data through the active binner execution pass
+            spectrum_arr = active_context.binner(xs=xs, ys=ys)
             
             ### Compute continuous active signal regions mapping sequences
             active_mask = spectrum_arr > (np.mean(spectrum_arr) * 1.5)
