@@ -263,7 +263,7 @@ class ModelsManagerProxy:
             self._building_buffer[category] = setup_block
             logger.info("Registered configuration layout parameters for component: %s", category)
 
-    def set_model_preset(self, name: str, latent_dim: int, **kwargs: Any) -> None:
+    def set_model_preset(self, name: str, **kwargs: Any) -> None:
         """
         Loads an automated data-driven configuration preset layout mapping.
         """
@@ -286,7 +286,6 @@ class ModelsManagerProxy:
         # Execute automatic hyperparameter calculation macro
         compiled_blueprints = preset_db[name](
             msi_dataset=tmp_dataset,
-            latent_dim=latent_dim,
             **kwargs
         )
 
