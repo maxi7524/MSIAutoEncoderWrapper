@@ -10,7 +10,7 @@ from ....architectures_manager import ArchitecturesManager
 from .base_decoder import MSIBaseDecoder
 
 # Synchronized logger initialization
-from .....utils.logger import get_custom_logger
+from ......utils.logger import get_custom_logger
 logger = get_custom_logger(__name__)
 
 
