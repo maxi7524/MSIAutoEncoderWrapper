@@ -37,8 +37,12 @@ class ModelsManagerProxy:
         self._building_buffer: Dict[str, Any] = {}
         self._preset_name_used: Optional[str] = None
 
-        # Execute unified self-discovery tracking loops during initialization
-        # Heading 1 (Dynamic Registration Enforcement Loops)
+        # Training Criterions Proxy Injected Hook
+        ## Lazy-load and anchor the criteria manager proxy interface to decouple configuration layers
+        from .criterions_mixin import TrainingCriterionsProxy
+        self.criterions = TrainingCriterionsProxy(manager_ref=self)
+
+        # Dynamic Registration Enforcement Loops
         ## Trigger absolute modules reflection imports to populate static registration registries
         ArchitecturesManager.discover_architectures()
         DatasetManager.discover_strategies()

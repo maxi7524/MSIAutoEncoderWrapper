@@ -19,6 +19,8 @@ project_path/
 """
 
 import os
+import csv
+import json
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Union, Tuple
 from ....utils.logger import get_custom_logger
@@ -344,6 +346,219 @@ class WorkspaceProxy:
         """
         return self.active_model_name
 
+
+# --------------------------------------------------
+# Section: IO models
+# --------------------------------------------------
+
+    # --------------------------------------------------
+    # Subsection: saving
+    # --------------------------------------------------
+
+    def save_training_metrics(
+        self, 
+        image_key: str, 
+        model_type: str, 
+        phase_name: str, 
+        metrics: dict
+    ) -> None:
+        """
+        Appends epoch training metrics to a phase-specific CSV ledger file inside the workspace structure.
+
+        :param image_key: Unique tracking key token assigned to the targeting image context.
+        :type image_key: str
+        :param model_type: Identity string defining the master model architecture category.
+        :type model_type: str
+        :param phase_name: Unique naming descriptor identifying the active optimization phase.
+        :type phase_name: str
+        :param metrics: Dictionary tracking calculated evaluation scores for the current epoch step.
+        :type metrics: dict
+        :raises RuntimeError: If file system append operations fail due to structural access restrictions.
+        """
+        # Directory resolution path block
+        ## Resolve absolute directory target paths utilizing project layout paths tracking variables
+        try:
+            self.set_active_model(model_type)
+            self.set_active_image(image_key)
+            config_dir = self.get_config_dir()
+            history_dir = config_dir / "history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as error:
+            logger.error("Failed to resolve metric directory paths via workspace: %s", str(error), exc_info=True)
+            raise RuntimeError(f"Workspace metrics directory configuration failure: {error}") from error
+        
+        csv_path = history_dir / f"{phase_name}_history.csv"
+        csv_is_new = not csv_path.exists()
+        
+        # File transmission stream pass
+        ## Execute stream line writer append operations encapsulated inside exception boundaries
+        try:
+            with open(csv_path, mode="a", newline="", encoding="utf-8") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(metrics.keys()))
+                if csv_is_new:
+                    writer.writeheader()
+                writer.writerow(metrics)
+        except Exception as error:
+            logger.error("Failed to append training phase metrics to the CSV file: %s", csv_path, exc_info=True)
+            raise RuntimeError(f"Workspace metrics append failure: {error}") from error
+
+    def save_model_weights(
+        self, 
+        image_key: str, 
+        model_type: str, 
+        state_dict: dict
+    ) -> None:
+        """
+        Serializes PyTorch model parameters state dictionaries into a binary checkpoint file within the workspace layout.
+
+        :param image_key: Unique tracking key token assigned to the targeting image context.
+        :type image_key: str
+        :param model_type: Identity string defining the master model architecture category.
+        :type model_type: str
+        :param state_dict: PyTorch weights parameters layout dictionary maps state blueprint.
+        :type state_dict: dict
+        :raises RuntimeError: If weight binary serialization fails due to access violations.
+        """
+        import torch
+        
+        # Checkpoint directory paths execution block
+        ## Resolve absolute configuration directory path layers
+        try:
+            self.set_active_model(model_type)
+            self.set_active_image(image_key)
+            config_dir = self.get_config_dir()
+        except Exception as error:
+            logger.error("Failed to resolve weights directory paths via workspace: %s", str(error), exc_info=True)
+            raise RuntimeError(f"Workspace weights directory configuration failure: {error}") from error
+        
+        weights_path = config_dir / "weights.pt"
+        
+        # Serialization dump operation
+        ## Directly serialize tensors parameters onto the local storage structures using torch runtime hooks
+        try:
+            torch.save(state_dict, weights_path)
+            logger.info("Model parameter checkpoints weights successfully saved via workspace to path: %s", weights_path)
+        except Exception as error:
+            logger.error("Failed to serialize model checkpoint weights parameters to disk path: %s", weights_path, exc_info=True)
+            raise RuntimeError(f"Workspace parameter checkpoint write failure: {error}") from error
+
+    def save_model_config(
+        self, 
+        image_key: str, 
+        model_type: str, 
+        config_dict: dict
+    ) -> None:
+        """
+        Serializes high-level pipeline setup configurations into a structural JSON blueprint file on disk.
+
+        :param image_key: Unique tracking key token assigned to the targeting image context.
+        :type image_key: str
+        :param model_type: Identity string defining the master model architecture category.
+        :type model_type: str
+        :param config_dict: Parameter blueprint tracking layouts collected from operational layer buffers.
+        :type config_dict: dict
+        :raises RuntimeError: If metadata writing operations are rejected by the file system.
+        """
+        # Paths resolution mapping step
+        try:
+            self.set_active_model(model_type)
+            self.set_active_image(image_key)
+            config_dir = self.get_config_dir()
+        except Exception as error:
+            logger.error("Failed to resolve configuration directory paths via workspace: %s", str(error), exc_info=True)
+            raise RuntimeError(f"Workspace configuration directory framework failure: {error}") from error
+        
+        config_path = config_dir / "config.json"
+        
+        # JSON dump execution block
+        try:
+            with open(config_path, mode="w", encoding="utf-8") as json_file:
+                json.dump(config_dict, json_file, indent=4, ensure_ascii=False)
+            logger.info("Model pipeline structural blueprint metadata successfully written to path: %s", config_path)
+        except Exception as error:
+            logger.error("Failed to dump structural metadata configurations configuration ledger to path: %s", config_path, exc_info=True)
+            raise RuntimeError(f"Workspace config ledger write failure: {error}") from error
+
+    def save_model(
+        self, 
+        image_key: str, 
+        model_type: str, 
+        state_dict: dict, 
+        config_dict: dict
+    ) -> None:
+        """
+        Triggers synchronized compound serialization dumps for both weight binaries and structural setup Blueprints.
+
+        :param image_key: Unique tracking key token assigned to the targeting image context.
+        :type image_key: str
+        :param model_type: Identity string defining the master model architecture category.
+        :type model_type: str
+        :param state_dict: PyTorch weights parameters layout dictionary maps state blueprint.
+        :type state_dict: dict
+        :param config_dict: Parameter blueprint tracking layouts collected from operational layer buffers.
+        :type config_dict: dict
+        """
+        # Execute individual modular serialization operations tracking sequence checkpoints
+        ## 1. Persist layer structure blueprints to disk maps
+        self.save_model_config(image_key=image_key, model_type=model_type, config_dict=config_dict)
+        
+        ## 2. Persist real numerical parameters weights arrays onto disk blocks
+        self.save_model_weights(image_key=image_key, model_type=model_type, state_dict=state_dict)
+        
+        logger.info("Unified model collective states serialization cleanly finalized for image context: %s", image_key)
+
+    # --------------------------------------------------
+    # Subsection: loading 
+    # --------------------------------------------------
+
+    def load_model_state(self, image_key: str, model_type: str) -> tuple:
+        """
+        Deserializes and reads structural configurations and binary parameter weight states from target workspace branches.
+
+        :param image_key: Unique tracking key token assigned to the targeting image context.
+        :type image_key: str
+        :param model_type: Identity string defining the master model architecture category.
+        :type model_type: str
+        :return: A pair containing the structural layers metadata ledger dictionary and the loaded raw parameters weights map.
+        :rtype: tuple(dict, dict)
+        :raises FileNotFoundError: If the requested configurations file components are completely missing from the paths lookup.
+        :raises RuntimeError: If binary data parse procedures fail.
+        """
+        import json
+        import torch
+        
+        # File path extraction mapping phase
+        try:
+            self.set_active_model(model_type)
+            self.set_active_image(image_key)
+            config_dir = self.get_config_dir()
+        except Exception as error:
+            logger.error("Failed to resolve configuration recovery directory paths via workspace: %s", str(error), exc_info=True)
+            raise RuntimeError(f"Workspace execution recovery configuration failure: {error}") from error
+        
+        config_path = config_dir / "config.json"
+        weights_path = config_dir / "weights.pt"
+        
+        # Verification checking block
+        if not config_path.exists() or not weights_path.exists():
+            logger.error("State restoration pass rejected: Incomplete setup footprints found at folder: %s", config_dir)
+            raise FileNotFoundError(f"Cannot restore model execution state: Checkpoint target blocks are missing in '{config_dir}'.")
+            
+        # Unpacking deserialization streaming data blocks
+        try:
+            ## 1. Load configuration metadata dictionary
+            with open(config_path, mode="r", encoding="utf-8") as json_file:
+                config_dict = json.load(json_file)
+                
+            ## 2. Load numerical array state tensors maps using standard torch loader mappings
+            state_dict = torch.load(weights_path, map_location=torch.device("cpu"))
+            
+            logger.info("Structural config parameters map and binary weight maps recovered cleanly from disk nodes.")
+            return config_dict, state_dict
+            
+        except Exception as error:
+            logger.error("Critical failure during binary and JSON deserialization loops at folder target: %s", config_dir, exc_info=True)
+            raise RuntimeError(f"Workspace state restoration operational failure: {error}") from error
 
 # --------------------------------------------------
 # Section: Structural Visualization Utilities
