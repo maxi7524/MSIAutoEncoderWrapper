@@ -32,9 +32,9 @@ class ArchitecturesManager:
     # Global presets configuration blueprint storage mapping [model_type][preset_name] to callable factory blueprints
     _PRESET_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
-    # --------------------------------------------------
-    # Section: Registration Decorator Factories
-    # --------------------------------------------------
+# --------------------------------------------------
+# Section: Registration Decorator Factories
+# --------------------------------------------------
 
     @classmethod
     def register_model_type(cls, model_type: str) -> Any:
