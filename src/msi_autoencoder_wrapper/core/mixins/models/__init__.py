@@ -1,1 +1,1 @@
-from .models_mixin import *
+from .models_manager_mixin import *

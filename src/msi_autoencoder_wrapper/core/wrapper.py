@@ -16,7 +16,7 @@ from .mixins.io.workspace_mixin import WorkspaceMixin
 from .mixins.io.context_manager_mixin import ContextManagerMixin
 from .mixins.io.active_context_mixin import ActiveContextMixin
 ### Models
-from .mixins.models.models_mixin import ModelsMixin
+from .mixins.models.models_manager_mixin import ModelsManagerMixin
 
 ## exceptions handling 
 from ..utils.validators import validate_components
@@ -42,7 +42,7 @@ class MSIAutoEncoderWrapper(
     ContextManagerMixin,  # Configuration and multi-image registries ledger state database
     ActiveContextMixin,    # Dynamic transparent routing command proxy for the active target file
     # model mixins
-    ModelsMixin,
+    ModelsManagerMixin,
     # Model setup mixin,        # mixin repsonsible for model instantiation
     # TrainingMixin,        # training module
     # InferenceMixin,       # inference module

@@ -102,76 +102,97 @@ class ArchitecturesManager:
     # Section: Universal Model Compilation Pipeline
     # --------------------------------------------------
 
+    # Heading 1 (Dynamic Master Model Assembly Pass)
     @classmethod
-    def build_model(cls, model_type: str, components_setup: Dict[str, Any], **kwargs: Any) -> nn.Module:
+    def build_model(cls, model_type: str, components_setup: Dict[str, Dict[str, Any]], **kwargs: Any) -> nn.Module:
         """
-        Resolves decoupled subnet strategies from registries and builds the complete structural model graph.
+        Dynamically instantiates registered network layers and wraps them inside the requested master architecture family.
 
-        :param model_type: Scope identifier representing the targeted model family.
+        Iterates across the provided components configurations buffer layout, extracts the appropriate layer strategies from
+        the component registries database, resolves parameters maps, and injects the assembled modules dictionary into the
+        coordinating master graph model constructor.
+
+        :param model_type: Unique lookup token identifier token defining the targeted master model family.
         :type model_type: str
-        :param components_setup: Structured configurations mapping categories to blueprints or strategies setup maps.
-        :type components_setup: Dict[str, Any]
-        :param kwargs: Fallback variables or proxy context handles passed down to constructors.
-        :return: Fully compiled and functional structural PyTorch network module.
-        :rtype: torch.nn.Module
-        :raises KeyError: If the requested model type container or any strategy token is missing from registry caches.
+        :param components_setup: Buffered layout parameters map dictionary defining sub-blocks strategies and kwargs.
+        :type components_setup: Dict[str, Dict[str, Any]]
+        :param kwargs: Arbitrary backend extension footprints preserved for master graph instantiation.
+        :return: Completely assembled and initialized PyTorch network module master graph instance.
+        :rtype: nn.Module
+        :raises KeyError: If the target model family or any of its requested subcomponents strategies are unregistered.
         """
-        # Model class validation lookup
+        # Master registry verification checkpoint
         if model_type not in cls._MODEL_REGISTRY:
-            logger.error("Compilation aborted: Model family type wrapper '%s' is unregistered.", model_type)
-            raise KeyError(f"Model family type '{model_type}' not found within registries.")
+            error_msg = f"Master architecture type '{model_type}' not found in model graph registry."
+            logger.error(error_msg)
+            raise KeyError(error_msg)
 
-        resolved_components: Dict[str, Any] = {}
-        type_registry = cls._COMPONENT_REGISTRY.get(model_type, {})
-
-        # Subcomponent extraction loop
-        ## Iterate through configured setup fields to build separate networks layers
-        for category, setup in components_setup.items():
-            if setup is None:
-                resolved_components[category] = None
-                continue
-
-            category_db = type_registry.get(category, {})
-
-            ### Handle multi-head dictionaries separately to resolve plain python dict of instances
-            if category == "heads" and isinstance(setup, dict) and "type" not in setup:
-                head_modules = {}
-                for head_key, head_val in setup.items():
-                    comp_name = head_val["type"] if isinstance(head_val, dict) else head_val
-                    comp_params = head_val.get("params", {}).copy() if isinstance(head_val, dict) else {}
-                    comp_params.update(kwargs)
-                    
-                    if comp_name not in category_db:
-                        raise KeyError(f"Auxiliary Head '{comp_name}' missing from registry under type '{model_type}'.")
-                        
-                    validate_constructor_kwargs(category_db[comp_name], comp_name, comp_params)
-                    head_modules[head_key] = category_db[comp_name](**comp_params)
-                resolved_components[category] = head_modules
-                continue
-
-            ### Resolve standard unified linear component modules (encoders, decoders, projectors)
-            comp_name = setup["type"] if isinstance(setup, dict) else setup
-            comp_params = setup.get("params", {}).copy() if isinstance(setup, dict) else {}
-            comp_params.update(kwargs)
-
-            if comp_name not in category_db:
-                logger.error("Resolution blocked: Strategy block '%s' missing under namespace [%s][%s]", comp_name, model_type, category)
-                raise KeyError(f"Component '{comp_name}' missing from category '{category}' under model type '{model_type}'.")
-
-            validate_constructor_kwargs(category_db[comp_name], comp_name, comp_params)
-            resolved_components[category] = category_db[comp_name](**comp_params)
-
-        # Graph assembly execution block
         master_model_class = cls._MODEL_REGISTRY[model_type]
-        
+        resolved_components: Dict[str, nn.Module] = {}
+
+        logger.info("Initializing multi-component sub-graph resolution phase for model family: %s", model_type)
+
+        # Component resolution loop
+        ## Iteratively scan and instantiate every sub-block configuration defined within the building buffer setup
+        for category, setup_ledger in components_setup.items():
+            
+            if not isinstance(setup_ledger, dict):
+                logger.error("Invalid configuration footprint encountered for block: '%s'. Expected dictionary.", category)
+                continue
+
+            ## Heading 2 (Determine Configuration Node Level)
+            ### Check if the current block represents a direct single component or a nested structural collection
+            strategy = setup_ledger.get("strategy") or setup_ledger.get("type") or setup_ledger.get("target")
+
+            if strategy:
+                ### Case 1: Direct component configuration block detected
+                if model_type not in cls._COMPONENT_REGISTRY or category not in cls._COMPONENT_REGISTRY[model_type] or strategy not in cls._COMPONENT_REGISTRY[model_type][category]:
+                    error_msg = f"Component strategy '{strategy}' for category '{category}' is unregistered under family '{model_type}'."
+                    logger.error(error_msg)
+                    raise KeyError(error_msg)
+
+                component_class = cls._COMPONENT_REGISTRY[model_type][category][strategy]
+                params = setup_ledger.get("params", {})
+                
+                logger.info("Instantiating standard component sub-module: Category='%s' using Strategy='%s'.", category, strategy)
+                resolved_components[category] = component_class(**params)
+
+            else:
+                ### Case 2: Nested sub-components collection dictionary detected (e.g., multi-task heads)
+                logger.info("Nested layout schema detected for category: '%s'. Traversing sub-components branch...", category)
+                resolved_sub_collection: Dict[str, nn.Module] = {}
+
+                for sub_key, sub_setup in setup_ledger.items():
+                    if not isinstance(sub_setup, dict):
+                        continue
+
+                    sub_strategy = sub_setup.get("strategy") or sub_setup.get("type") or sub_setup.get("target")
+                    sub_params = sub_setup.get("params", {})
+
+                    if not sub_strategy:
+                        logger.error("Subcomponent resolution pass aborted: Missing strategy descriptor inside collection '%s' for key: '%s'.", category, sub_key)
+                        continue
+
+                    if model_type not in cls._COMPONENT_REGISTRY or category not in cls._COMPONENT_REGISTRY[model_type] or sub_strategy not in cls._COMPONENT_REGISTRY[model_type][category]:
+                        error_msg = f"Nested strategy '{sub_strategy}' under collection '{category}' is unregistered for family '{model_type}'."
+                        logger.error(error_msg)
+                        raise KeyError(error_msg)
+
+                    sub_component_class = cls._COMPONENT_REGISTRY[model_type][category][sub_strategy]
+                    
+                    logger.info("Instantiating nested sub-module: Collection='%s', Key='%s' using Strategy='%s'.", category, sub_key, sub_strategy)
+                    resolved_sub_collection[sub_key] = sub_component_class(**sub_params)
+
+                resolved_components[category] = resolved_sub_collection
+
+        # Graph aggregation execution pass
+        ## Instantiate the structural master graph wrapper passing the fully populated resolved components matrix
+        logger.info("Injecting resolved computational components ledger dictionary into the master architecture graph.")
         compiled_model = master_model_class(
-            encoder=resolved_components.get("encoder"),
-            decoder=resolved_components.get("decoder"),
-            projector=resolved_components.get("projector"),
-            heads=resolved_components.get("heads"),
+            resolved_components=resolved_components,
             **kwargs
         )
-        
+
         return compiled_model
 
     # --------------------------------------------------
