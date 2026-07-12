@@ -1,156 +1,242 @@
+"""
+Core multi-phase training execution engine handling optimization loops, gradient routing, and CSV metrics logging.
+"""
+
+import csv
+import os
+import random
 import time
-from typing import Callable, Dict, Any, Tuple, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
-# Purely relative imports within the package framework
+from ..criterions.criterions_manager import CriterionsManager, CompositeLoss
 from ...utils.logger import get_custom_logger
-from ...models.architecture.base_architecture import MSIBaseAutoencoderArchitecture
-from ..criterions.criterions_manager import CompositeLoss
 
+# Logger initialization
 logger = get_custom_logger(__name__)
 
 
 class MSIPyTorchTrainer:
     """
-    High-performance engine executing execution loops for MSI network architectures.
-
-    This trainer handles hardware tensor routing, execution metrics logging,
-    pre-computation lifecycle hooks, and early stopping patience validation checkpoints.
+    High-performance, multi-phase execution engine automating optimization loops for generic MSI neural networks.
     """
 
-    def __init__(
-        self,
-        model: MSIBaseAutoencoderArchitecture,
-        criterion: CompositeLoss,
-        device: torch.device,
-        patience_limit: int = 10
-    ) -> None:
+    def __init__(self, wrapper_ref: Any, patience_limit: int = 10) -> None:
         """
-        Constructs the training execution engine tracker.
+        Initializes the multi-phase execution trainer engine.
 
-        :param model: Active neural network backbone conforming to MSIBaseAutoencoderArchitecture.
-        :type model: MSIBaseAutoencoderArchitecture
-        :param criterion: Compiled weighted aggregate loss container module.
-        :type criterion: CompositeLoss
-        :param device: Allocation pointer forcing calculations on CPU or active CUDA hardware nodes.
-        :type device: torch.device
-        :param patience_limit: Iteration ceiling boundary allowed before triggering Early Stopping, defaults to 10.
+        :param wrapper_ref: Reference to the coordinating master facade facade facade object instance.
+        :type wrapper_ref: Any
+        :param patience_limit: Iteration limit allowed before early stopping, defaults to 10.
         :type patience_limit: int
         """
-        self.model = model.to(device)
-        self.criterion = criterion
-        self.device = device
+        self._wrapper = wrapper_ref
         self.patience_limit = patience_limit
-
         self.best_loss = float("inf")
         self.patience_counter = 0
 
-    def fit(
-        self,
-        dataloader: DataLoader,
-        epochs: int,
-        optimizer: torch.optim.Optimizer,
-        scheduler: Any,
-        save_callback: Callable[[Dict[str, float], bool], None]
-    ) -> list[dict[str, float]]:
+# --------------------------------------------------
+# Section: Main training loop 
+# --------------------------------------------------
+
+    def fit(self, training_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Runs the full multi-epoch optimization pipeline.
+        Executes the entire multi-phase training pipeline sequentially across the provided phase blueprints list.
 
-        :param dataloader: Initialized PyTorch DataLoader serving structured matrix batches.
-        :type dataloader: torch.utils.data.DataLoader
-        :param epochs: Total integer boundary defining the max loop iterations space.
-        :type epochs: int
-        :param optimizer: Configured optimization algorithm managing backpropagation weight adjustments.
-        :type optimizer: torch.optim.Optimizer
-        :param scheduler: Active learning rate adjustment scheduler strategy.
-        :type scheduler: Any
-        :param save_callback: Executable closure checkpoint triggered to persist parameters on disk.
-        :type save_callback: Callable
-        :return: Training history tracker database log ledger.
-        :rtype: list[dict[str, float]]
+        :param training_config: Sequential configuration containing seed, workspace paths, and phase dictionary layouts.
+        :type training_config: Dict[str, Any]
+        :return: Aggregated metrics history tracking logs accumulated across all execution steps.
+        :rtype: List[Dict[str, Any]]
         """
-        history_ledger: list[dict[str, float]] = []
+        # Execute pre-flight validations
+        self.validate_training_setup(training_config=training_config)
 
-        # 1. Execute required structural setup actions across loss functions hooks
-        logger.info("Initiating global pre-computation sequences via criterion setups.")
-        self.criterion.REQUIRED_SETUP(dataloader.dataset)
+        # Deterministic reproducibility enforcement checks
+        seed = training_config.get("seed")
+        if seed is not None:
+            logger.info("Enforcing global deterministic execution pipeline using seed token: %s", seed)
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
 
-        total_pixels = len(dataloader.dataset)
-        start_time = time.time()
+        active_context = self._wrapper.active_context
+        model = self._wrapper.active_model
+        dataset = self._wrapper.active_dataset
 
-        # 2. Primary epoch execution engine loop
-        for epoch in range(epochs):
-            self.model.train()
-            epoch_metrics: Dict[str, float] = {}
-            processed_pixels = 0
-            last_log_percent = -1
+        model_name = getattr(self._wrapper.models_manager, "active_model_type", "unknown_model")
+        image_key = active_context._instantiated_image_key
 
-            for batch_idx, batch_data in enumerate(dataloader):
-                # Unpack and route input data array matrices to target execution hardware
-                spatial_indices, spectra_tensors = batch_data
-                spatial_indices = spatial_indices.to(self.device)
-                spectra_tensors = spectra_tensors.to(self.device)
-                device_batch = (spatial_indices, spectra_tensors)
+        global_history: List[Dict[str, Any]] = []
+        phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
+        transient_cache = getattr(self._wrapper.models_manager, "_training_transient_cache", {})
 
-                optimizer.zero_grad()
+        # Heading 1 (Sequential Phase Processing Framework)
+        for current_step, phase_config in enumerate(phases_list):
+            phase_name = phase_config.get("phase_name", f"phase_{current_step + 1}")
+            epochs = phase_config.get("epochs", 10)
+            logger.info("Initiating sequential training loop phase: '%s' (%s/%s)", phase_name, current_step + 1, len(phases_list))
 
-                # Dynamic forward-pass optimization block based on loss requirements
-                ## Pass information configuration constraints down to prevent decoding calculations
-                model_outputs = self.model.forward_optimized(
-                    spectra_tensors,
-                    requires_reconstruction=self.criterion.requires_reconstruction,
-                    requires_projection=self.criterion.requires_projection
-                )
+            ## Heading 2 (Gradient Lock Adjustments)
+            freeze_targets = phase_config.get("freeze", [])
+            for name, child_module in model.named_children():
+                if name in freeze_targets:
+                    logger.info("Gradient routing policy: Freezing component parameter gradients for: '%s'", name)
+                    for param in child_module.parameters():
+                        param.requires_grad = False
+                else:
+                    for param in child_module.parameters():
+                        param.requires_grad = True
 
-                # Compute compound loss sum values and retrieve metric logs
-                loss, batch_logs = self.criterion(model_outputs, device_batch)
-
-                # Execute backpropagation graph updates
-                loss.backward()
-                optimizer.step()
-
-                # Track metric accumulation variables across active batch runs
-                processed_pixels += len(spatial_indices)
-                for log_key, log_val in batch_logs.items():
-                    epoch_metrics[log_key] = epoch_metrics.get(log_key, 0.0) + log_val
-
-                # Metrics status updates printout tracking sequence
-                current_percent = (processed_pixels / total_pixels) * 100
-                if int(current_percent) % 10 == 0 and int(current_percent) != last_log_percent:
-                    elapsed = time.time() - start_time
-                    eta = (elapsed / max(1, processed_pixels)) * (total_pixels - processed_pixels)
-                    print(
-                        f"Epoch [{epoch+1:03d}/{epochs:03d}] | Progress: {current_percent:3.0f}% | "
-                        f"Batch Loss: {loss.item():.4f} | ETA: {eta/60:.1f} min"
-                    )
-                    last_log_percent = int(current_percent)
-
-            # Adjust optimizer rate profiles using selected scheduling strategy blueprints
-            scheduler.step()
-
-            # Compile epoch statistical calculation summary summaries maps
-            avg_metrics = {k: v / len(dataloader) for k, v in epoch_metrics.items()}
-            avg_metrics["epoch"] = float(epoch + 1)
-            current_loss = avg_metrics["total_loss"]
-            history_ledger.append(avg_metrics)
-
-            # Early stopping and serialization validation gate
-            if current_loss < self.best_loss:
-                self.best_loss = current_loss
-                self.patience_counter = 0
-                save_callback(avg_metrics, True)  # Save checkpoint as the new best topology match
-            else:
-                self.patience_counter += 1
-                save_callback(avg_metrics, False) # Save checkpoint as standard tracking step update
-
-            print(
-                f"Summary Epoch {epoch+1:03d} | Mean Loss: {current_loss:.4f} | "
-                f"Patience Check: {self.patience_counter}/{self.patience_limit}"
+            ## Heading 2 (Dynamic Mathematical Criteria Graph Compilation)
+            criterions_setup = phase_config.get("criterions", {})
+            composite_loss = CriterionsManager.build_composite_loss(
+                model_type=model_name,
+                loss_setup=criterions_setup
             )
 
-            if self.patience_counter >= self.patience_limit:
-                logger.info(f"Early Stopping checkpoint triggered. Halting optimization process at epoch {epoch+1}.")
-                break
+            ## Heading 2 (Dynamic Optimizer Reflection Allocation)
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            opt_config = phase_config.get("optimizer")
+            
+            if opt_config:
+                #TODO - check validation of it because it can be problematic - it can run with empty optimizer becaues of lack of params 
+                opt_type = opt_config.get("type", "AdamW")
+                opt_params = opt_config.get("params", {})
+            else:
+                opt_type = "AdamW"
+                opt_params = {"lr": 1e-3, "weight_decay": 1e-4}
+                logger.info("Optimizer blueprint unassigned: Deploying standard SOTA optimizer fallback parameters.")
 
-        return history_ledger
+            if not hasattr(torch.optim, opt_type):
+                logger.error("Requested optimizer class '%s' is missing from torch.optim modules database.", opt_type)
+                raise KeyError(f"Requested optimizer class '{opt_type}' is missing from torch.optim modules database.")
+            
+            optimizer_class = getattr(torch.optim, opt_type)
+            optimizer = optimizer_class(trainable_params, **opt_params)
+
+            ## Heading 2 (Lifecycle Hook Initialization Pass)
+            for loss_fn in composite_loss.loss_functions.values():
+                loss_fn.on_phase_start(model=model, dataset=dataset, transient_cache=transient_cache)
+
+            # Heading 1 (Epoch Processing Execution Loop Partition)
+            batch_size = getattr(self._wrapper.models_manager, "batch_size", 256)
+            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=2)
+            
+            self.best_loss = float("inf")
+            self.patience_counter = 0
+
+            for epoch in range(epochs):
+                model.train()
+                epoch_start_time = time.time()
+                accumulated_metrics: Dict[str, float] = {}
+
+                ### Heading 3 (Batch Data Stream Execution Pass)
+                for batch in dataloader:
+                    for loss_fn in composite_loss.loss_functions.values():
+                        batch = loss_fn.on_batch_start(batch_data=batch, transient_cache=transient_cache)
+
+                    optimizer.zero_grad()
+                    
+                    global_device = getattr(self._wrapper, "device", "cpu")
+                    spectra_tensor = batch[1].to(global_device)
+                    
+                    model_outputs = model(spectra_tensor)
+                    loss, loss_logs = composite_loss(model_outputs=model_outputs, batch_data=batch)
+                    
+                    loss.backward()
+                    optimizer.step()
+
+                    for key, scalar_val in loss_logs.items():
+                        accumulated_metrics[key] = accumulated_metrics.get(key, 0.0) + scalar_val
+
+                ### Heading 3 (Epoch Performance Summarization Pass)
+                mean_metrics: Dict[str, Any] = {
+                    "epoch": epoch + 1,
+                    "duration": time.time() - epoch_start_time
+                }
+                for key, running_sum in accumulated_metrics.items():
+                    mean_metrics[key] = running_sum / len(dataloader)
+
+                global_history.append({"phase": phase_name, "metrics": mean_metrics})
+                current_epoch_loss = mean_metrics["total_loss"]
+
+                ### Heading 3 (Workspace Metrics Stream Flushing Pass)
+                #### Delegate file appending directly to the workspace manager to maintain absolute decoupling
+                self._wrapper.workspace.save_training_metrics(
+                    image_key=image_key,
+                    model_type=model_name,
+                    phase_name=phase_name,
+                    metrics=mean_metrics
+                )
+
+                ### Heading 3 (Early Stopping Validation Checkpoints)
+                if current_epoch_loss < self.best_loss:
+                    self.best_loss = current_epoch_loss
+                    self.patience_counter = 0
+                    
+                    #### Delegate weight serialization maps cleanly to the workspace facade
+                    self._wrapper.workspace.save_model_weights(
+                        image_key=image_key,
+                        model_type=model_name,
+                        state_dict=model.state_dict()
+                    )
+                    logger.debug("Performance milestone verified: Model weights updated via workspace delegation.")
+                else:
+                    self.patience_counter += 1
+
+                print(
+                    f"[{phase_name}] Epoch {epoch+1:03d}/{epochs:03d} | "
+                    f"Total Loss: {current_epoch_loss:.4f} | "
+                    f"Patience: {self.patience_counter}/{self.patience_limit}"
+                )
+
+                if self.patience_counter >= self.patience_limit:
+                    logger.info("Early stopping barrier triggered. Terminating active optimization loop sequence.")
+                    break
+
+        logger.info("All configured sequential multi-phase training loops successfully completed.")
+        return global_history
+
+# --------------------------------------------------
+# Section: Helpers
+# --------------------------------------------------
+
+    def validate_training_setup(self, training_config: Dict[str, Any]) -> None:
+        """
+        Validates the state of all session dependencies and configuration parameters before starting the training process.
+
+        :param training_config: The structural training configuration dictionary sheet.
+        :type training_config: Dict[str, Any]
+        :raises ValueError: If any required core components or data properties are missing from the active session.
+        """
+        # Stateful session requirements checks
+        ## 1. Verify existence of active context, compiled model and bounded dataset
+        active_context = getattr(self._wrapper, "active_context", None)
+        model = getattr(self._wrapper, "active_model", None)
+        dataset = getattr(self._wrapper, "active_dataset", None)
+
+        if not active_context or not model or not dataset:
+            logger.error("Pre-flight validation failed: Runtime environment components are unassigned.")
+            raise ValueError(
+                "Training setup validation failed: Ensure an active context is mounted, "
+                "and the model has been compiled with an initialized dataset."
+            )
+
+        ## 2. Verify reader attachment inside the current execution context
+        if not getattr(active_context, "reader", None):
+            logger.error("Pre-flight validation failed: Active context has no mounted data reader driver.")
+            raise ValueError("Training setup validation failed: Active context lacks an initialized data reader session.")
+
+        ## 3. Enforce structural validation on the phases layout definition list
+        phases = training_config.get("phases", [])
+        if not phases or not isinstance(phases, list):
+            logger.error("Pre-flight validation failed: The configurations phases sequence is empty or invalid.")
+            raise ValueError("Training setup validation failed: Configuration must contain a non-empty 'phases' list.")
+
+        logger.info("Pre-flight validation successful. Training environment maps verified.")

@@ -1,89 +1,85 @@
+"""
+Abstract base module establishing the definitive mathematical contract for all MSI loss functions.
+"""
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Tuple
 import torch
 import torch.nn as nn
 
-# Purely relative imports pointing to the unified dataset interface
-from ...models.datasets.strategies.base_dataset import MSIBaseDataset
+from ...models.datasets.base_dataset import MSIBaseDataset
+from ...utils.logger import get_custom_logger
+
+# Logger initialization
+logger = get_custom_logger(__name__)
 
 
 class MSIBaseCriterion(nn.Module, ABC):
     """
-    Abstract Base Class establishing the mathematical contract for all MSI loss functions.
-
-    This interface decouples empirical loss calculations from explicit training execution loops.
-    It exposes properties indicating data requirements (e.g., reconstruction layers or 
-    contrastive projections) to allow the execution engine to optimize forward-pass sequences.
+    Abstract Base Class defining operational frameworks and lifecycle hooks for MSI cost functions.
     """
 
     def __init__(self) -> None:
-        """Initializes the base criterion module and its isolated configuration state."""
+        """
+        Initializes the base criterion abstraction layer.
+        """
         super().__init__()
         self._config: Dict[str, Any] = {}
 
     def GetConfig(self) -> Dict[str, Any]:
         """
-        Retrieves serialized parameter properties required to replicate the criterion state.
+        Retrieves serialized parameters mapping snapshots required to reproduce the criterion state.
 
-        :return: Parameter configuration map containing structural variables.
-        :rtype: dict
+        :return: Internal dictionary containing hyperparameter definitions.
+        :rtype: Dict[str, Any]
         """
         return self._config
 
-    def REQUIRED_SETUP(self, dataset: MSIBaseDataset) -> None:
+    def on_phase_start(self, model: nn.Module, dataset: MSIBaseDataset, transient_cache: Dict[str, Any]) -> None:
         """
-        Executes global pre-computation steps across the dataset before the training loop starts.
+        Optional execution lifecycle hook triggered once before the phase epoch sequence loop initiates.
 
-        .. note::
-           This method is optional and acts as a baseline hook. Subclasses requiring heavy 
-           statistical extractions (e.g., building a dynamic Noise Peak Bank via scipy) 
-           must override this method to prepare memory caches.
+        Useful for heavy pre-computations such as peak-picking or initializing shared statistical arrays.
 
-        :param dataset: Fully initialized concrete subclass of MSIBaseDataset.
+        :param model: The compiled master architecture model graph currently being optimized.
+        :type model: nn.Module
+        :param dataset: Bound dataset instance containing raw target spectra profiles.
         :type dataset: MSIBaseDataset
+        :param transient_cache: Mutable global scratchpad tracking state variables across the active session.
+        :type transient_cache: Dict[str, Any]
         """
         pass
 
-    @property
-    @abstractmethod
-    def requires_reconstruction(self) -> bool:
+    def on_batch_start(self, batch_data: Tuple[torch.Tensor, ...], transient_cache: Dict[str, Any]) -> Tuple[torch.Tensor, ...]:
         """
-        Indicates whether this loss function requires full grid-x-axis spectral reconstruction.
+        Optional execution lifecycle hook triggered for every step batch stream iteration before forward calls.
 
-        :return: True if the criterion evaluates decoder outputs, False otherwise.
-        :rtype: bool
-        """
-        pass
+        Enables on-the-fly computational operations like chemical noise augmentations on the GPU.
 
-    @property
-    @abstractmethod
-    def requires_projection(self) -> bool:
+        :param batch_data: Tensors krotka returned from the active data loader.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :param transient_cache: Mutable global scratchpad tracking state variables across the active session.
+        :type transient_cache: Dict[str, Any]
+        :return: Transformed or untouched batch variables aligned to data specifications.
+        :rtype: Tuple[torch.Tensor, ...]
         """
-        Indicates whether this loss function requires contrastive space projections.
-
-        :return: True if the criterion evaluates projector head outputs, False otherwise.
-        :rtype: bool
-        """
-        pass
+        return batch_data
 
     @abstractmethod
     def forward(
         self,
         model_outputs: Dict[str, torch.Tensor],
-        batch_data: Tuple[torch.Tensor, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
         **kwargs: Any
     ) -> torch.Tensor:
         """
-        Computes the target objective loss score using extracted model tensors and raw batch variables.
+        Computes the target objective mathematical loss matrix score using extracted forward tensors.
 
-        :param model_outputs: Sourced dictionary containing evaluated outputs from the model forward pass:
-                              - ``"latent_space"``: Core bottleneck tensor.
-                              - ``"reconstruction"``: Reconstructed grid-x-axis tensor (optional).
-                              - ``"projection"``: Contrastive projection tensor (optional).
-        :type model_outputs: dict[str, torch.Tensor]
-        :param batch_data: Matched tuple returned by the DataLoader containing (spatial_indices, binned_spectra).
-        :type batch_data: tuple(torch.Tensor, torch.Tensor)
-        :return: Singular scalar loss tensor tracking graph gradients.
+        :param model_outputs: Collection mapping outputs generated by the active model forward pass.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Variables tuple matching data loader outputs.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Singular scalar tensor containing tracking gradients.
         :rtype: torch.Tensor
         """
         pass
