@@ -87,8 +87,7 @@ class M2aiaReader(MSIBaseReader):
             raise TypeError(f"Unsupported target index descriptor type: '{type(target).__name__}'. Use flat int or a 3D coordinate tuple.")
 
         # Execute direct native low-level C++ vector recovery commands
-        xs = self._img.GetXValues(flat_idx)
-        ys = self._img.GetYValues(flat_idx)
+        xs, ys = self._img.GetSpectrum(flat_idx)
         
         if xs is None or ys is None:
             return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
