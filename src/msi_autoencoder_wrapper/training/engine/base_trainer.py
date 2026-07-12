@@ -2,18 +2,15 @@
 Core multi-phase training execution engine handling optimization loops, gradient routing, and CSV metrics logging.
 """
 
-import csv
-import os
 import random
 import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from ..criterions.criterions_manager import CriterionsManager, CompositeLoss
+from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
 
 # Logger initialization
@@ -43,13 +40,48 @@ class MSIPyTorchTrainer:
 # Section: Main training loop 
 # --------------------------------------------------
 
+    def validate_training_setup(self, training_config: Dict[str, Any]) -> None:
+        """
+        Audits session property parameters and bound dependencies before launching the optimization iterations pipeline.
+
+        :param training_config: Sequential configuration ledger maps tracking target training options.
+        :type training_config: Dict[str, Any]
+        :raises ValueError: If mandatory processing context modules are completely unbound from the workspace proxy session.
+        """
+        # Stateful session requirement checks
+        ## 1. Verify existence of active context, compiled model and bounded dataset nodes
+        active_context = getattr(self._wrapper, "active_context", None)
+        model = getattr(self._wrapper, "active_model", None)
+        dataset = getattr(self._wrapper, "active_dataset", None)
+
+        if not active_context or not model or not dataset:
+            logger.error("Pre-flight execution validation failed: Core workspace properties are unassigned.")
+            raise ValueError(
+                "Training setup validation failed: Ensure an active context is mounted, "
+                "and the target model graph has been successfully compiled with a dataset."
+            )
+
+        ## 2. Verify reader tracker module attachment inside the active image target context
+        if not getattr(active_context, "reader", None):
+            logger.error("Pre-flight execution validation failed: Active context has no mounted data reader driver.")
+            raise ValueError("Training setup validation failed: Active context lacks an initialized data reader session.")
+
+        ## 3. Enforce structural validation parameters check on the phases layout definition list
+        phases = training_config.get("phases", [])
+        if not phases or not isinstance(phases, list):
+            logger.error("Pre-flight execution validation failed: The configurations phases sequence is missing or empty.")
+            raise ValueError("Training setup validation failed: Configuration blueprint must contain a non-empty 'phases' list.")
+
+        logger.info("Pre-flight execution validation successful. Training environment maps verified.")
+
+    # Heading 1 (Training Process Orchestration Pass)
     def fit(self, training_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Executes the entire multi-phase training pipeline sequentially across the provided phase blueprints list.
+        Executes sequential optimization passes loop by loop across the structured multi-phase configuration ledger array.
 
-        :param training_config: Sequential configuration containing seed, workspace paths, and phase dictionary layouts.
+        :param training_config: Complete multi-phase configuration setup dict containing metrics, targets, parameters.
         :type training_config: Dict[str, Any]
-        :return: Aggregated metrics history tracking logs accumulated across all execution steps.
+        :return: Aggregated metrics history logs collected across all execution loops.
         :rtype: List[Dict[str, Any]]
         """
         # Execute pre-flight validations
@@ -80,13 +112,14 @@ class MSIPyTorchTrainer:
         for current_step, phase_config in enumerate(phases_list):
             phase_name = phase_config.get("phase_name", f"phase_{current_step + 1}")
             epochs = phase_config.get("epochs", 10)
-            logger.info("Initiating sequential training loop phase: '%s' (%s/%s)", phase_name, current_step + 1, len(phases_list))
+            logger.info("Initiating sequential training loop phase: %s (%s/%s)", phase_name, current_step + 1, len(phases_list))
 
             ## Heading 2 (Gradient Lock Adjustments)
+            ### Adjust layer weight modifications status dynamically by traversing model child boundaries
             freeze_targets = phase_config.get("freeze", [])
             for name, child_module in model.named_children():
                 if name in freeze_targets:
-                    logger.info("Gradient routing policy: Freezing component parameter gradients for: '%s'", name)
+                    logger.info("Gradient routing policy: Freezing component parameter gradients for: %s", name)
                     for param in child_module.parameters():
                         param.requires_grad = False
                 else:
@@ -105,22 +138,23 @@ class MSIPyTorchTrainer:
             opt_config = phase_config.get("optimizer")
             
             if opt_config:
-                #TODO - check validation of it because it can be problematic - it can run with empty optimizer becaues of lack of params 
                 opt_type = opt_config.get("type", "AdamW")
                 opt_params = opt_config.get("params", {})
             else:
+                ### State-of-the-Art automatic fallback parameters allocation based on current model type definitions
                 opt_type = "AdamW"
                 opt_params = {"lr": 1e-3, "weight_decay": 1e-4}
                 logger.info("Optimizer blueprint unassigned: Deploying standard SOTA optimizer fallback parameters.")
 
             if not hasattr(torch.optim, opt_type):
-                logger.error("Requested optimizer class '%s' is missing from torch.optim modules database.", opt_type)
+                logger.error("Requested optimizer class %s is missing from torch.optim modules database.", opt_type)
                 raise KeyError(f"Requested optimizer class '{opt_type}' is missing from torch.optim modules database.")
             
             optimizer_class = getattr(torch.optim, opt_type)
             optimizer = optimizer_class(trainable_params, **opt_params)
 
             ## Heading 2 (Lifecycle Hook Initialization Pass)
+            ### Trigger broad pre-computations hooks across individual sub-criterions matrices blocks
             for loss_fn in composite_loss.loss_functions.values():
                 loss_fn.on_phase_start(model=model, dataset=dataset, transient_cache=transient_cache)
 
@@ -138,6 +172,7 @@ class MSIPyTorchTrainer:
 
                 ### Heading 3 (Batch Data Stream Execution Pass)
                 for batch in dataloader:
+                    #### Apply localized batch signal transformation hooks before triggering forward evaluation passes
                     for loss_fn in composite_loss.loss_functions.values():
                         batch = loss_fn.on_batch_start(batch_data=batch, transient_cache=transient_cache)
 
@@ -146,12 +181,16 @@ class MSIPyTorchTrainer:
                     global_device = getattr(self._wrapper, "device", "cpu")
                     spectra_tensor = batch[1].to(global_device)
                     
+                    #### Execute model forward computation step
                     model_outputs = model(spectra_tensor)
+                    
+                    #### Evaluate composite objective loss sum vector matrix calculations scores
                     loss, loss_logs = composite_loss(model_outputs=model_outputs, batch_data=batch)
                     
                     loss.backward()
                     optimizer.step()
 
+                    #### Accumulate numerical step tracking parameters metrics into localized registries
                     for key, scalar_val in loss_logs.items():
                         accumulated_metrics[key] = accumulated_metrics.get(key, 0.0) + scalar_val
 
@@ -180,7 +219,7 @@ class MSIPyTorchTrainer:
                     self.best_loss = current_epoch_loss
                     self.patience_counter = 0
                     
-                    #### Delegate weight serialization maps cleanly to the workspace facade
+                    #### Save optimal tracking model parameters checkpoints onto disk layouts structures via workspace proxy delegation
                     self._wrapper.workspace.save_model_weights(
                         image_key=image_key,
                         model_type=model_name,
