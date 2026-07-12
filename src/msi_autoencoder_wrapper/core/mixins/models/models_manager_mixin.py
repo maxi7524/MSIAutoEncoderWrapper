@@ -264,7 +264,6 @@ class ModelsManagerProxy:
             self._building_buffer[category] = setup_block
             logger.info("Registered configuration layout parameters for component: %s", category)
 
-    # Heading 1 (Model Preset Configuration Bridge)
     def set_model_preset(self, name: str, **kwargs: Any) -> None:
         """
         Dynamically configures individual subcomponent parameters inside the model buffer using a preset.
@@ -352,72 +351,92 @@ class ModelsManagerProxy:
     # Section: Compilation & Validation Gate
     # --------------------------------------------------
 
+    # Heading 1 (Network Graph Compilation Engine)
     def compile_model(self) -> nn.Module:
         """
-        Executes structural checks, creates required directories, and instantiates the neural graph.
+        Assembles individual layers configuration strategies from the buffer, instantiates the associated 
+        dataset framework, and verifies the mathematical forward matrix pass sequence using an authentic data batch.
+
+        :return: Completed and verified PyTorch neural network module master graph instance.
+        :rtype: torch.nn.Module
+        :raises ValueError: If active_model_type is undefined or if active_context lacks an active reader session.
+        :raises ValidationError: If the configuration setup buffer is empty.
+        :raises RuntimeError: If the validation forward pass fails due to structural dimensions mismatch.
         """
-        # Heading 1 (Structural Context Validation)
-        missing_components: List[str] = []
-        if not self._wrapper.active_context or not getattr(self._wrapper.active_context, "binner", None):
-            missing_components.append("Active preprocessing pipeline context (Binner session unassigned)")
-        if not self._active_dataset_name:
-            missing_components.append("Target dataset strategy selection (Call set_dataset())")
+        # Stateful environment validation
+        ## 1. Ensure the target master model class type token has been selected
         if not self.active_model_type:
-            missing_components.append("Model family context environment allocation (Call set_model_type())")
+            logger.error("Compilation sequence rejected: active_model_type has not been assigned.")
+            raise ValueError("Cannot compile model: active_model_type is undefined. Apply a preset first.")
 
-        if missing_components:
-            logger.error("Compilation aborted due to missing structural setup components.")
-            raise ValidationError(missing_components)
+        ## 2. Enforce explicit active context and reader state verification
+        active_context = getattr(self._wrapper, "active_context", None)
+        if not active_context or not getattr(active_context, "reader", None):
+            logger.error("Compilation sequence rejected: Active execution context lacks an active reader session.")
+            raise ValueError("Cannot compile model: Active image context must be initialized before setting up networks.")
 
-        # Heading 1 (Experiment & Model Name Synchronization Pass)
-        workspace = self._wrapper.workspace
-        current_model_name = getattr(workspace, "active_model_name", None)
+        logger.info("Initiating structural neural network graph assembly pass for target family: %s", self.active_model_type)
 
-        if not current_model_name:
-            fallback_name = self._preset_name_used if self._preset_name_used else f"custom_{self.active_model_type}"
-            workspace.active_model_name = fallback_name
-            logger.info("Workspace experiment name synchronized from modeling preset state: %s", fallback_name)
+        # Buffer structural validations
+        ## Enforce validation check to guarantee that the configuration setup buffer is not completely empty
+        if not self._building_buffer:
+            logger.error("Compilation sequence aborted: Operational setup configurations buffer is empty.")
+            raise ValidationError("Cannot compile model: No components have been configured in the building buffer.")
 
-        # Heading 1 (Directory Tree Provisioning Block)
-        if getattr(workspace, "create_required_directories", True):
-            workspace.create_required_directories()
-
-        # Heading 1 (Object Materialization and PyTorch Graph Assembly)
-        ## 1. Materialize concrete PyTorch dataset sampler instance
-        compiled_dataset = DatasetManager.get_dataset(
-            name=self._active_dataset_name,
-            active_context=self._wrapper.active_context
-        )
-
-        ## 2. Compile functional computational network master architecture graph
+        # Master graph assembly pass
+        ## 1. Compile functional computational network master architecture graph via factory delegation
         compiled_network = ArchitecturesManager.build_model(
             model_type=self.active_model_type,
             components_setup=self._building_buffer
         )
 
-        # Heading 1 (Mathematical Forward Graph Evaluation Trace)
+        # Dataset initialization and layout mapping pass
+        ## 2. Instantiate the concrete dataset strategy tied explicitly to this context execution loop
+        dataset_name = self._active_dataset_name if self._active_dataset_name else "PixelDataset"
+        logger.info("Compiling and binding dataset strategy: %s to the active model graph.", dataset_name)
+        
+        compiled_dataset = DatasetManager.get_dataset(
+            name=dataset_name,
+            active_context=active_context
+        )
+
+        # Mathematical Forward Graph Evaluation Trace
+        ## 3. Run dimension checking using an actual sample drawn directly from the instantiated dataset
         try:
-            logger.debug("Executing functional forward simulation trace to verify mathematical consistency.")
+            logger.debug("Simulating forward execution path using an authentic data batch from the compiled dataset.")
             compiled_network.eval()
             with torch.no_grad():
+                ### Extract a real sample spectrum from the initialized data framework
                 _, sample_tensor = compiled_dataset[0]
-                mock_batch = sample_tensor.unsqueeze(0)
+                
+                ### Support dynamic dimensional collation by adding batch dimensions if needed
+                if sample_tensor.dim() == 1:
+                    mock_batch = sample_tensor.unsqueeze(0)
+                else:
+                    mock_batch = sample_tensor
+                
+                #### Execute mock pass to verify tensor dimensions alignment across all compiled segments
                 _ = compiled_network(mock_batch)
         except Exception as error:
             logger.error("Forward execution simulation rejected: Underlying components dimensions mismatch.", exc_info=True)
             raise RuntimeError(f"Model graph compilation rejected. Forward pass validation failure: {error}") from error
 
-        # Heading 1 (Hardware Allocation Pass)
+        # Hardware Allocation Pass
+        ## Identify the current system processing execution target device and migrate the network layers
         global_device = getattr(self._wrapper, "device", "cpu")
         compiled_network.to(global_device)
-        logger.info("MSI Network master graph successfully compiled and migrated onto device: %s", global_device)
+        
+        logger.info(
+            "MSI Network master graph successfully compiled and migrated onto execution hardware: %s", 
+            global_device
+        )
 
-        # Assign variables back to active execution slots
+        # Assign references back to wrapper state tracking variables
         self._wrapper.active_model = compiled_network
         self._wrapper.active_dataset = compiled_dataset
 
         return compiled_network
-
+    
 # --------------------------------------------------
 # Section: Structural Visualization Utilities
 # --------------------------------------------------
@@ -465,7 +484,7 @@ class ModelsManagerProxy:
 # Section: Wrapper Collective Ingestion Mixin Block
 # =====================================================================
 
-class ModelsMixin:
+class ModelsManagerMixin:
     """
     Mixin class designed to inject stateful network management proxy features into the master wrapper.
     """
@@ -474,7 +493,7 @@ class ModelsMixin:
         """
         Instantiates the models management command proxy bridge.
         """
-        self.models = ModelsManagerProxy(wrapper_ref=self)
+        self.models_manager = ModelsManagerProxy(wrapper_ref=self)
         self.active_model: Optional[nn.Module] = None
         self.active_dataset: Optional[Any] = None
         super().__init__(*args, **kwargs)

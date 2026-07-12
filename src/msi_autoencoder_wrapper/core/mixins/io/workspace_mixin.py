@@ -14,6 +14,8 @@ project_path/
             │   ├── weights.pt     # Compiled PyTorch graph binary checkpoint weights
             │   └── history.json   # Training performance history trace metric logs
             └── latent/            # Generated spatial compressed latent space target representations
+
+            #TODO - latent i inne foldery pomocnicze powinny zależec od moedelui, obraz z modelem powinny się zamienićbo logiak jest tak że rozdzielamy modele lokalneod modeli związanych z innymi obrazami - coś takiego - zatanawoc się  czy to ma sens , ta ststurktua też ma plusy bo pozwla ąłdowąc w jakim modelu co było, ale ciężęj wychwywic tą autoencododwanaprzesztrzeń 
 """
 
 import os
