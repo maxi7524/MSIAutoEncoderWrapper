@@ -1,19 +1,22 @@
+"""
+Sobolev first-order derivative regularized loss function strategy.
+"""
+
 from typing import Any, Dict, Tuple
 import torch
-import torch.nn as nn
 
-from ..criterions_manager import CriterionsManager
-from ..base_criterion import MSIBaseCriterion
+from ...base_criterion import MSIBaseCriterion
+from ...criterions_manager import CriterionsManager
+from .....utils.logger import get_custom_logger
+
+# Logger initialization
+logger = get_custom_logger(__name__)
 
 
-@CriterionsManager.register_criterion("SobolevLoss")
+@CriterionsManager.register_criterion("autoencoder", "SobolevLoss")
 class MSISobolevLoss(MSIBaseCriterion):
     """
     Weighted RMSE Sobolev loss strategy calculating spectral derivative deviations.
-
-    This loss evaluates discrepancy vectors both on raw profile channels and 
-    discrete first-order derivative variations across adjacent mass-to-charge (m/z) bins,
-    dynamically weighting errors relative to average empirical magnitudes.
     """
 
     def __init__(self, sobolev_weight: float = 0.5, eps: float = 1e-6) -> None:
@@ -22,7 +25,7 @@ class MSISobolevLoss(MSIBaseCriterion):
 
         :param sobolev_weight: Multiplier tracking balancing properties for the derivative term.
         :type sobolev_weight: float
-        :param eps: Boundary regularization constant avoiding divide-by-zero errors during variance steps.
+        :param eps: Boundary regularization constant avoiding divide-by-zero errors.
         :type eps: float
         """
         super().__init__()
@@ -30,46 +33,40 @@ class MSISobolevLoss(MSIBaseCriterion):
         self.sobolev_weight = sobolev_weight
         self.eps = eps
 
-    @property
-    def requires_reconstruction(self) -> bool:
-        """Requires full spectrum reconstruction arrays to validate derivative profiles."""
-        return True
-
-    @property
-    def requires_projection(self) -> bool:
-        """Does not utilize contrastive representation elements."""
-        return False
-
     def forward(
         self,
         model_outputs: Dict[str, torch.Tensor],
-        batch_data: Tuple[torch.Tensor, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
         **kwargs: Any
     ) -> torch.Tensor:
         """
         Computes the weighted mean squared derivative penalty scores.
         """
+        # Heading 1 (Sobolev High-Order Gradient Discrepancy Pass)
         if "reconstruction" not in model_outputs:
-            raise KeyError("The 'reconstruction' matrix is missing from forward pass evaluations dictionary maps.")
+            logger.error("Evaluation aborted: 'reconstruction' key missing from model outputs.")
+            raise KeyError("SobolevLoss requires 'reconstruction' field in model outputs.")
 
         _, original_spectra = batch_data
         reconstructed_spectra = model_outputs["reconstruction"]
+        target_device = reconstructed_spectra.device
+        original_spectra = original_spectra.to(target_device)
 
-        # 1. Compute baseline dynamic spatial coordinate weights from average spectrum magnitude footprints
+        ## 1. Compute baseline dynamic spatial coordinate weights from average magnitudes
         mean_intensity = torch.mean(original_spectra, dim=1, keepdim=True)
         weights = 1.0 / (mean_intensity + self.eps)
 
-        # 2. Evaluate standard weighted zero-order reconstruction errors (Weighted RMSE)
+        ## 2. Evaluate standard zero-order RMSE reconstruction deviations
         diff_zero = reconstructed_spectra - original_spectra
         loss_zero = torch.mean(weights * (diff_zero ** 2))
 
-        # 3. Compute discrete first-order derivative vectors via finite differences across neighboring channels
+        ## 3. Compute discrete first-order derivative vectors via adjacent bins subtraction
         deriv_orig = original_spectra[:, 1:] - original_spectra[:, :-1]
         deriv_recon = reconstructed_spectra[:, 1:] - reconstructed_spectra[:, :-1]
 
-        # 4. Evaluate first-order derivative errors (Sobolev regularizer term)
+        ## 4. Evaluate first-order derivative error variations
         diff_first = deriv_recon - deriv_orig
         loss_first = torch.mean(weights * (diff_first ** 2))
 
-        # 5. Compile weighted aggregate total score step vectors
+        ## 5. Compile final balanced linear loss combination score
         return loss_zero + (self.sobolev_weight * loss_first)
