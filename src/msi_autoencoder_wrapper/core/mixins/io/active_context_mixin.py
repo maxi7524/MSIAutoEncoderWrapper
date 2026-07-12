@@ -3,11 +3,14 @@ Module defining the execution proxy and mixin for managing live binary pipeline 
 """
 
 from typing import Any, Optional
+
+from sympy import Q
 from ....utils.logger import get_custom_logger
 
 from ....readers.base_reader import MSIBaseReader
 from ....binners.base_binner import MSIBaseBinner
 from ....binners.base_inverse import MSIBaseInverseBinner
+from ..models.autoencoder_context_manager import AutoencoderContextInterface
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -82,6 +85,14 @@ class ActiveContextProxy:
         """
         self._sync_active_context()
         return self._cached_inverse_binner
+
+    @property
+    def autoencoder(self) -> Optional[AutoencoderContextInterface]:
+        """
+        #TODO
+        """
+        self._sync_active_context()
+        return self.autoencoder
 
 # --------------------------------------------------
 # Section: Helpers
