@@ -25,6 +25,8 @@ class TrainingCriterionsProxy:
         self._manager_ref = manager_ref
         logger.debug("TrainingCriterionsProxy proxy interface successfully anchored.")
 
+        CriterionsManager.discover_criterions()
+
     def get_available(self) -> Dict[str, Dict[str, Any]]:
         """
         Queries the central registry factory to extract parameter sheets and docstrings compatible with the active model family.
@@ -33,6 +35,7 @@ class TrainingCriterionsProxy:
         :rtype: Dict[str, Dict[str, Any]]
         :raises ValueError: If active_model_type is currently undefined in the models manager.
         """
+        #TODO - tutaj w domyśle jesteśmy w criterions, ale możemy całość przenieść do model managera
         # Heading 1 (Active Model Family Query Validation)
         ## Extract the current active model type descriptor token from the bound models manager reference
         model_type = getattr(self._manager_ref, "active_model_type", None)
