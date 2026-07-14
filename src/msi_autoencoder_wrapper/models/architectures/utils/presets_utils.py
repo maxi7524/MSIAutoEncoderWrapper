@@ -2,10 +2,12 @@
 Statistical utility algorithms executing analytical computations over structural dataset matrices.
 """
 
+
 import numpy as np
-from typing import Any
+from typing import Any, TYPE_CHECKING
+if TYPE_CHECKING:
+    from ....core.mixins.io.active_context_mixin import ActiveContextProxy
 from ....utils.logger import get_custom_logger
-from ....core.mixins.io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)

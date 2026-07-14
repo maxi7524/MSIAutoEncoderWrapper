@@ -3,7 +3,7 @@ Module providing stateful, unified neural network architecture and dataset bindi
 """
 
 import inspect
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict, List, TYPE_CHECKING
 import torch
 import torch.nn as nn
 
@@ -11,7 +11,8 @@ from ....utils.logger import get_custom_logger
 from ....utils.exceptions import ValidationError
 from ....models.datasets.dataset_manager import DatasetManager
 from ....models.architectures.architectures_manager import ArchitecturesManager
-from ..io.active_context_mixin import ActiveContextProxy
+if TYPE_CHECKING:
+    from ..io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
