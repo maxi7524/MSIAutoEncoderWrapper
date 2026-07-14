@@ -2,14 +2,16 @@
 Preset configuration blueprint executing a dynamic, data-driven gradual dimension reduction sequence.
 """
 
+from __future__ import annotations
 import copy
 import numpy as np
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from ....architectures_manager import ArchitecturesManager
 from ....utils.presets_utils import estimate_max_peak_width
 from ......utils.logger import get_custom_logger
-from ......core.mixins.io.active_context_mixin import ActiveContextProxy
+if TYPE_CHECKING:
+    from ......core.mixins.io.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)

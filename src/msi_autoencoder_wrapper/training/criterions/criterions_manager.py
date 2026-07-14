@@ -3,7 +3,7 @@ Central orchestration factory and composite loss builder for managing multi-comp
 """
 
 import inspect
-from typing import Type, Dict, Any, Tuple, List
+from typing import Type, Dict, Any, Tuple, List, Optional
 import torch
 import torch.nn as nn
 
@@ -64,6 +64,10 @@ class CriterionsManager:
     # Multi-level structural criterion database layout mapping [model_type][criterion_name] to concrete classes
     _REGISTRY: Dict[str, Dict[str, Type[MSIBaseCriterion]]] = {}
 
+    # --------------------------------------------------
+    # Section: Criterions registration
+    # --------------------------------------------------
+
     @classmethod
     def register_criterion(cls, model_type: str, name: str) -> Any:
         """
@@ -82,6 +86,11 @@ class CriterionsManager:
             if model_type not in cls._REGISTRY:
                 cls._REGISTRY[model_type] = {}
             cls._REGISTRY[model_type][name] = subclass
+            logger.debug(
+                "Successfully registered loss criterion '%s' for model family '%s'.", 
+                name, 
+                model_type
+            )
             return subclass
         return decorator
 
@@ -112,6 +121,47 @@ class CriterionsManager:
                 "parameters": parameters_map
             }
         return available_blueprints
+    
+    @classmethod
+    def discover_criterions(cls, package_path: Optional[List[str]] = None, package_name: Optional[str] = None) -> None:
+        """
+        Recursively scans package layout structures to dynamically load and register concrete loss criterions.
+        """
+        import os
+        import sys
+        import pkgutil
+        import importlib
+
+        if package_path is None or package_name is None:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            package_path = [base_dir]
+            
+            current_module = cls.__module__
+            if "." in current_module:
+                package_name = ".".join(current_module.split(".")[:-1])
+            else:
+                package_name = current_module
+
+        logger.debug("Starting recursive criterions discovery for: %s", package_name)
+
+        # Walk package structures
+        ## Convert all path elements to explicit strings to ensure compatibility across platform boundaries
+        str_paths = [str(p) for p in package_path]
+        for _, module_name, is_pkg in pkgutil.walk_packages(str_paths, package_name + "."):
+            ### Explicit boundary enforcement to bypass temporary files or single private modules
+            if module_name.split(".")[-1].startswith("_"):
+                continue
+                
+            if module_name not in sys.modules:
+                logger.debug("Auto-discovery framework importing loss module: %s", module_name)
+                try:
+                    importlib.import_module(module_name)
+                except Exception as e:
+                    logger.error("Failed to dynamically import criterion module '%s': %s", module_name, str(e), exc_info=True)
+
+    # --------------------------------------------------
+    # Section: Combining Loss function
+    # --------------------------------------------------
 
     @classmethod
     def build_composite_loss(cls, model_type: str, loss_setup: Dict[str, Dict[str, Any]]) -> CompositeLoss:

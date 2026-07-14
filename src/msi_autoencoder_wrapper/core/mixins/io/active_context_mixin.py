@@ -2,7 +2,8 @@
 Module defining the execution proxy and mixin for managing live binary pipeline sessions.
 """
 
-from typing import Any, Optional
+from __future__ import annotations
+from typing import Any, Optional, TYPE_CHECKING
 
 from sympy import Q
 from ....utils.logger import get_custom_logger
@@ -10,7 +11,8 @@ from ....utils.logger import get_custom_logger
 from ....readers.base_reader import MSIBaseReader
 from ....binners.base_binner import MSIBaseBinner
 from ....binners.base_inverse import MSIBaseInverseBinner
-from ..models.autoencoder_context_manager import AutoencoderContextInterface
+if TYPE_CHECKING:
+    from ..models.autoencoder_context_manager import AutoencoderContextInterface
 
 # Logger initialization
 logger = get_custom_logger(__name__)
