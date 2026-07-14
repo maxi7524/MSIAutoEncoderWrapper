@@ -31,7 +31,7 @@ from ..readers.readers_manager import ReaderManager
 from ..binners.binners_manager import BinnerManager
 from ..models.architectures.architectures_manager import ArchitecturesManager
 from ..models.datasets.dataset_manager import DatasetManager
-from ..training.manager import TrainingManager
+from ..training.training_manager import TrainingManager
 
 logger = get_custom_logger(__name__)
 

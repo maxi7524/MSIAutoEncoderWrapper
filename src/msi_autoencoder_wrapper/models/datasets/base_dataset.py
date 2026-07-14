@@ -2,10 +2,13 @@
 Abstract base dataset architecture mapping out minimalist structural contracts for mass spectrometry samples.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple, Optional, TYPE_CHECKING
 from torch.utils.data import Dataset
-from ...core.mixins.io.active_context_mixin import ActiveContextProxy
+if TYPE_CHECKING:
+    from ...core.mixins.io.active_context_mixin import ActiveContextProxy
 from ...utils.logger import get_custom_logger
 
 # Logger initialization
@@ -19,7 +22,7 @@ class MSIBaseDataset(Dataset, ABC):
     Restricts the operational parameters exclusively to execution loops driven by an active context proxy.
     """
 
-    def __init__(self, active_context: ActiveContextProxy = None, **kwargs: Any) -> None:
+    def __init__(self, active_context: Optional[ActiveContextProxy] = None, **kwargs: Any) -> None:
         """
         Initializes the base dataset wrapper via implicit context binding.
 
