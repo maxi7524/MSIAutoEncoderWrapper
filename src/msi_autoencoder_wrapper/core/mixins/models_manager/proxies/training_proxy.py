@@ -1,0 +1,130 @@
+# Heading 1 (Training Proxy Implementation)
+## Specialized component managing training execution, loss function registry lookup, and optimization loops
+
+from __future__ import annotations
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+# Base class and manager imports
+from .base_models_manager_proxy import BaseModelsManagerProxy
+from .....training.training_manager import TrainingManager
+from .....training.criterions.criterions_manager import CriterionsManager
+
+# Centralized utilities imports
+from .....utils.logger import get_custom_logger
+from .....utils.exceptions import raise_validation_error, raise_model_initialization_error
+
+if TYPE_CHECKING:
+    pass
+
+# Logger initialization
+logger = get_custom_logger(__name__)
+
+
+class TrainingProxy(BaseModelsManagerProxy):
+    """
+    Proxy component executing optimization passes, criterion management, and learning loop control.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """
+        Initializes the training manager proxy and triggers dynamic loss function discovery.
+        """
+        super().__init__(*args, **kwargs)
+        
+        # Core initialization sequence
+        ## Execute criterion lookup to ensure loss functions database is fully indexed
+        logger.debug("TrainingProxy: Initiating criterions factory self-discovery sequences.")
+        CriterionsManager.discover_criterions()
+
+    # --------------------------------------------------
+    # Section: Criterions Discovery
+    # --------------------------------------------------
+
+    def get_available_criterions(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Queries the central registry factory to extract parameter sheets and docstrings compatible with the active model family.
+
+        :return: Map tracking blueprint capabilities, requirements, and descriptions of compatible loss functions.
+        :rtype: Dict[str, Dict[str, Any]]
+        """
+        # Active state validation
+        ## Verify if the parent models manager has selected an architecture layout
+        model_type = self.active_model_type
+        if not model_type:
+            logger.error("Registry lookup rejected: active_model_type descriptor is undefined.")
+            raise_validation_error(
+                context_name="ModelsManager",
+                message="Cannot query available criterions: active_model_type is undefined inside the models manager."
+            )
+
+        logger.info("Ferrying database capabilities ledger for active model family target: %s", model_type)
+        
+        # Factory dispatch
+        ## Retrieve list of valid criterions from registry database
+        return CriterionsManager.get_available_criterions(model_type=model_type)
+
+    # --------------------------------------------------
+    # Section: Training Optimization Loop Execution
+    # --------------------------------------------------
+
+    def fit(self, training_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Launches the backpropagation optimization sequence on the registered dataset and architecture.
+
+        :param training_config: Dictionary specifying the parameters for model optimization.
+        :type training_config: Dict[str, Any]
+        :return: Training history logs mapping phases and epochs to metric values.
+        :rtype: Dict[str, Any]
+        """
+        # Heading 1 (Active States Verification)
+        ## Ensure active model and dataset are assigned on the wrapper
+        active_model = getattr(self._wrapper, "active_model", None)
+        active_dataset = getattr(self._wrapper, "active_dataset", None)
+        
+        if not active_model:
+            raise_model_initialization_error(
+                model_name="ActiveModel",
+                message="Cannot execute training: active_model is unassigned on the wrapper."
+            )
+        if not active_dataset:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message="Cannot execute training: active_dataset is unassigned on the wrapper."
+            )
+
+        # Heading 1 (Criterion Selection and Mismatch Checks)
+        ## Retrieve and check target loss configuration against registered criterions
+        target_loss = training_config.get("criterion") or training_config.get("loss")
+        if target_loss:
+            try:
+                available_criterions = self.get_available_criterions()
+                if target_loss not in available_criterions:
+                    logger.warning(
+                        "Selected loss function '%s' is incompatible with active model category '%s'.", 
+                        target_loss, 
+                        self.active_model_type
+                    )
+            except Exception as validation_error:
+                ### Non-blocking catch to allow fallback options if criterions discovery is bypassed
+                logger.debug("Bypassed deep criterion verification check. Reason: %s", str(validation_error))
+
+        # Heading 1 (Orchestration Engine Dispatch)
+        ## Instantiates a temporary TrainingManager instance bound to the master context
+        logger.info("Instantiating execution training manager instance.")
+        training_orchestrator = TrainingManager(wrapper_ref=self._wrapper)
+
+        ## Execute performance training loops
+        try:
+            execution_history = training_orchestrator.fit(training_config=training_config)
+            
+            ### Post-training model registration hook
+            #### Re-attach compiled models to high-level interfaces if active model mixin is present
+            if hasattr(self._wrapper, "attach_local_model"):
+                logger.debug("Synchronizing local interface wrappers with updated weights.")
+                self._wrapper.attach_local_model(torch_model=active_model, model_type=self.active_model_type)
+
+            return execution_history
+
+        except Exception as error:
+            logger.error("Interrupted during neural network model fitting loop execution steps.", exc_info=True)
+            raise error
