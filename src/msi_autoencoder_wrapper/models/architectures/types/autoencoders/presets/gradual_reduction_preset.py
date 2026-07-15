@@ -11,7 +11,7 @@ from ....architectures_manager import ArchitecturesManager
 from ....utils.presets_utils import estimate_max_peak_width
 from ......utils.logger import get_custom_logger
 if TYPE_CHECKING:
-    from ......core.mixins.io.active_context_mixin import ActiveContextProxy
+    from ......core.mixins.active_context.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)

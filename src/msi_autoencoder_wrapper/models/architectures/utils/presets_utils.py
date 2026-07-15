@@ -6,7 +6,7 @@ Statistical utility algorithms executing analytical computations over structural
 import numpy as np
 from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
-    from ....core.mixins.io.active_context_mixin import ActiveContextProxy
+    from ....core.mixins.active_context.active_context_mixin import ActiveContextProxy
 from ....utils.logger import get_custom_logger
 
 # Logger initialization
