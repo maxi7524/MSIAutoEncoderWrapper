@@ -1,38 +1,33 @@
-"""
-Module defining the execution proxy and mixin for managing live binary pipeline sessions.
-"""
+# Heading 1 (Active Context Management Implementation)
+## Core component executing dynamic, lazy-loaded pipeline routing for Mass Spectrometry Imaging
 
 from __future__ import annotations
 from typing import Any, Optional, TYPE_CHECKING
+import torch
 
-from sympy import Q
+# Base autoencoder operational interfaces and exceptions
+from .autoencoder_context_manager import AutoencoderContextInterface
 from ....utils.logger import get_custom_logger
+from ....utils.exceptions import raise_validation_error
 
-from ....readers.base_reader import MSIBaseReader
-from ....binners.base_binner import MSIBaseBinner
-from ....binners.base_inverse import MSIBaseInverseBinner
 if TYPE_CHECKING:
-    from .autoencoder_context_manager import AutoencoderContextInterface
+    pass
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-# --------------------------------------------------
-# Section: ActiveContextProxy Operational Bridge
-# --------------------------------------------------
-
 class ActiveContextProxy:
     """
     Stateful boundary proxy representing the currently selected image execution context.
-    Provides direct, lazy-loaded access to memory-resident pipelines (Readers, Binners, Latent spaces).
+    Provides direct, lazy-loaded access to memory-resident pipelines (Readers, Binners, Autoencoders).
     """
 
     def __init__(self, wrapper_ref: Any) -> None:
         """
         Initializes the active execution proxy bounded to the parent wrapper instance.
 
-        :param wrapper_ref: Reference to the hosting main MSIAutoEncoderWrapper instance.
+        :param wrapper_ref: Reference to the hosting main wrapper facade instance.
         :type wrapper_ref: Any
         """
         self._wrapper = wrapper_ref
@@ -42,138 +37,149 @@ class ActiveContextProxy:
         self._cached_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
-        #TODO(future) - in future we should add here different _cached valeus as latent space etc. 
+        self._autoencoder_interface: Optional[AutoencoderContextInterface] = None
 
-    
-# --------------------------------------------------
-# Section: Dynamic Component Exposure Properties
-# --------------------------------------------------
+    # --------------------------------------------------
+    # Section: Lazy Pipeline Resolution
+    # --------------------------------------------------
+
+    def _resolve_active_pipeline(self) -> None:
+        """
+        Resolves the active pipelines from the context manager config ledger.
+        Loads drivers and local models dynamically based on the wrapper's current image key.
+        """
+        # Resolve target key
+        ## Retrieve the currently selected image key from the wrapper or workspace fallback
+        current_target = getattr(self._wrapper, "active_image_key", None)
+        if current_target is None:
+            current_target = getattr(self._wrapper.workspace, "active_img_name", None)
+
+        if current_target is None:
+            logger.error("Active pipeline resolution failed: No active image key context has been set.")
+            raise_validation_error(
+                context_name="ActiveContext",
+                message="Cannot resolve active pipelines: No image context has been set. Call set_active_image() first."
+            )
+
+        # Config ledger resolution pass
+        ## Fetch registered configuration structures from the centralized ledger manager
+        manager = getattr(self._wrapper, "context_manager", None)
+        if manager is None:
+            raise_validation_error(
+                context_name="ActiveContext",
+                message="ContextManager mixin is missing from the wrapper hierarchy."
+            )
+
+        if current_target in manager.config_ledger:
+            ## Heading 2 (Ledger mapping and caching)
+            ### Load reader, binner, and optional local model instances from ledger registry
+            img_bucket = manager.config_ledger[current_target]
+            self._cached_reader = img_bucket.get("reader")
+            self._cached_binner = img_bucket.get("binner")
+            self._cached_inverse_binner = img_bucket.get("inverse_binner")
+            self._autoencoder_interface = img_bucket.get("autoencoder")
+        else:
+            logger.error("Active reader mapping failed: No reader configuration has been recorded for image context '%s'", current_target)
+            raise_validation_error(
+                context_name="ActiveContext",
+                message=f"No strategy has been configured for image context '{current_target}'. Call set_reader() first."
+            )
+
+        self._instantiated_image_key = current_target
+        logger.info("Successfully bound active context memory maps for: %s", current_target)
+
+    # --------------------------------------------------
+    # Section: Properties and Getters
+    # --------------------------------------------------
 
     @property
-    def reader(self) -> MSIBaseReader:
+    def reader(self) -> Any:
         """
-        Returns the fully initialized concrete MSIBaseReader instance for the active image context.
-
-        Automatically triggers lazy context pipeline synchronization upon access.
-
-        :return: Implemented data reader object instance.
-        :rtype: Any
+        Lazy-loaded property returning the active data reader instance.
         """
-        self._sync_active_context()
+        if self._cached_reader is None:
+            self._resolve_active_pipeline()
         return self._cached_reader
 
     @property
-    def binner(self) -> Optional[MSIBaseBinner]:
+    def binner(self) -> Any:
         """
-        Returns the fully initialized concrete MSIBaseBinner instance for the active image context.
-
-        Automatically triggers lazy context pipeline synchronization upon access.
-
-        :return: Implemented forward spectrum binner object instance, or None if unconfigured.
-        :rtype: Any
+        Lazy-loaded property returning the active spectrum binner instance.
         """
-        self._sync_active_context()
+        if self._cached_binner is None:
+            self._resolve_active_pipeline()
         return self._cached_binner
 
     @property
-    def inverse_binner(self) -> Optional[MSIBaseInverseBinner]:
+    def inverse_binner(self) -> Any:
         """
-        Returns the fully initialized concrete MSIBaseInverseBinner instance for the active image context.
-
-        Automatically triggers lazy context pipeline synchronization upon access.
-
-        :return: Implemented reverse reconstruction binner object instance, or None if unconfigured.
-        :rtype: Any
+        Lazy-loaded property returning the active spectrum inverse binner instance.
         """
-        self._sync_active_context()
+        if self._cached_inverse_binner is None:
+            self._resolve_active_pipeline()
         return self._cached_inverse_binner
 
     @property
     def autoencoder(self) -> Optional[AutoencoderContextInterface]:
         """
-        Exposes the active autoencoder context execution interface bound to the master wrapper.
+        Exposes direct access to high-level autoencoder transformation methods with full type hint support.
 
-        :return: Intermediary autoencoder manager interface if active, else None.
+        :return: Autoencoder wrapper operational interface, or None if another model family is active.
         :rtype: Optional[AutoencoderContextInterface]
         """
-        # Heading 1 (Context Synchronization Pass)
-        ## Enforce memory maps alignment across registered image datasets boundaries
-        self._sync_active_context()
-        
-        ## Retrieve the operational interface directly from the parent wrapper container
-        return self._wrapper.autoencoder
+        if self._autoencoder_interface is None:
+            try:
+                self._resolve_active_pipeline()
+            except Exception:
+                pass
+        return self._autoencoder_interface
 
-# --------------------------------------------------
-# Section: Helpers
-# --------------------------------------------------
+    # --------------------------------------------------
+    # Section: Model Capturing and Attachment
+    # --------------------------------------------------
+
+    def attach_local_model(self, torch_model: torch.nn.Module, model_type: str) -> None:
+        """
+        Intercepts a compiled network module, maps its operational strategy, and deploys it onto the active session.
+
+        :param torch_model: Initialized PyTorch graph module object instance.
+        :type torch_model: torch.nn.Module
+        :param model_type: Identity token family string defining the model class layout rules.
+        :type model_type: str
+        """
+        # Heading 2 (Model attachment evaluation)
+        self._autoencoder_interface = None
+
+        if model_type == "autoencoder":
+            logger.info("Active model capture trace: Building high-level Autoencoder proxy execution interface.")
+            self._autoencoder_interface = AutoencoderContextInterface(torch_model=torch_model, active_context=self)
+            
+            # Sync with ContextManager config ledger
+            ## Dynamically update ledger dictionary to persist this instance across context switches
+            current_target = self._instantiated_image_key or getattr(self._wrapper, "active_image_key", None)
+            if current_target:
+                manager = getattr(self._wrapper, "context_manager", None)
+                if manager and current_target in manager.config_ledger:
+                    manager.config_ledger[current_target]["autoencoder"] = self._autoencoder_interface
+                    logger.debug("Successfully saved local autoencoder interface in context ledger for image: %s", current_target)
+        else:
+            logger.debug("Active model capture trace: Applied model category '%s' bypasses context local proxying setups.", model_type)
+
+    # --------------------------------------------------
+    # Section: Context Teardown and Cleanup
+    # --------------------------------------------------
 
     def clear_active_context(self) -> None:
         """
-        Explicitly releases active binary components, closes file descriptors, and clears memory caches.
+        Resets all working context session variables and active pipeline objects back to None.
         """
-        # Session release layer
-        ## Evict cached reader and enforce explicit file descriptor closure if supported
-        if self._cached_reader:
-            logger.info("Discharging active binary reader session for image context: %s", self._instantiated_image_key)
-            if hasattr(self._cached_reader, "close"):
-                try:
-                    self._cached_reader.close()
-                except Exception:
-                    logger.error("Failed to gracefully close active reader file handles during context cleanup.", exc_info=True)
-        
-        # Clear all state properties
+        logger.debug("ActiveContextProxy: Clearing active cached reader, binner and autoencoder interfaces.")
+        self._instantiated_image_key = None
         self._cached_reader = None
         self._cached_binner = None
         self._cached_inverse_binner = None
-        self._instantiated_image_key = None
+        self._autoencoder_interface = None
 
-    def _sync_active_context(self) -> None:
-        """
-        Synchronizes memory-resident pipeline objects against the active image token defined in the workspace.
-        Automatically triggers a fallback transaction to the default workspace image configuration if no active context is set.
-
-        :raises ValueError: If both active image and default workspace configurations are completely unassigned.
-        :raises KeyError: If the target image context has no compiled reader strategy configured in the ledger.
-        """
-        # Context tracking lookup execution
-        ## Extract active state identifiers from the coupled workspace engine
-        workspace = self._wrapper.workspace
-        current_target = workspace.active_img_name
-
-        # Automated default context fallback logic
-        ## If active image is blank, check if we can transparently boot the default session configuration
-        if not current_target:
-            if getattr(workspace, "default_img_name", None):
-                logger.info("Active context is unassigned. Performing lazy automatic fallback activation using default image: %s", workspace.default_img_name)
-                workspace.set_active_image(None)  # Triggers default image setup and synchronization cascades
-                current_target = workspace.active_img_name
-            else:
-                logger.error("Synchronization blocked: Active image context and default configuration are both unassigned.")
-                raise ValueError("Execution blocked: Active image context is unassigned. Execute set_active_image() or set_default_path() first.")
-
-        # Lazy synchronization block
-        if self._instantiated_image_key != current_target:
-            logger.info("Context transition detected. Synchronizing active memory structures to: %s", current_target)
-            self.clear_active_context()
-
-            manager = self._wrapper.context_manager
-            if current_target in manager.config_ledger:
-                img_bucket = manager.config_ledger[current_target]
-                self._cached_reader = img_bucket.get("reader")
-                self._cached_binner = img_bucket.get("binner")
-                self._cached_inverse_binner = img_bucket.get("inverse_binner")
-            else:
-                logger.error("Active reader mapping failed: No reader configuration has been recorded for image context '%s'", current_target)
-                raise KeyError(f"No strategy has been configured for image context '{current_target}'. Call set_reader() first.")
-            
-            self._instantiated_image_key = current_target
-            logger.info("Successfully bound active context memory maps for: %s", current_target)
-
-
-
-# --------------------------------------------------
-# Section: ActiveReaderMixin Injection Hook
-# --------------------------------------------------
 
 class ActiveContextMixin:
     """

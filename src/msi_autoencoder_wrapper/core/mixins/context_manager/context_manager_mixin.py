@@ -7,6 +7,7 @@ import pprint
 from typing import Dict, Any, Optional, Union, Type
 from pathlib import Path
 from ...utils.decorators import manage_image_context
+from ...utils.printing import extract_component_signatures, print_formatted_components
 from ....utils.logger import get_custom_logger
 from ....utils.validators import validate_constructor_kwargs, resolve_component
 from ....readers.readers_manager import ReaderManager
@@ -346,15 +347,16 @@ class ContextManagerProxy:
         logger.info("ReadersManagerProxy Configuration Ledger Trace\n%s", str(self))
 
     def _get_available_components_info(
-            self, 
-            registry: Dict[str, Any], 
-            title: str, 
-            key_label: str, 
-            print_return: bool,
-            return_value: bool
-        ) -> Dict[str, Dict[str, Any]]:
+        self, 
+        registry: Dict[str, Any], 
+        title: str, 
+        key_label: str, 
+        print_return: bool,
+        return_value: bool
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
         """
         Internal helper utility to extract documentation and constructor signatures across registries.
+        Delegated to unified printing module to avoid duplicate inspector code.
 
         :param registry: Target manager registry dictionary mapping keys to component classes.
         :type registry: Dict[str, Any]
@@ -367,47 +369,22 @@ class ContextManagerProxy:
         :param return_value: Flag determining whether return dict with data logs.
         :type return_value: bool
         :return: Deeply nested mapping matching strategy aliases to structural property states.
-        :rtype: Dict[str, Dict[str, Any]]
+        :rtype: Optional[Dict[str, Dict[str, Any]]]
         """
-        result = {}
-        
-        for name, cls in registry.items():
-            init_method = getattr(cls, "__init__", None)
-            params = {}
-            if init_method:
-                try:
-                    sign = inspect.signature(init_method)
-                    for param_name, param in sign.parameters.items():
-                        if param_name in ("self", "args", "kwargs"):
-                            continue
-                        default_val = "Required" if param.default == inspect.Parameter.empty else param.default
-                        params[param_name] = default_val
-                except (ValueError, TypeError):
-                    pass
-            
-            result[name] = {
-                "docstring": cls.__doc__,
-                "parameters": params
-            }
 
+        result = extract_component_signatures(registry=registry)
+
+        # Output Flow Redirection
         if print_return:
-            print("\n" + "=" * 80)
-            print(f" {title}")
-            print("=" * 80)
-            for name, info in result.items():
-                print(f"\n[{key_label}]: '{name}'")
-                print(f" Description: {info['docstring'].strip() if info['docstring'] else 'No documentation provided.'}")
-                print(" Parameters (kwargs):")
-                if info["parameters"]:
-                    for p_name, p_default in info["parameters"].items():
-                        print(f"   - {p_name}: {p_default}")
-                else:
-                    print("   - None")
-            print("=" * 80 + "\n")
+            print_formatted_components(
+                title=title,
+                key_label=key_label,
+                components_info=result
+            )
+
         if return_value:
             return result
-        else:
-            pass
+        return None
     
 
 
