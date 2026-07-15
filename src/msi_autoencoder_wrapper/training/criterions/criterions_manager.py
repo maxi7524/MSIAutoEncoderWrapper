@@ -42,6 +42,12 @@ class CompositeLoss(nn.Module):
         :return: Jointly accumulated graph loss tensor paired with an isolated scalar values logging map.
         :rtype: Tuple[torch.Tensor, Dict[str, float]]
         """
+        if not self.loss_functions:
+            raise RuntimeError(
+                "CompositeLoss forward triggered with empty loss_functions. "
+                "Ensure that 'criterions' are correctly configured in your training payload."
+            )
+
         total_loss = torch.tensor(0.0, device=batch_data[1].device if len(batch_data) > 1 else torch.device("cpu"))
         loss_logs: Dict[str, float] = {}
 

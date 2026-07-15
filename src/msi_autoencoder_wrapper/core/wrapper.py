@@ -107,7 +107,7 @@ class MSIAutoEncoderWrapper(
         self.history_tracker: Optional[Dict[str, Any]] = None
         self.config: Dict[str, Any] = {}
         
-        logger.info("MSI AutoEncoder Facade workspace initialized on device: %s", device)
+        logger.info("MSI AutoEncoder Facade workspace initialized on device: %s", self.device)
 
     # DEPRACATED 
     # def define_model(

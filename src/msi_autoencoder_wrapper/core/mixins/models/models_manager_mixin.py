@@ -11,6 +11,7 @@ from ....utils.logger import get_custom_logger
 from ....utils.exceptions import ValidationError
 from ....models.datasets.dataset_manager import DatasetManager
 from ....models.architectures.architectures_manager import ArchitecturesManager
+from ....training.training_manager import TrainingManager
 if TYPE_CHECKING:
     from ..io.active_context_mixin import ActiveContextProxy
 
@@ -442,6 +443,75 @@ class ModelsManagerProxy:
 
         return compiled_network
     
+# --------------------------------------------------
+# Section: Training module utilities
+# --------------------------------------------------
+
+    def fit(self, training_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Executes the network training cycle using the registered model and dataset.
+
+        Iterates through the training configuration, validates selected loss functions 
+        against the active model architecture type via the criterions proxy, and dispatches 
+        the workload to the core TrainingManager execution engine.
+
+        :param training_config: Dictionary containing phase setups, optimizer parameters, and metrics.
+        :type training_config: Dict[str, Any]
+        :return: Metrics history mapping calculated loss values across epoch iterations.
+        :rtype: Dict[str, Any]
+        :raises ValueError: If active_model or active_dataset is unassigned.
+        """
+        # Heading 1 (Pre-flight Validation Pass)
+        ## Verify that critical training components are actively bound to the wrapper context
+        active_model = getattr(self._wrapper, "active_model", None)
+        active_dataset = getattr(self._wrapper, "active_dataset", None)
+
+        if not active_model:
+            logger.error("Fit command aborted: Active network model structure is not initialized.")
+            raise ValueError("Execution halted: active_model is missing on the main wrapper.")
+
+        if not active_dataset:
+            logger.error("Fit command aborted: Active streaming dataset is not initialized.")
+            raise ValueError("Execution halted: active_dataset is missing on the main wrapper.")
+
+        # Heading 2 (Loss Criterion Cross-Check Validation)
+        ## Consult the criteria manager proxy to verify loss selection alignment
+        if "loss" in training_config:
+            target_loss = training_config["loss"]
+            try:
+                ### Query the local criterions registry to ensure compatibility
+                compatible_criterions = self.criterions.get_available()
+                if target_loss not in compatible_criterions:
+                    logger.warning(
+                        "Loss criterion '%s' may be incompatible with active model category '%s'.", 
+                        target_loss, 
+                        self.active_model_type
+                    )
+            except Exception as validation_error:
+                ### Non-blocking catch to allow fallback options if criterions discovery is bypassed
+                logger.debug("Bypassed deep criterion verification check. Reason: %s", str(validation_error))
+
+        # Heading 2 (Orchestration Engine Dispatch)
+        ## Instantiates a temporary TrainingManager instance bound to the master context
+        logger.info("Instantiating execution training manager instance.")
+        training_orchestrator = TrainingManager(wrapper_ref=self._wrapper)
+
+        ## Execute performance training loops
+        try:
+            execution_history = training_orchestrator.fit(training_config=training_config)
+            
+            ### Post-training model registration hook
+            #### Re-attach compiled models to high-level interfaces if active model mixin is present
+            if hasattr(self._wrapper, "attach_local_model"):
+                logger.debug("Synchronizing local interface wrappers with updated weights.")
+                self._wrapper.attach_local_model(torch_model=active_model, model_type=self.active_model_type)
+
+            return execution_history
+
+        except Exception as error:
+            logger.error("Interrupted during neural network model fitting loop execution steps.", exc_info=True)
+            raise error
+
 # --------------------------------------------------
 # Section: Structural Visualization Utilities
 # --------------------------------------------------
