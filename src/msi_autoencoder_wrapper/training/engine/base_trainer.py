@@ -125,8 +125,13 @@ class MSIPyTorchTrainer:
                 loss_fn.on_phase_start(model=model, dataset=dataset, transient_cache=transient_cache)
 
             # Heading 1 (Epoch Processing Execution Loop Partition)
-            batch_size = getattr(self._wrapper.models_manager, "batch_size", 256)
+            ## Resolve batch size prioritization: Phase Payload -> Wrapper Manager -> Fallback Default
+            batch_size = phase_config.get(
+                "batch_size", 
+                getattr(self._wrapper.models_manager, "batch_size", 64)
+            )
             dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=2)
+            total_batches = len(dataloader)
             
             self.best_loss = float("inf")
             self.patience_counter = 0
@@ -137,7 +142,7 @@ class MSIPyTorchTrainer:
                 accumulated_metrics: Dict[str, float] = {}
 
                 ### Heading 3 (Batch Data Stream Execution Pass)
-                for batch in dataloader:
+                for step_idx, batch in enumerate(dataloader):
                     #### Apply localized batch signal transformation hooks before triggering forward evaluation passes
                     for loss_fn in composite_loss.loss_functions.values():
                         batch = loss_fn.on_batch_start(batch_data=batch, transient_cache=transient_cache)
@@ -160,13 +165,39 @@ class MSIPyTorchTrainer:
                     for key, scalar_val in loss_logs.items():
                         accumulated_metrics[key] = accumulated_metrics.get(key, 0.0) + scalar_val
 
+                    #### Evaluate step progress and calculate mathematical timeline approximations
+                    ##### Setup log interval reporting limits dynamically to prevent excessive output
+                    log_interval = max(1, total_batches // 5)
+                    if step_idx % log_interval == 0 or step_idx == total_batches - 1:
+                        batches_completed = step_idx + 1
+                        elapsed_seconds = time.time() - epoch_start_time
+                        avg_seconds_per_batch = elapsed_seconds / batches_completed
+                        remaining_batches = total_batches - batches_completed
+                        eta_seconds = remaining_batches * avg_seconds_per_batch
+                        
+                        eta_minutes = int(eta_seconds // 60)
+                        eta_secs = int(eta_seconds % 60)
+                        
+                        logger.info(
+                            "[%s] Epoch %s/%s | Batch %s/%s | Loss: %s | Elapsed: %s s | ETA: %02d:%02d",
+                            phase_name,
+                            epoch + 1,
+                            epochs,
+                            batches_completed,
+                            total_batches,
+                            f"{loss.item():.4f}",
+                            f"{elapsed_seconds:.1f}",
+                            eta_minutes,
+                            eta_secs
+                        )
+
                 ### Heading 3 (Epoch Performance Summarization Pass)
                 mean_metrics: Dict[str, Any] = {
                     "epoch": epoch + 1,
                     "duration": time.time() - epoch_start_time
                 }
                 for key, running_sum in accumulated_metrics.items():
-                    mean_metrics[key] = running_sum / len(dataloader)
+                    mean_metrics[key] = running_sum / total_batches
 
                 global_history.append({"phase": phase_name, "metrics": mean_metrics})
                 current_epoch_loss = mean_metrics["total_loss"]
@@ -195,10 +226,15 @@ class MSIPyTorchTrainer:
                 else:
                     self.patience_counter += 1
 
-                print(
-                    f"[{phase_name}] Epoch {epoch+1:03d}/{epochs:03d} | "
-                    f"Total Loss: {current_epoch_loss:.4f} | "
-                    f"Patience: {self.patience_counter}/{self.patience_limit}"
+                logger.info(
+                    "=== Epoch Summary [%s] %03d/%03d | Avg Loss: %s | Patience: %s/%s | Duration: %s s ===",
+                    phase_name,
+                    epoch + 1,
+                    epochs,
+                    f"{current_epoch_loss:.4f}",
+                    self.patience_counter,
+                    self.patience_limit,
+                    f"{mean_metrics['duration']:.2f}"
                 )
 
                 if self.patience_counter >= self.patience_limit:
