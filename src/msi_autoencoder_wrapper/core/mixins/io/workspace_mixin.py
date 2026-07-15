@@ -487,7 +487,7 @@ class WorkspaceProxy:
         config_dict: dict
     ) -> None:
         """
-        Triggers synchronized compound serialization dumps for both weight binaries and structural setup Blueprints.
+        Triggers synchronized compound serialization dumps for both weight binaries and structural setup blueprints.
 
         :param image_key: Unique tracking key token assigned to the targeting image context.
         :type image_key: str
@@ -506,6 +506,54 @@ class WorkspaceProxy:
         self.save_model_weights(image_key=image_key, model_type=model_type, state_dict=state_dict)
         
         logger.info("Unified model collective states serialization cleanly finalized for image context: %s", image_key)
+
+    def save_all(
+        self,
+        image_key: str,
+        model_type: str,
+        state_dict: dict,
+        config_dict: dict,
+        phase_name: str,
+        metrics: dict
+    ) -> None:
+        """
+        Executes a comprehensive workspace checkpoint, writing weights, configuration, and final metrics ledger.
+
+        :param image_key: Unique tracking key token assigned to the targeting image context.
+        :type image_key: str
+        :param model_type: Identity string defining the master model architecture category.
+        :type model_type: str
+        :param state_dict: PyTorch weights parameters layout dictionary maps state blueprint.
+        :type state_dict: dict
+        :param config_dict: Parameter blueprint tracking layouts collected from operational layer buffers.
+        :type config_dict: dict
+        :param phase_name: Unique naming descriptor identifying the active optimization phase.
+        :type phase_name: str
+        :param metrics: Dictionary tracking calculated evaluation scores for the current epoch step.
+        :type metrics: dict
+        """
+        # Cascade individual serialization blocks sequentially to enforce isolation limits
+        ## 1. Trigger collective structural and parameter save routine
+        self.save_model(
+            image_key=image_key,
+            model_type=model_type,
+            state_dict=state_dict,
+            config_dict=config_dict
+        )
+
+        ## 2. Append final tracking metrics parameters to the target persistent CSV log
+        self.save_training_metrics(
+            image_key=image_key,
+            model_type=model_type,
+            phase_name=phase_name,
+            metrics=metrics
+        )
+
+        logger.info(
+            "All-inclusive execution checkpoint successfully completed for context: %s [Phase: %s]",
+            image_key,
+            phase_name
+        )
 
     # --------------------------------------------------
     # Subsection: loading 
