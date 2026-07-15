@@ -52,21 +52,9 @@ class TrainingManager:
         :rtype: List[Dict[str, Any]]
         :raises ValueError: If active image contexts, models, or datasets tracking references are unbound.
         """
-        # Heading 1 (Validation and Pre-execution Setup Partition)
-        ## 1. Enforce rigorous status checks on fundamental wrapper structural components
-        active_context = getattr(self._wrapper, "active_context", None)
-        active_model = getattr(self._wrapper, "active_model", None)
-        active_dataset = getattr(self._wrapper, "active_dataset", None)
 
-        if not active_context or not active_model or not active_dataset:
-            logger.error("Training sequence rejected: Structural component dependencies are missing from the session context.")
-            raise ValueError(
-                "Cannot initialize optimization loop: Ensure an active context is mounted, "
-                "and the target model graph has been successfully compiled with a dataset."
-            )
-
-        # Heading 1 (Optimizer Validation Heuristics Override Enforcements)
-        ## 2. Scan every phase configuration block to enforce the strict "all-or-nothing" optimizer specification criteria
+        # Section (Optimizer Validation Heuristics Override Enforcements)
+        ## Scan every phase configuration block to enforce the strict "all-or-nothing" optimizer specification criteria
         phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
         for step_idx, phase in enumerate(phases_list):
             opt_config = phase.get("optimizer")
@@ -86,15 +74,15 @@ class TrainingManager:
             getattr(self._wrapper.models_manager, "active_model_type", "Unknown")
         )
 
-        # Heading 1 (Trainer Engine Allocation and Dispatch Execution Pass)
-        ## 3. Instantiate the execution loop trainer stack passing core facade dependencies
+        # Section (Trainer Engine Allocation and Dispatch Execution Pass)
+        ## Instantiate the execution loop trainer stack passing core facade dependencies
         patience = training_config.get("patience", 10)
         trainer_engine = MSIPyTorchTrainer(
             wrapper_ref=self._wrapper,
             patience_limit=patience
         )
 
-        ## 4. Delegate computation tasks to the high-performance optimization loop runner
+        ## Delegate computation tasks to the high-performance optimization loop runner
         try:
             raw_performance_history = trainer_engine.fit(training_config=training_config)
         except Exception as error:
