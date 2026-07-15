@@ -91,10 +91,17 @@ class ActiveContextProxy:
     @property
     def autoencoder(self) -> Optional[AutoencoderContextInterface]:
         """
-        #TODO
+        Exposes the active autoencoder context execution interface bound to the master wrapper.
+
+        :return: Intermediary autoencoder manager interface if active, else None.
+        :rtype: Optional[AutoencoderContextInterface]
         """
+        # Heading 1 (Context Synchronization Pass)
+        ## Enforce memory maps alignment across registered image datasets boundaries
         self._sync_active_context()
-        return self.autoencoder
+        
+        ## Retrieve the operational interface directly from the parent wrapper container
+        return self._wrapper.autoencoder
 
 # --------------------------------------------------
 # Section: Helpers
