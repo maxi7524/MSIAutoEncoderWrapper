@@ -13,6 +13,9 @@ from pyimzml.ImzMLParser import ImzMLParser
 from msi_autoencoder_wrapper.binners.base_binner import MSIBaseBinner
 from msi_autoencoder_wrapper.binners.base_inverse import MSIBaseInverseBinner
 from msi_autoencoder_wrapper.models.datasets.base_dataset import MSIBaseDataset
+from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
+    ArchitecturesManager,
+)
 from msi_autoencoder_wrapper.readers.base_reader import MSIBaseReader
 
 MSI_FIXTURE_PATH = Path(__file__).parent / "msi" / "mouse_urinary_bladder_mock.imzML"
@@ -92,3 +95,38 @@ class MockDataset(MSIBaseDataset):
         mass_axis, intensities = self.active_context.reader.GetSpectrum(idx)
         binned = self.active_context.binner(mass_axis, intensities)
         return idx, torch.as_tensor(binned, dtype=torch.float32)
+
+
+def build_small_autoencoder() -> torch.nn.Module:
+    """Build a small configured autoencoder for runtime and persistence tests.
+
+    :return: Autoencoder accepting 32-feature spectra and producing four latents.
+    :rtype: torch.nn.Module
+    """
+    ArchitecturesManager.discover_architectures()
+    return ArchitecturesManager.build_model(
+        "autoencoder",
+        {
+            "encoder": {
+                "strategy": "CNNEncoder",
+                "params": {
+                    "input_dim": 32,
+                    "latent_dim": 4,
+                    "channels": [1, 2],
+                    "kernels": [3],
+                    "strides": [2],
+                    "spatial_dims": [32, 15],
+                },
+            },
+            "decoder": {
+                "strategy": "CNNDecoder",
+                "params": {
+                    "latent_dim": 4,
+                    "channels": [1, 2],
+                    "kernels": [3],
+                    "strides": [2],
+                    "spatial_dims": [32, 15],
+                },
+            },
+        },
+    )

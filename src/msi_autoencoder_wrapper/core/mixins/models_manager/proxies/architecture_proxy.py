@@ -445,7 +445,12 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         )
 
         # Update core state tracking references
-        self._wrapper.active_model = compiled_network
+        self.attach_model(
+            torch_model=compiled_network,
+            model_type=self.active_model_type,
+            model_name=self._active_model_name,
+            trained=False,
+        )
         self._wrapper.active_dataset = compiled_dataset
 
         return compiled_network
