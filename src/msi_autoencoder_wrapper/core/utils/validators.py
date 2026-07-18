@@ -4,7 +4,7 @@ Mixin and Core system validators for the MSI library.
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Type, TYPE_CHECKING
+from typing import Any, Dict, Type, Union, TYPE_CHECKING
 from ...utils.logger import get_custom_logger
 from ...utils.exceptions import raise_validation_error
 

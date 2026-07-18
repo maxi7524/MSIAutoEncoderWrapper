@@ -27,6 +27,7 @@ class HelpersProxy(BaseWorkspaceProxy):
         """
         super().__init__(*args, **kwargs)
 
+
     # --------------------------------------------------
     # Section: Structural Visualization Utilities
     # --------------------------------------------------
@@ -71,6 +72,32 @@ class HelpersProxy(BaseWorkspaceProxy):
     # --------------------------------------------------
     # Section: Directory Tree Generation
     # --------------------------------------------------
+
+    def create_required_directories(self) -> None:
+        """
+        Explicitly triggers physical creation of base workspace layouts on the storage system.
+        Registers parent project directories as well as basic target structural subdirectories.
+        """
+        try:
+            ## Ensure root workspace project path exists
+            if not self.project_path_resolved.exists():
+                logger.info("Creating project root directory: %s", self.project_path_resolved)
+                self.project_path_resolved.mkdir(parents=True, exist_ok=True)
+
+            ## Create base subdirectories (imgs and models)
+            imgs_dir = self.get_imgs_dir()
+            models_dir = self.project_path_resolved / self._layout["models_root"]
+
+            if not models_dir.exists():
+                logger.info("Creating models root directory: %s", models_dir)
+                models_dir.mkdir(parents=True, exist_ok=True)
+
+        except Exception as err:
+            logger.error("Failed to create required project directories", exc_info=True)
+            raise_workspace_error(
+                context_name="WorkspaceHelpers",
+                message=f"Could not provision filesystem: {err}"
+            )
 
     def create_structure(self, img_name: str, model_name: str) -> None:
         """

@@ -30,6 +30,7 @@ class DatasetProxy(BaseModelsManagerProxy):
         Initializes the dataset manager proxy.
         """
         super().__init__(*args, **kwargs)
+        DatasetManager.discover_strategies()
 
     # --------------------------------------------------
     # Section: Strategy Discovery
