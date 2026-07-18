@@ -1,4 +1,4 @@
-"""Autoencoder implementation registration package."""
+"""Criterion implementation registration package."""
 
 from msi_autoencoder_wrapper.utils.module_search import discover_modules
 

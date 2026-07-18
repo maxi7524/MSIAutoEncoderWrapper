@@ -11,7 +11,7 @@ from .....models.datasets.dataset_manager import DatasetManager
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
 from .....utils.exceptions import raise_validation_error
-from ....utils.printing import extract_component_signatures, print_formatted_components
+from .....utils.printing import present_available_components
 
 if TYPE_CHECKING:
     pass
@@ -47,23 +47,13 @@ class DatasetProxy(BaseModelsManagerProxy):
         :return: Map linking dataset tokens to their constructor signatures and docstrings, or None.
         :rtype: Optional[Dict[str, Dict[str, Any]]]
         """
-        # Metadata extraction
-        ## Fetch signatures and docstrings directly from the dataset registry
-        registry_target = getattr(DatasetManager, "_REGISTRY", {})
-        result = extract_component_signatures(registry=registry_target)
-
-        if print_return:
-            ## Output formatting
-            ### Format and delegate console rendering to the centralized system printer
-            print_formatted_components(
-                title="Available Dataset Strategies",
-                key_label="Dataset",
-                components_info=result
-            )
-
-        if return_value:
-            return result
-        return None
+        return present_available_components(
+            registry=DatasetManager._REGISTRY,
+            title="Available Dataset Strategies",
+            key_label="Dataset",
+            print_return=print_return,
+            return_value=return_value,
+        )
 
     # --------------------------------------------------
     # Section: Target State Selection

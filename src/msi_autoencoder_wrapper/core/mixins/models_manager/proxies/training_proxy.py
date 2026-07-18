@@ -2,7 +2,7 @@
 ## Specialized component managing training execution, loss function registry lookup, and optimization loops
 
 from __future__ import annotations
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 # Base class and manager imports
 from .base_models_manager_proxy import BaseModelsManagerProxy
@@ -11,7 +11,8 @@ from .....training.criterions.criterions_manager import CriterionsManager
 
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
-from .....utils.exceptions import raise_validation_error, raise_model_initialization_error
+from .....utils.exceptions import raise_validation_error
+from .....utils.printing import present_components_info
 
 if TYPE_CHECKING:
     pass
@@ -40,7 +41,11 @@ class TrainingProxy(BaseModelsManagerProxy):
     # Section: Criterions Discovery
     # --------------------------------------------------
 
-    def get_available_criterions(self) -> Dict[str, Dict[str, Any]]:
+    def get_available_criterions(
+        self,
+        print_return: bool = True,
+        return_value: bool = False,
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
         """
         Queries the central registry factory to extract parameter sheets and docstrings compatible with the active model family.
 
@@ -61,34 +66,45 @@ class TrainingProxy(BaseModelsManagerProxy):
         
         # Factory dispatch
         ## Retrieve list of valid criterions from registry database
-        return CriterionsManager.get_available_criterions(model_type=model_type)
+        criterion_info = CriterionsManager.get_available_criterions(model_type=model_type)
+        return present_components_info(
+            criterion_info,
+            title=f"Available Criterions for '{model_type}'",
+            key_label="Criterion",
+            print_return=print_return,
+            return_value=return_value,
+        )
 
     # --------------------------------------------------
     # Section: Training Optimization Loop Execution
     # --------------------------------------------------
 
-    def fit(self, training_config: Dict[str, Any]) -> Dict[str, Any]:
+    def fit(self, training_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Launches the backpropagation optimization sequence on the registered dataset and architecture.
 
         :param training_config: Dictionary specifying the parameters for model optimization.
         :type training_config: Dict[str, Any]
-        :return: Training history logs mapping phases and epochs to metric values.
-        :rtype: Dict[str, Any]
-        :raises ValueError: If active_model or active_dataset is unassigned.
+        :return: Training history entries collected across phases and epochs.
+        :rtype: List[Dict[str, Any]]
+        :raises ValidationError: If active_model or active_dataset is unassigned.
         """
         # Heading 1 (Pre-flight Validation Pass)
         ## Verify that critical training components are actively bound to the wrapper context
         active_model = getattr(self._wrapper, "active_model", None)
         active_dataset = getattr(self._wrapper, "active_dataset", None)
 
-        if not active_model:
-            logger.error("Fit command aborted: Active network model structure is not initialized.")
-            raise ValueError("Execution halted: active_model is missing on the main wrapper.")
+        if active_model is None:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message="Cannot start training because no active model is loaded.",
+            )
 
-        if not active_dataset:
-            logger.error("Fit command aborted: Active streaming dataset is not initialized.")
-            raise ValueError("Execution halted: active_dataset is missing on the main wrapper.")
+        if active_dataset is None:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message="Cannot start training because no active dataset is loaded.",
+            )
 
         # Heading 2 (Loss Criterion Cross-Check Validation)
         ## Consult the criteria manager proxy to verify loss selection alignment
@@ -106,36 +122,28 @@ class TrainingProxy(BaseModelsManagerProxy):
                 pass
 
         if target_loss:
-            try:
-                ### Query the local criterions registry to ensure compatibility
-                compatible_criterions = self.get_available_criterions()
-                if target_loss not in compatible_criterions:
-                    logger.warning(
-                        "Loss criterion '%s' may be incompatible with active model category '%s'.", 
-                        target_loss, 
-                        self.active_model_type
-                    )
-            except Exception as validation_error:
-                ### Non-blocking catch to allow fallback options if criterions discovery is bypassed
-                logger.debug("Bypassed deep criterion verification check. Reason: %s", str(validation_error))
+            compatible_criterions = self.get_available_criterions(
+                print_return=False,
+                return_value=True,
+            ) or {}
+            if target_loss not in compatible_criterions:
+                logger.warning(
+                    "Loss criterion '%s' may be incompatible with active model category '%s'.",
+                    target_loss,
+                    self.active_model_type,
+                )
 
         # Heading 2 (Orchestration Engine Dispatch)
         ## Instantiates a temporary TrainingManager instance bound to the master context
         logger.info("Instantiating execution training manager instance.")
         training_orchestrator = TrainingManager(wrapper_ref=self._wrapper)
 
-        ## Execute performance training loops
-        try:
-            execution_history = training_orchestrator.fit(training_config=training_config)
-            
-            ### Post-training model registration hook
-            #### Re-attach compiled models to high-level interfaces if active model mixin is present
-            if hasattr(self._wrapper, "attach_local_model"):
-                logger.debug("Synchronizing local interface wrappers with updated weights.")
-                self._wrapper.attach_local_model(torch_model=active_model, model_type=self.active_model_type)
+        execution_history = training_orchestrator.fit(training_config=training_config)
 
-            return execution_history
+        ### Post-training model registration hook
+        #### Re-attach compiled models to high-level interfaces if active model mixin is present
+        if hasattr(self._wrapper, "attach_local_model"):
+            logger.debug("Synchronizing local interface wrappers with updated weights.")
+            self._wrapper.attach_local_model(torch_model=active_model, model_type=self.active_model_type)
 
-        except Exception as error:
-            logger.error("Interrupted during neural network model fitting loop execution steps.", exc_info=True)
-            raise error
+        return execution_history

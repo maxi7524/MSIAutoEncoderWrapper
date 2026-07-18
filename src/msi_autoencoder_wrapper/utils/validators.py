@@ -6,11 +6,14 @@ Provides signature reflection and basic filesystem permission verifications.
 import inspect
 import os
 from pathlib import Path
-from typing import List, Tuple, Any, Dict, Type
-from .logger import get_custom_logger
-from .exceptions import ValidationError, ProjectConfigError
+from typing import Any, Dict, List, Optional, Tuple, Type
 
-from pathlib import Path
+from .logger import get_custom_logger
+from .exceptions import (
+    raise_incompatible_interface_error,
+    raise_project_config_error,
+    raise_validation_error,
+)
 
 
 # Logger initialization
@@ -28,7 +31,7 @@ def validate_constructor_kwargs(cls: Type[Any], name: str, kwargs: Dict[str, Any
 
     Inspects the __init__ signature of the target class. If any required arguments
     (those without default values) are missing from the kwargs dictionary, it raises
-    a precise and informative ValueError.
+    a precise and informative project configuration error.
 
     :param cls: The target class type to inspect.
     :type cls: Type[Any]
@@ -36,7 +39,7 @@ def validate_constructor_kwargs(cls: Type[Any], name: str, kwargs: Dict[str, Any
     :type name: str
     :param kwargs: The dictionary of keyword arguments passed for instantiation.
     :type kwargs: Dict[str, Any]
-    :raises ValueError: If one or more required constructor arguments are missing.
+    :raises ProjectConfigError: If required constructor arguments are missing.
     """
     # Signature inspection block
     ## Extract the __init__ method reference from the class object
@@ -73,8 +76,7 @@ def validate_constructor_kwargs(cls: Type[Any], name: str, kwargs: Dict[str, Any
             f"Missing required keyword argument(s): {', '.join([repr(a) for a in missing_args])}. "
             f"Provided arguments: {list(kwargs.keys())}."
         )
-        logger.error("Validation failed for constructor setup of: %s", name)
-        raise ValueError(error_message)
+        raise_project_config_error(context_name=name, message=error_message)
 
 
 def validate_dir_writable(dir_path: Path) -> None:
@@ -83,7 +85,7 @@ def validate_dir_writable(dir_path: Path) -> None:
 
     :param dir_path: Path to the target directory to validate.
     :type dir_path: Path
-    :raises IOError: If the resolved path location is not writable.
+    :raises ValidationError: If the resolved path location is not writable.
     """
     # Path resolution block
     ## Find the closest existing parent directory if the path does not exist yet
@@ -94,9 +96,10 @@ def validate_dir_writable(dir_path: Path) -> None:
     # Permission verification block
     ## Test for write permissions using OS access levels
     if not os.access(current_path, os.W_OK):
-        error_msg = f"Target directory path or parent location is not writable: {dir_path}"
-        logger.error("Write permission verification failed for path: %s", dir_path)
-        raise IOError(error_msg)
+        raise_validation_error(
+            context_name="Filesystem",
+            message=f"Target directory path or parent location is not writable: {dir_path}",
+        )
     
 # =====================================================================
 # Section: Modules components Validators
@@ -131,14 +134,44 @@ def validate_components(items_to_validate: List[Tuple[Any, str]]) -> None:
             missing_items.append(f"Identifier '{name}' [Empty String]")
 
     if missing_items:
-        logger.error("Core component validation failed. Missing components count: %s", len(missing_items))
-        raise ValidationError(missing_items)
+        raise_validation_error(
+            context_name="Components",
+            message="Missing or invalid components: " + ", ".join(missing_items),
+        )
+
+
+def validate_subclass(
+    candidate: Type[Any],
+    expected_base: Type[Any],
+    component_type: str,
+) -> None:
+    """Validate a registered implementation class against its base contract.
+
+    :param candidate: Class submitted for registration.
+    :type candidate: Type[Any]
+    :param expected_base: Required base class.
+    :type expected_base: Type[Any]
+    :param component_type: Human-readable component category.
+    :type component_type: str
+    :raises IncompatibleInterfaceError: If ``candidate`` is not a class or does
+        not inherit from ``expected_base``.
+    """
+    if not inspect.isclass(candidate) or not issubclass(candidate, expected_base):
+        candidate_name = getattr(candidate, "__name__", type(candidate).__name__)
+        raise_incompatible_interface_error(
+            context_name=component_type,
+            message=(
+                f"Implementation '{candidate_name}' must inherit from "
+                f"'{expected_base.__name__}'."
+            ),
+        )
 
 
 def resolve_component(
-    target: Any, 
-    registry: Dict[str, Type], 
+    target: Any,
+    registry: Dict[str, Type[Any]],
     component_type: str,
+    expected_type: Optional[Type[Any]] = None,
     **kwargs: Any
 ) -> Any:
     """
@@ -150,6 +183,8 @@ def resolve_component(
     :type registry: Dict[str, Type]
     :param component_type: Explanatory name of the managed pipeline component for logging.
     :type component_type: str
+    :param expected_type: Optional base class required for classes and instances.
+    :type expected_type: Optional[Type[Any]]
     :param kwargs: Arbitrary initialization parameters passed onto factory constructors.
     :return: Validated instantiated strategy engine type matching structural criteria.
     :rtype: Any
@@ -162,42 +197,47 @@ def resolve_component(
                 f"Requested {component_type} identifier '{target}' is not registered. "
                 f"Available drivers: {list(registry.keys())}"
             )
-            logger.error("Registry lookup failed for type '%s' with key: %s", component_type, target)
-            raise ProjectConfigError(error_msg)
-        
+            raise_project_config_error(context_name=component_type, message=error_msg)
+
+        component_class = registry[target]
+        _validate_component_class(component_class, expected_type, component_type)
+        validate_constructor_kwargs(component_class, target, kwargs)
         logger.debug("Instantiating component driver: %s from registry", target)
-        return registry[target](**kwargs)
+        return component_class(**kwargs)
     
     ## Case 2: Target is already a raw uninstantiated class type reference
     if inspect.isclass(target):
+        _validate_component_class(target, expected_type, component_type)
+        validate_constructor_kwargs(target, target.__name__, kwargs)
         logger.debug("Instantiating component driver via raw class reference: %s", target.__name__)
         return target(**kwargs)
 
     ## Case 3: Target is an already initialized object instance
     if target is not None:
-        ### Type verification to guarantee interface uniformity across all drivers
-        from ..readers.base_reader import MSIBaseReader
-        from ..binners.base_binner import MSIBaseBinner
-        from ..binners.base_inverse import MSIBaseInverseBinner
-
-        expected_types = {
-            "reader": MSIBaseReader,
-            "binner": MSIBaseBinner,
-            "inverse_binner": MSIBaseInverseBinner
-        }
-
-        if component_type in expected_types and not isinstance(target, expected_types[component_type]):
-            user_error_msg = (
-                f"Incompatible instance passed for '{component_type}'. "
-                f"Object of type '{type(target).__name__}' must inherit from '{expected_types[component_type].__name__}' "
-                f"to ensure wrapper method unification. Please fetch the proper adapter wrapper from the library."
+        if expected_type is not None and not isinstance(target, expected_type):
+            raise_incompatible_interface_error(
+                context_name=component_type,
+                message=(
+                    f"Instance of type '{type(target).__name__}' must inherit from "
+                    f"'{expected_type.__name__}'."
+                ),
             )
-            logger.error("Interface validation rejected direct instance for component type: %s", component_type)
-            raise TypeError(user_error_msg)
 
         logger.debug("Direct compatible component instance verified for type '%s'. Bypassing factory initialization.", component_type)
         return target
         
     ### Handle unassigned null property references
-    logger.error("Component resolution aborted: target blueprint for %s is None", component_type)
-    raise ProjectConfigError(f"Target configuration reference for {component_type} cannot be None.")
+    raise_project_config_error(
+        context_name=component_type,
+        message=f"Target configuration reference for {component_type} cannot be None.",
+    )
+
+
+def _validate_component_class(
+    component_class: Type[Any],
+    expected_type: Optional[Type[Any]],
+    component_type: str,
+) -> None:
+    """Validate a resolved component class when a base contract is provided."""
+    if expected_type is not None:
+        validate_subclass(component_class, expected_type, component_type)

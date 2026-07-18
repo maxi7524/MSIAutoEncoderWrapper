@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from ....utils.logger import get_custom_logger
+from ....utils.exceptions import raise_validation_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -134,8 +135,11 @@ class AutoencoderContextInterface:
         self._prepare_execution_environment()
         
         active_dataset = getattr(self._context._wrapper, "active_dataset", None)
-        if not active_dataset:
-            raise RuntimeError("Inference step blocked: Associated master wrapper dataset tracking is missing.")
+        if active_dataset is None:
+            raise_validation_error(
+                context_name="Autoencoder",
+                message="No dataset is associated with the currently loaded model.",
+            )
 
         batch_size = getattr(self._context._wrapper.models_manager, "batch_size", 256)
         loader_params = {
@@ -201,14 +205,23 @@ class AutoencoderContextInterface:
 
         :raises RuntimeError: If dependencies are missing or if the model weights are unoptimized.
         """
-        if not self._architecture:
-            raise RuntimeError("Operation blocked: Underlying neural architecture graph is unassigned.")
+        if self._architecture is None:
+            raise_validation_error(
+                context_name="Autoencoder",
+                message="The neural architecture is not assigned.",
+            )
         
         if not self._is_trained:
-            raise RuntimeError("Operation blocked: Model has not been trained yet. Execute training optimization pass first.")
+            raise_validation_error(
+                context_name="Autoencoder",
+                message="The model has not been trained or loaded with trained weights.",
+            )
             
         if not getattr(self._context, "binner", None) or not getattr(self._context, "inverse_binner", None):
-            raise RuntimeError("Operation blocked: Processing context binning or inverse binning drivers are missing.")
+            raise_validation_error(
+                context_name="Autoencoder",
+                message="The active image context requires binner and inverse binner instances.",
+            )
 
     def _prepare_execution_environment(self) -> str:
         """
