@@ -3,8 +3,10 @@ from pathlib import Path
 import numpy as np
 from typing import Any, Optional, Dict, Tuple, Union
 
+from ..utils.configuration import ConfigurableComponent
 
-class MSIBaseReader(ABC):
+
+class MSIBaseReader(ConfigurableComponent, ABC):
     """
     Abstract Base Class outlining operational requirements for parsing Mass Spectrometry Imaging containers.
     """
@@ -26,15 +28,6 @@ class MSIBaseReader(ABC):
         ## Store the structural active context reference hook to ensure design uniformity
         self.active_context = active_context
 
-
-    def GetConfig(self) -> dict[str, Any]:
-        """
-        Exposes internal parameter dictionaries required for automated pipeline construction.
-
-        :return: Storage configuration definition parameters metadata map.
-        :rtype: dict
-        """
-        return self._config
 
 # --------------------------------------------------
 # Section: Abstract methods
@@ -123,5 +116,3 @@ class MSIBaseReader(ABC):
         :rtype: Dict[str, Any]
         """
         pass
-
-    
