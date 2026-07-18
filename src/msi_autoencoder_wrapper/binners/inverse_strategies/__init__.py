@@ -1,9 +1,5 @@
-import pkgutil
-import importlib
-import sys
+"""Inverse binner strategy registration package."""
 
-# automatic scanning of catalogs and importing all modules 
-for _, module_name, _ in pkgutil.iter_modules(__path__):
-    full_module_name = f"{__name__}.{module_name}"
-    if full_module_name not in sys.modules:
-        importlib.import_module(full_module_name)
+from msi_autoencoder_wrapper.utils.module_search import discover_modules
+
+discover_modules(__name__, recursive=False)

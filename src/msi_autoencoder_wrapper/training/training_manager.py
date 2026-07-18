@@ -82,11 +82,4 @@ class TrainingManager:
             patience_limit=patience
         )
 
-        ## Delegate computation tasks to the high-performance optimization loop runner
-        try:
-            raw_performance_history = trainer_engine.fit(training_config=training_config)
-        except Exception as error:
-            logger.error("Critical operational failure recorded during trainer execution loops steps.", exc_info=True)
-            raise error
-
-        return raw_performance_history
+        return trainer_engine.fit(training_config=training_config)

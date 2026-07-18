@@ -3,6 +3,7 @@ from scipy.stats import binned_statistic
 from ..base_binner import MSIBaseBinner
 from ..binners_manager import BinnerManager
 from typing import Any, Optional
+from ...utils.exceptions import raise_validation_error
 
 
 @BinnerManager.register_binner("LinearBinning")
@@ -28,7 +29,13 @@ class LinearBinning(MSIBaseBinner):
                 resolved_x_max = active_context.reader.GetXMax()
 
         if resolved_x_min is None or resolved_x_max is None:
-            raise ValueError("LinearBinning requires explicit 'x_min' and 'x_max' properties, or an active context reader session.")
+            raise_validation_error(
+                context_name="LinearBinning",
+                message=(
+                    "Explicit 'x_min' and 'x_max' values or an active context reader "
+                    "session are required."
+                ),
+            )
 
         self.x_min = float(resolved_x_min)
         self.x_max = float(resolved_x_max)

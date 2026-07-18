@@ -8,6 +8,7 @@ import torch
 from ...base_criterion import MSIBaseCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
+from .....utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -44,8 +45,10 @@ class MSISobolevLoss(MSIBaseCriterion):
         """
         # Heading 1 (Sobolev High-Order Gradient Discrepancy Pass)
         if "reconstruction" not in model_outputs:
-            logger.error("Evaluation aborted: 'reconstruction' key missing from model outputs.")
-            raise KeyError("SobolevLoss requires 'reconstruction' field in model outputs.")
+            raise_incompatible_interface_error(
+                context_name="SobolevLoss",
+                message="Model outputs must contain a 'reconstruction' tensor.",
+            )
 
         _, original_spectra = batch_data
         reconstructed_spectra = model_outputs["reconstruction"]

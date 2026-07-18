@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional, TYPE_CHECKING
 from torch.utils.data import Dataset
 if TYPE_CHECKING:
-    from ...core.mixins.io.active_context_mixin import ActiveContextProxy
+    from ...core.mixins.active_context.active_context_mixin import ActiveContextProxy
 from ...utils.logger import get_custom_logger
 
 # Logger initialization

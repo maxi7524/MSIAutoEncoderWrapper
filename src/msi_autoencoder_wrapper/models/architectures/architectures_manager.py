@@ -2,16 +2,12 @@
 Central orchestration registry and compilation engine for flexible multi-task model architectures.
 """
 
-import inspect
-import pkgutil
-import importlib
-import sys
-import os
-from typing import Type, Dict, Any, Optional, Union, List
+from typing import Type, Dict, Any, Optional, List
 import torch.nn as nn
 
 from ...utils.logger import get_custom_logger
-from ...utils.validators import validate_constructor_kwargs
+from ...utils.module_search import discover_modules
+from ...utils.validators import resolve_component, validate_subclass
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -47,6 +43,7 @@ class ArchitecturesManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[nn.Module]) -> Type[nn.Module]:
+            validate_subclass(subclass, nn.Module, "ArchitectureRegistry")
             cls._MODEL_REGISTRY[model_type] = subclass
             logger.debug("Registered primary model type container blueprint for: %s", model_type)
             return subclass
@@ -67,6 +64,7 @@ class ArchitecturesManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[nn.Module]) -> Type[nn.Module]:
+            validate_subclass(subclass, nn.Module, "ArchitectureComponentRegistry")
             # Structural lookup provisioning loop
             if model_type not in cls._COMPONENT_REGISTRY:
                 cls._COMPONENT_REGISTRY[model_type] = {}
@@ -119,15 +117,9 @@ class ArchitecturesManager:
         :param kwargs: Arbitrary backend extension footprints preserved for master graph instantiation.
         :return: Completely assembled and initialized PyTorch network module master graph instance.
         :rtype: nn.Module
-        :raises KeyError: If the target model family or any of its requested subcomponents strategies are unregistered.
+        :raises ProjectConfigError: If the model family or a requested component
+            is unregistered, or required constructor parameters are missing.
         """
-        # Master registry verification checkpoint
-        if model_type not in cls._MODEL_REGISTRY:
-            error_msg = f"Master architecture type '{model_type}' not found in model graph registry."
-            logger.error(error_msg)
-            raise KeyError(error_msg)
-
-        master_model_class = cls._MODEL_REGISTRY[model_type]
         resolved_components: Dict[str, nn.Module] = {}
 
         logger.info("Initializing multi-component sub-graph resolution phase for model family: %s", model_type)
@@ -142,20 +134,21 @@ class ArchitecturesManager:
 
             ## Heading 2 (Determine Configuration Node Level)
             ### Check if the current block represents a direct single component or a nested structural collection
-            strategy = setup_ledger.get("strategy") or setup_ledger.get("type") or setup_ledger.get("target")
+            strategy = cls._get_setup_target(setup_ledger)
 
-            if strategy:
+            if strategy is not None:
                 ### Case 1: Direct component configuration block detected
-                if model_type not in cls._COMPONENT_REGISTRY or category not in cls._COMPONENT_REGISTRY[model_type] or strategy not in cls._COMPONENT_REGISTRY[model_type][category]:
-                    error_msg = f"Component strategy '{strategy}' for category '{category}' is unregistered under family '{model_type}'."
-                    logger.error(error_msg)
-                    raise KeyError(error_msg)
-
-                component_class = cls._COMPONENT_REGISTRY[model_type][category][strategy]
+                component_registry = cls._COMPONENT_REGISTRY.get(model_type, {}).get(category, {})
                 params = setup_ledger.get("params", {})
                 
                 logger.info("Instantiating standard component sub-module: Category='%s' using Strategy='%s'.", category, strategy)
-                resolved_components[category] = component_class(**params)
+                resolved_components[category] = resolve_component(
+                    target=strategy,
+                    registry=component_registry,
+                    component_type=f"{model_type}.{category}",
+                    expected_type=nn.Module,
+                    **params,
+                )
 
             else:
                 ### Case 2: Nested sub-components collection dictionary detected (e.g., multi-task heads)
@@ -166,34 +159,47 @@ class ArchitecturesManager:
                     if not isinstance(sub_setup, dict):
                         continue
 
-                    sub_strategy = sub_setup.get("strategy") or sub_setup.get("type") or sub_setup.get("target")
+                    sub_strategy = cls._get_setup_target(sub_setup)
                     sub_params = sub_setup.get("params", {})
 
-                    if not sub_strategy:
+                    if sub_strategy is None:
                         logger.error("Subcomponent resolution pass aborted: Missing strategy descriptor inside collection '%s' for key: '%s'.", category, sub_key)
                         continue
 
-                    if model_type not in cls._COMPONENT_REGISTRY or category not in cls._COMPONENT_REGISTRY[model_type] or sub_strategy not in cls._COMPONENT_REGISTRY[model_type][category]:
-                        error_msg = f"Nested strategy '{sub_strategy}' under collection '{category}' is unregistered for family '{model_type}'."
-                        logger.error(error_msg)
-                        raise KeyError(error_msg)
-
-                    sub_component_class = cls._COMPONENT_REGISTRY[model_type][category][sub_strategy]
-                    
                     logger.info("Instantiating nested sub-module: Collection='%s', Key='%s' using Strategy='%s'.", category, sub_key, sub_strategy)
-                    resolved_sub_collection[sub_key] = sub_component_class(**sub_params)
+                    component_registry = cls._COMPONENT_REGISTRY.get(model_type, {}).get(category, {})
+                    resolved_sub_collection[sub_key] = resolve_component(
+                        target=sub_strategy,
+                        registry=component_registry,
+                        component_type=f"{model_type}.{category}",
+                        expected_type=nn.Module,
+                        **sub_params,
+                    )
 
                 resolved_components[category] = resolved_sub_collection
 
         # Graph aggregation execution pass
         ## Instantiate the structural master graph wrapper passing the fully populated resolved components matrix
         logger.info("Injecting resolved computational components ledger dictionary into the master architecture graph.")
-        compiled_model = master_model_class(
+        compiled_model = resolve_component(
+            target=model_type,
+            registry=cls._MODEL_REGISTRY,
+            component_type="Architecture",
+            expected_type=nn.Module,
             resolved_components=resolved_components,
-            **kwargs
+            **kwargs,
         )
 
         return compiled_model
+
+    @staticmethod
+    def _get_setup_target(setup: Dict[str, Any]) -> Any:
+        """Return the first explicitly configured component target without truth testing it."""
+        for key in ("target", "strategy", "type"):
+            target = setup.get(key)
+            if target is not None:
+                return target
+        return None
 
     # --------------------------------------------------
     # Section: Recursive Auto-Discovery Loop
@@ -211,28 +217,6 @@ class ArchitecturesManager:
         :param package_name: Hierarchical module tracking string index root name, defaults to None.
         :type package_name: Optional[str]
         """
-        # Dynamic self-resolution fallback loop
-        if package_path is None or package_name is None:
-            ## Extract module parameters corresponding to the package root container
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            package_path = [base_dir]
-            
-            ### Resolve parent package hierarchical dot token definition
-            current_module = cls.__module__
-            if "." in current_module:
-                package_name = ".".join(current_module.split(".")[:-1])
-            else:
-                package_name = current_module
-                
-            logger.debug("Architectures discovery system resolved baseline roots automatically: %s", package_name)
-
-        # Skanowanie pakietów składowych
-        ## Dynamic extraction of submodules using standard pkgutil walkers
-        for _, module_name, _ in pkgutil.walk_packages(package_path, package_name + "."):
-            ### Explicit boundary enforcement to bypass development blueprint schemas template folders
-            if "schema" in module_name or module_name.split(".")[-1].startswith("_"):
-                continue
-                
-            if module_name not in sys.modules:
-                logger.debug("Auto-discovery framework importing operational architecture module: %s", module_name)
-                importlib.import_module(module_name)
+        del package_path
+        package_root = package_name or __package__
+        discover_modules(package_root, excluded_parts={"schema"})

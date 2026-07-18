@@ -13,3 +13,4 @@ __pycache__
 .pytest_cache
 .vscode
 .to_delete
+.pym2aia_prefs.xml

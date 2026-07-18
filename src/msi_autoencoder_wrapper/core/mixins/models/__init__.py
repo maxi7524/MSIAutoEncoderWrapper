@@ -1,1 +1,0 @@
-from .models_manager_mixin import *

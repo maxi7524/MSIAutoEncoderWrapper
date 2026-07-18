@@ -6,6 +6,7 @@ import functools
 import inspect
 from typing import Any, Callable, Optional
 from ...utils.logger import get_custom_logger
+from ...utils.exceptions import raise_validation_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -34,8 +35,10 @@ def manage_image_context(func: Callable[..., Any]) -> Callable[..., Any]:
         workspace = getattr(wrapper_ref, "workspace", None)
         
         if not workspace:
-            logger.error("Context synchronization aborted: Bound workspace proxy is missing from instance.")
-            raise AttributeError("Execution blocked: Target instance does not possess an active workspace proxy.")
+            raise_validation_error(
+                context_name="ImageContext",
+                message="The target instance does not expose a workspace proxy.",
+            )
 
         # Signature inspection and argument extraction
         ## Bind incoming positional and keyword arguments to locate the image parameter token
@@ -54,14 +57,16 @@ def manage_image_context(func: Callable[..., Any]) -> Callable[..., Any]:
         ## Verify if a valid context was successfully established or if it was left unassigned
         if getattr(workspace, "active_img_name", None) is None:
             ### Abort execution if both the explicit parameter and workspace defaults are missing
-            logger.error("Context resolution failed: Workspace state remained unassigned after resolution attempt.")
-            raise ValueError("Execution blocked: Missing required image context parameters, and no default is configured.")
+            raise_validation_error(
+                context_name="ImageContext",
+                message="No image was provided and no default image is configured.",
+            )
 
         # Protected operational execution block
         try:
             logger.debug("Executing method '%s' under verified context: %s", func.__name__, workspace.active_img_name)
             return func(instance, *args, **kwargs)
-        except Exception as error:
+        except Exception:
             ### Capture runtime system exceptions to initiate emergency pipeline state cleanup
             logger.error("Exception intercepted in '%s'. Triggering active reader context reset.", func.__name__, exc_info=True)
             
@@ -70,11 +75,7 @@ def manage_image_context(func: Callable[..., Any]) -> Callable[..., Any]:
             if active_context:
                 if hasattr(active_context, "clear_active_context"):
                     active_context.clear_active_context()
-                elif hasattr(active_context, "clear_active_context"):
-                    active_context.clear_active_context()
-            
-            ### Propagate the original error up the processing execution tree
-            raise error
+            raise
         finally:
             ### Clean up temporary workspace structural states to prevent context leaks
             if hasattr(workspace, "clear_active_context"):
