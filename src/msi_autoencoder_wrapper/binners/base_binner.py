@@ -2,8 +2,10 @@ from abc import ABC, abstractmethod
 import numpy as np
 from typing import Any, Optional
 
+from ..utils.configuration import ConfigurableComponent
 
-class MSIBaseBinner(ABC):
+
+class MSIBaseBinner(ConfigurableComponent, ABC):
     """
     Abstract Base Class establishing structural interface benchmarks for forward spectral binning algorithms.
     """
@@ -17,10 +19,6 @@ class MSIBaseBinner(ABC):
         """
         self._config: dict[str, Any] = {}
         self.active_context = active_context
-
-    def GetConfig(self) -> dict[str, Any]:
-        """Exposes configuration parameter properties required for serialization tasks."""
-        return self._config
 
     @abstractmethod
     def __call__(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:

@@ -42,23 +42,23 @@ class HelpersProxy(BaseWorkspaceProxy):
         
         lines = [
             f"{self.project_path_resolved}/",
-            f"├── {self._layout['imgs']}/",
+            f"├── {self._layout['imgs_dir']}/",
             f"│   └── {img_part}.imzML / {img_part}.ibd",
-            f"└── {self._layout['models']}/",
+            f"└── {self._layout['models_root']}/",
             f"    ├── {GLOBAL_CONTEXT_KEY}/",
             f"    │   └── {model_part}/ (Global models layout)",
-            f"    │       ├── {self._layout['config']}/",
+            f"    │       ├── {self._layout['model_config_subdir']}/",
             f"    │       │   ├── config.json",
             f"    │       │   ├── weights.pt",
             f"    │       │   └── history.json",
-            f"    │       └── {self._layout['latent']}/",
+            f"    │       └── {self._layout['model_latent_subdir']}/",
             f"    └── {img_part}/ (Local models layout)",
             f"        └── {model_part}/",
-            f"            ├── {self._layout['config']}/",
+            f"            ├── {self._layout['model_config_subdir']}/",
             f"            │   ├── config.json",
             f"            │   ├── weights.pt",
             f"            │   └── history.json",
-            f"            └── {self._layout['latent']}/"
+            f"            └── {self._layout['model_latent_subdir']}/"
         ]
         return "\n".join(lines)
 

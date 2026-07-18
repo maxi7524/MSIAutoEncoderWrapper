@@ -8,30 +8,43 @@ import torch
 import torch.nn as nn
 
 from ...utils.logger import get_custom_logger
+from ...utils.configuration import ConfigurableComponent, get_component_config
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-class MSIBaseMasterArchitecture(nn.Module, ABC):
+class MSIBaseMasterArchitecture(nn.Module, ConfigurableComponent, ABC):
     """
     Abstract Base Class establishing the definitive behavioral and operational contract 
     for all multi-task processing networks inside the architecture ecosystem.
     """
 
-    def __init__(self, resolved_components: Dict[str, nn.Module], **kwargs: Any) -> None:
+    def __init__(self, resolved_components: Dict[str, Any], **kwargs: Any) -> None:
         """
         Initializes the base master network, anchoring components configurations and metrics parameters.
 
         :param resolved_components: Mapping configuration pairing subcomponent keys to instantiated nn.Module layers.
-        :type resolved_components: Dict[str, nn.Module]
+        :type resolved_components: Dict[str, Any]
         :param kwargs: Arbitrary backend extension footprints preserved for downstream model frameworks.
         """
         super().__init__()
         
         # State tracking block
         ## Anchor internal parameters storage dictionaries
-        self._config: Dict[str, Any] = {}
+        component_configs: Dict[str, Any] = {}
+        for name, component in resolved_components.items():
+            if isinstance(component, nn.Module):
+                component_configs[name] = get_component_config(component)
+            elif isinstance(component, dict):
+                component_configs[name] = {
+                    child_name: get_component_config(child)
+                    for child_name, child in component.items()
+                }
+        self._config = {
+            "parameters": kwargs,
+            "components": component_configs,
+        }
         
         logger.debug("Instantiating master neural network architecture framework base layer.")
 

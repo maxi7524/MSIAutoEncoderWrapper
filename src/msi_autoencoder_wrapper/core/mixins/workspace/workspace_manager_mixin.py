@@ -62,7 +62,7 @@ class WorkspaceMixin:
     ) -> None:
         # Configuration setup
         ## Resolve layout dictionary parameters using legacy layout keys
-        resolved_layout = layout if layout is not None else DEFAULT_LAYOUT
+        resolved_layout = {**DEFAULT_LAYOUT, **(layout or {})}
         
         ## Automatically create project path folder if flagged and missing
         if auto_create_dirs:
