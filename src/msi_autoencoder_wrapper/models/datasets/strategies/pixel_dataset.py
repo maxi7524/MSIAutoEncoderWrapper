@@ -2,7 +2,7 @@
 Concrete dataset strategy executing single-pixel spectra mapping sequences driven by an active context.
 """
 
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any, Optional, Literal
 import torch
 import numpy as np
 
@@ -22,14 +22,23 @@ class PixelDataset(MSIBaseDataset):
     Concrete single-pixel sampling strategy that pulls raw arrays and maps them onto uniform grids.
     """
 
-    def __init__(self, active_context: Optional[ActiveContextProxy] = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        active_context: Optional[ActiveContextProxy] = None,
+        source: Literal["image", "latent"] = "image",
+        **kwargs: Any,
+    ) -> None:
         """
         Constructs the independent pixel sampling dataset pipeline layer.
 
         :param active_context: Active execution session proxy tracking live datasets.
         :type active_context: Optional[ActiveContextProxy]
+        :param source: Image or latent data source.
+        :type source: Literal["image", "latent"]
         """
         super().__init__(active_context=active_context, **kwargs)
+        self.source = source
+        self._config = {"source": source}
 
     def __len__(self) -> int:
         """
@@ -40,13 +49,13 @@ class PixelDataset(MSIBaseDataset):
         :raises ValueError: If the attached active context reader session is unassigned.
         """
         # Session state verification
-        if not self.active_context or not getattr(self.active_context, "reader", None):
+        if not self.active_context:
             raise_validation_error(
                 context_name="PixelDataset",
                 message="The active image context has no reader instance.",
             )
             
-        return self.active_context.reader.GetNumberOfSpectra()
+        return self.active_context.get_data_reader(self.source).GetNumberOfSpectra()
 
     def __getitem__(self, idx: int) -> Tuple[int, torch.Tensor]:
         """
@@ -58,11 +67,15 @@ class PixelDataset(MSIBaseDataset):
         :rtype: Tuple[int, torch.Tensor]
         """
         # Context extraction layer
-        reader = self.active_context.reader
-        binner = self.active_context.binner
+        reader = self.active_context.get_data_reader(self.source)
 
         # Read raw variables arrays from data drivers
         xs, ys = reader.GetSpectrum(idx)
+
+        if self.source == "latent":
+            return idx, torch.tensor(ys, dtype=torch.float32)
+
+        binner = self.active_context.binner
 
         # Transformation execution pipeline block
         try:

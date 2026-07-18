@@ -172,6 +172,7 @@ class IoModelsProxy(BaseWorkspaceProxy):
             image_config = self._wrapper.context_manager.get_context_config(context_name)
         consolidated_config = {
             "schema_version": 1,
+            "coordinate_order": self._wrapper.coordinate_order,
             "storage_context": {
                 "scope": "global_model" if context_name == GLOBAL_CONTEXT_KEY else "local_image",
                 "key": context_name,
