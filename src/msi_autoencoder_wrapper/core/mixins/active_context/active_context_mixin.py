@@ -37,7 +37,6 @@ class ActiveContextProxy:
         self._cached_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
-        self._autoencoder_interface: Optional[AutoencoderContextInterface] = None
 
     # --------------------------------------------------
     # Section: Lazy Pipeline Resolution
@@ -92,7 +91,6 @@ class ActiveContextProxy:
             self._cached_reader = img_bucket.get("reader")
             self._cached_binner = img_bucket.get("binner")
             self._cached_inverse_binner = img_bucket.get("inverse_binner")
-            self._autoencoder_interface = img_bucket.get("autoencoder")
         else:
             logger.error("Active reader mapping failed: No reader configuration has been recorded for image context '%s'", current_target)
             raise_validation_error(
@@ -142,12 +140,8 @@ class ActiveContextProxy:
         :return: Autoencoder wrapper operational interface, or None if another model family is active.
         :rtype: Optional[AutoencoderContextInterface]
         """
-        if self._autoencoder_interface is None:
-            try:
-                self._resolve_active_pipeline()
-            except Exception:
-                pass
-        return self._autoencoder_interface
+        models_manager = getattr(self._wrapper, "models_manager", None)
+        return models_manager.autoencoder if models_manager is not None else None
 
     # --------------------------------------------------
     # Section: Model Capturing and Attachment
@@ -162,23 +156,10 @@ class ActiveContextProxy:
         :param model_type: Identity token family string defining the model class layout rules.
         :type model_type: str
         """
-        # Heading 2 (Model attachment evaluation)
-        self._autoencoder_interface = None
-
-        if model_type == "autoencoder":
-            logger.info("Active model capture trace: Building high-level Autoencoder proxy execution interface.")
-            self._autoencoder_interface = AutoencoderContextInterface(torch_model=torch_model, active_context=self)
-            
-            # Sync with ContextManager config ledger
-            ## Dynamically update ledger dictionary to persist this instance across context switches
-            current_target = self._instantiated_image_key or getattr(self._wrapper, "active_image_key", None)
-            if current_target:
-                manager = getattr(self._wrapper, "context_manager", None)
-                if manager and current_target in manager.config_ledger:
-                    manager.config_ledger[current_target]["autoencoder"] = self._autoencoder_interface
-                    logger.debug("Successfully saved local autoencoder interface in context ledger for image: %s", current_target)
-        else:
-            logger.debug("Active model capture trace: Applied model category '%s' bypasses context local proxying setups.", model_type)
+        self._wrapper.models_manager.attach_model(
+            torch_model=torch_model,
+            model_type=model_type,
+        )
 
     # --------------------------------------------------
     # Section: Context Teardown and Cleanup
@@ -193,7 +174,6 @@ class ActiveContextProxy:
         self._cached_reader = None
         self._cached_binner = None
         self._cached_inverse_binner = None
-        self._autoencoder_interface = None
 
 
 class ActiveContextMixin:
