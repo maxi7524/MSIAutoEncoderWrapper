@@ -143,10 +143,6 @@ class TrainingProxy(BaseModelsManagerProxy):
         execution_history = training_orchestrator.fit(training_config=training_config)
         self._training_history = execution_history
 
-        ### Post-training model registration hook
-        #### Re-attach compiled models to high-level interfaces if active model mixin is present
-        if hasattr(self._wrapper, "attach_local_model"):
-            logger.debug("Synchronizing local interface wrappers with updated weights.")
-            self._wrapper.attach_local_model(torch_model=active_model, model_type=self.active_model_type)
+        self.mark_model_trained()
 
         return execution_history

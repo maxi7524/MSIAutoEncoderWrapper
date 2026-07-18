@@ -10,12 +10,9 @@ import torch
 
 from msi_autoencoder_wrapper.binners.binners_manager import BinnerManager
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
-from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
-    ArchitecturesManager,
-)
 from msi_autoencoder_wrapper.utils.exceptions import WorkspaceConfigError
 from msi_autoencoder_wrapper.workspace.model_store import ModelStore
-from tests.mocks.components import MockMSIReader
+from tests.mocks.components import MockMSIReader, build_small_autoencoder
 
 
 LAYOUT = {
@@ -26,41 +23,10 @@ LAYOUT = {
 }
 
 
-def _small_autoencoder() -> torch.nn.Module:
-    """Build a small configured model suitable for persistence tests."""
-    ArchitecturesManager.discover_architectures()
-    return ArchitecturesManager.build_model(
-        "autoencoder",
-        {
-            "encoder": {
-                "strategy": "CNNEncoder",
-                "params": {
-                    "input_dim": 32,
-                    "latent_dim": 4,
-                    "channels": [1, 2],
-                    "kernels": [3],
-                    "strides": [2],
-                    "spatial_dims": [32, 15],
-                },
-            },
-            "decoder": {
-                "strategy": "CNNDecoder",
-                "params": {
-                    "latent_dim": 4,
-                    "channels": [1, 2],
-                    "kernels": [3],
-                    "strides": [2],
-                    "spatial_dims": [32, 15],
-                },
-            },
-        },
-    )
-
-
 def test_model_store_defaults_to_json_and_weights(tmp_path: Path) -> None:
     """The default representation contains configuration and safe state weights."""
     store = ModelStore(tmp_path, LAYOUT)
-    model = _small_autoencoder()
+    model = build_small_autoencoder()
 
     model_dir = store.save_model(
         context_name="image-a",
@@ -81,7 +47,7 @@ def test_model_store_defaults_to_json_and_weights(tmp_path: Path) -> None:
 def test_complete_model_folder_export_is_explicit(tmp_path: Path) -> None:
     """Explicit export copies configuration, weights, history, and latent artifacts."""
     store = ModelStore(tmp_path / "workspace", LAYOUT)
-    model = _small_autoencoder()
+    model = build_small_autoencoder()
     model_dir = store.save_model(
         context_name="image-a",
         model_name="autoencoder-a",
@@ -127,7 +93,7 @@ def test_workspace_save_model_keeps_image_and_loaded_model_contexts_separate(
     wrapper.context_manager.set_binner(binner, str(msi_fixture_path))
     wrapper.workspace.set_active_image(str(msi_fixture_path))
 
-    wrapper.active_model = _small_autoencoder()
+    wrapper.active_model = build_small_autoencoder()
     wrapper.models_manager.active_model_type = "autoencoder"
     wrapper.models_manager._active_model_name = "portable-ae"
 
