@@ -10,6 +10,7 @@ import torch.nn as nn
 # Base class and factory imports
 from .base_models_manager_proxy import BaseModelsManagerProxy
 from .....models.architectures.architectures_manager import ArchitecturesManager
+from .....models.datasets.dataset_manager import DatasetManager
 
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
@@ -33,6 +34,8 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         Initializes the architecture manager proxy.
         """
         super().__init__(*args, **kwargs)
+
+        ArchitecturesManager.discover_architectures()
 
     # --------------------------------------------------
     # Section: Strategy Discovery
@@ -248,36 +251,54 @@ class ArchitectureProxy(BaseModelsManagerProxy):
 
     def set_component(self, category: str, name: str, **kwargs: Any) -> None:
         """
-        Buffers structural subcomponent blueprints to build the final model assembly.
+        Registers a specific structural subcomponent configuration within the building buffer.
 
-        :param category: Target component classification category string key.
+        :param category: The architectural category designation (e.g., 'encoder', 'decoder').
         :type category: str
-        :param name: Strategy name registered within the specific sub-registry.
+        :param name: The identifier token of the strategy to instantiate.
         :type name: str
-        :param kwargs: Context arguments used during component instantiations.
+        :param kwargs: Arbitrary initialization parameters passed to the component constructor.
         :type kwargs: Any
+        :raises ValidationError: If the active model type is unset, or if category/strategy is unregistered.
         """
-        # Category validation
-        if category not in ArchitecturesManager._COMPONENT_REGISTRY:
+        # Active state validation
+        ## Ensure the active model type is configured
+        if not self.active_model_type:
             raise_validation_error(
                 context_name="ModelsManager",
-                message=f"Category '{category}' is unregistered. Cannot buffer component."
+                message="Active model type is not set. Please select a model type or apply a preset first."
+            )
+
+        # Category validation
+        ## Ensure the active model family is registered
+        if self.active_model_type not in ArchitecturesManager._COMPONENT_REGISTRY:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message=f"Model type '{self.active_model_type}' is unregistered within ArchitecturesManager."
+            )
+
+        ## Ensure the requested category belongs to the active model type
+        if category not in ArchitecturesManager._COMPONENT_REGISTRY[self.active_model_type]:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message=f"Category '{category}' is unregistered for model type '{self.active_model_type}'."
             )
 
         # Strategy verification
-        if name not in ArchitecturesManager._COMPONENT_REGISTRY[category]:
+        ## Ensure the specific strategy is registered under the given category
+        if name not in ArchitecturesManager._COMPONENT_REGISTRY[self.active_model_type][category]:
             raise_validation_error(
                 context_name="ModelsManager",
-                message=f"Component name '{name}' is unregistered within category '{category}'."
+                message=f"Strategy '{name}' is unregistered under category '{category}' for model type '{self.active_model_type}'."
             )
 
-        # Blueprint registration
-        ## Add component structure metadata to local builder buffer maps
+        # Stateful buffer updates
+        ## Store the components configuration parameters inside the centralized shared buffer
         self._building_buffer[category] = {
             "strategy": name,
             "kwargs": kwargs
         }
-        logger.debug("Buffered structural block in category %s: %s", category, name)
+        logger.debug("Buffered component strategy allocation: category='%s', strategy='%s'", category, name)
 
     def set_model_preset(self, name: str, **kwargs: Any) -> None:
         """
@@ -372,40 +393,73 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         :type run_validation_pass: bool
         :return: Completed and compiled PyTorch nn.Module object.
         :rtype: nn.Module
+        :raises ValidationError: If the active model family type is unassigned or compilation fails.
         """
-        # Check buffer states
-        if "model" not in self._building_buffer:
+        # Active state validation
+        ## Ensure the active model family type is configured
+        if not self.active_model_type:
             raise_model_initialization_error(
                 model_name="Unassigned",
-                message="Cannot compile model graph: No master model strategy has been set."
+                message="Cannot compile model graph: No active model family has been set."
             )
 
         logger.info("Initializing PyTorch network compilation sequences from buffered blueprints.")
 
         # Architecture synthesis
         try:
-            ## Extract blueprint details and parent classes
-            model_info = self._building_buffer["model"]
-            compiled_dataset = getattr(self._wrapper, "active_dataset", None)
-
             ## Consolidate active parameters and component dictionaries
-            assembly_kwargs = {**model_info["kwargs"]}
+            components_setup: Dict[str, Any] = {}
+            model_kwargs: Dict[str, Any] = {}
+            
+            ### Extract general model hyperparameters if explicitly set in buffer
+            if "model" in self._building_buffer:
+                model_kwargs.update(self._building_buffer["model"].get("kwargs", {}))
+            
+            ### Extract structural components using correct dictionary interface mapping kwargs -> params
             for key in ["encoder", "decoder", "head", "projector"]:
                 if key in self._building_buffer:
-                    assembly_kwargs[key] = self._building_buffer[key]
+                    components_setup[key] = {
+                        "strategy": self._building_buffer[key].get("strategy"),
+                        "params": self._building_buffer[key].get("kwargs", {})
+                    }
 
-            ## Instantiate network through builder orchestration pass
-            manager_instance = ArchitecturesManager()
-            compiled_network = manager_instance.build_architecture(
-                model_type=model_info["type"],
-                model_strategy=model_info["strategy"],
-                **assembly_kwargs
+            ## Instantiate network through classmethod builder orchestration pass
+            compiled_network = ArchitecturesManager.build_model(
+                model_type=self.active_model_type,
+                components_setup=components_setup,
+                **model_kwargs
             )
+            
         except Exception as error:
             logger.error("Failed to construct network layers graph from blueprints.", exc_info=True)
             raise_model_initialization_error(
                 model_name="Assembly",
                 message=f"Construct execution failure: {error}"
+            )
+
+        # Dataset initialization and layout mapping pass
+        ## Extract active context reference from parent wrapper
+        active_context = getattr(self._wrapper, "active_context", None)
+        
+        ## Instantiate the concrete dataset strategy tied explicitly to this context
+        dataset_blueprint = self._building_buffer.get("dataset", {})
+        dataset_name = dataset_blueprint.get("strategy") or self._active_dataset_name or "PixelDataset"
+        dataset_kwargs = dataset_blueprint.get("kwargs", {}).copy()
+
+        logger.info("Compiling and binding dataset strategy: %s to the active model graph.", dataset_name)
+        
+        try:
+            ## Invoke DatasetManager factory, passing the vital active_context
+            compiled_dataset = DatasetManager.get_dataset(
+                name=dataset_name,
+                active_context=active_context,
+                **dataset_kwargs
+            )
+        except Exception as error:
+            logger.error("Failed to instantiate dataset via DatasetManager.", exc_info=True)
+            raise_model_initialization_error(
+                model_name="Dataset",
+                message=f"Dataset resolution failure: {error}"
             )
 
         # Dimensional checking validation
@@ -429,7 +483,7 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                 except Exception as error:
                     logger.error("Forward execution simulation rejected: Underlying components dimensions mismatch.", exc_info=True)
                     raise_model_initialization_error(
-                        model_name=model_info["strategy"],
+                        model_name=self.active_model_type,
                         message=f"Model graph compilation rejected. Forward pass validation failure: {error}"
                     )
 

@@ -54,6 +54,21 @@ class ActiveContextProxy:
         if current_target is None:
             current_target = getattr(self._wrapper.workspace, "active_img_name", None)
 
+        # Automated workspace fallback
+        ## If no active image key is found, attempt to automatically trigger the workspace helper fallback
+        if current_target is None and hasattr(self._wrapper, "workspace"):
+            workspace_proxy = self._wrapper.workspace
+            default_img = getattr(workspace_proxy, "default_img_name", None)
+            
+            if default_img is not None:
+                logger.info(
+                    "No active image set. Automatically resolving default workspace context: %s", 
+                    default_img
+                )
+                ### Trigger set_active_image(None) which internally falls back to the default image name
+                workspace_proxy.set_active_image(None)
+                current_target = getattr(workspace_proxy, "active_img_name", None)
+
         if current_target is None:
             logger.error("Active pipeline resolution failed: No active image key context has been set.")
             raise_validation_error(
@@ -71,7 +86,7 @@ class ActiveContextProxy:
             )
 
         if current_target in manager.config_ledger:
-            ## Heading 2 (Ledger mapping and caching)
+            ## Ledger mapping and caching
             ### Load reader, binner, and optional local model instances from ledger registry
             img_bucket = manager.config_ledger[current_target]
             self._cached_reader = img_bucket.get("reader")

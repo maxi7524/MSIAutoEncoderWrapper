@@ -37,6 +37,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
     # --------------------------------------------------
     # Subsection: Single image setters
     # --------------------------------------------------
+    #TODO - Here is bug, even if img does not exists it gots accepted and later we obtain error because of it 
 
     def set_active_image(self, img_name_or_path: Optional[str] = None) -> None:
         """
@@ -73,7 +74,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
             self._active_img_custom_path = None
             logger.info("Active image context mapped by index key: %s", self.active_img_name)
 
-    def set_default_image(self, img_name_or_path: str) -> None:
+    def set_default_image_path(self, img_name_or_path: str) -> None:
         """
         Defines the default fallback image configuration to prevent repetitive setup calls.
 
@@ -155,7 +156,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         
         ## Otherwise, build path targeting the internal default workspace structure
         logger.debug("Resolving internal workspace dataset path for: %s", img_name)
-        return self.project_path_resolved / self._layout["imgs"] / f"{img_name}{suffix}"
+        return self.project_path_resolved / self._layout["imgs_dir"] / f"{img_name}{suffix}"
     
     ## Helper 1: Resolve incoming path or identifier token
     def _resolve_incoming_path(self, img_name_or_path: Optional[Union[str, Path]]) -> Tuple[Optional[str], Optional[Path]]:
@@ -192,12 +193,49 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
             custom_path = None
 
         return img_name, custom_path
+    
+    def _resolve_and_verify_image_file(self, img_name_or_path: str) -> Path:
+        """
+        Resolves a raw name or path string to an absolute verified Path inside the imgs directory.
+        Supports resolution with or without the '.imzML' extension and triggers an error if missing.
+
+        :param img_name_or_path: Raw string identifier or filename.
+        :type img_name_or_path: str
+        :return: Absolute verified Path pointing to the existing file.
+        :rtype: Path
+        """
+        ## Obtain raw images directory path
+        imgs_dir = self.get_imgs_dir()
+        input_path = Path(img_name_or_path)
+
+        ## Rule 1: If an absolute path is provided directly, target it; otherwise, anchor it to imgs_dir
+        target_file = input_path if input_path.is_absolute() else imgs_dir / input_path
+
+        ## Rule 2: If the exact file path exists, return it immediately
+        if target_file.is_file():
+            return target_file
+
+        ## Rule 3: If not found, try appending default extensions (e.g., .imzML)
+        if not target_file.suffix:
+            fallback_file = target_file.with_suffix(".imzML")
+            if fallback_file.is_file():
+                return fallback_file
+
+        ## Fallback: Raise strict workspace error since the image file cannot be verified on disk
+        logger.error("Failed to locate target image file on storage system: %s", img_name_or_path)
+        raise_workspace_error(
+            context_name="WorkspaceValidation",
+            message=(
+                f"Image file '{img_name_or_path}' does not exist inside the workspace directory "
+                f"'{imgs_dir}' or cannot be resolved."
+            )
+        )
 
     # --------------------------------------------------
     # Subsection: Single image getters
     # --------------------------------------------------
 
-    def get_active_image_path(self, suffix: str = ".imzML") -> Optional[Path]:
+    def get_active_image_file_path(self, suffix: str = ".imzML") -> Optional[Path]:
         """
         Calculates the absolute file path targeting the currently active image context file.
 
@@ -226,6 +264,23 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
     # Subsection: Model path getters
     # --------------------------------------------------
 
+    def get_imgs_dir(self) -> Path:
+        """
+        Calculates the absolute path to the raw images workspace directory.
+        Automatically provisions the directory if auto_create_dirs is enabled.
+
+        :return: Path to the imgs folder.
+        :rtype: Path
+        """
+        ## Retrieve absolute imgs path from restored legacy key
+        target_path = self.project_path_resolved / self._layout["imgs_dir"]
+
+        if self.auto_create_dirs and not target_path.exists():
+            logger.info("Auto-creating missing images directory: %s", target_path)
+            target_path.mkdir(parents=True, exist_ok=True)
+
+        return target_path
+
     def get_models_root(self) -> Path:
         """
         Calculates the absolute root directory holding all model representations.
@@ -237,51 +292,72 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
 
     def get_model_dir(self, img_name: str, model_name: str) -> Path:
         """
-        Calculates the path to a specific model workspace directory, enforcing the new structure:
-        models/<img_name>/<model_name> or models/global/<model_name>.
+        Calculates the absolute path targeting a specific model and image context.
+        Supports both global models and inverted context structures.
 
-        :param img_name: Name of the image context ("global" for global models).
+        :param img_name: The target image context key or GLOBAL_CONTEXT_KEY.
         :type img_name: str
-        :param model_name: Name of the target model architecture instance.
+        :param model_name: Name of the target model instance.
         :type model_name: str
-        :return: Path to the specific model directory.
+        :return: Resolved Path to the configuration and state directory.
         :rtype: Path
         """
-        # Directory resolution switch
-        ## Differentiate between local context models and centralized global models using the module constant
-        if img_name.lower() == GLOBAL_CONTEXT_KEY:
-            return self.get_models_root() / GLOBAL_CONTEXT_KEY / model_name
-        
-        return self.get_models_root() / img_name / model_name
+        ## Base models directory selection
+        models_base = self.project_path_resolved / self._layout["models_root"]
+
+        ## Build inverted hierarchy: models / <img_name> / <model_name>
+        if img_name == GLOBAL_CONTEXT_KEY:
+            target_path = models_base / GLOBAL_CONTEXT_KEY / model_name
+        else:
+            target_path = models_base / img_name / model_name
+
+        if self.auto_create_dirs and not target_path.exists():
+            ## Perform automated provisioning of missing structures
+            logger.info("Auto-creating missing model path directory: %s", target_path)
+            target_path.mkdir(parents=True, exist_ok=True)
+
+        return target_path
 
     def get_config_dir(self, img_name: str, model_name: str) -> Path:
         """
-        Calculates the path to the configuration directory associated with the target model.
+        Calculates the path to the config subdirectory under the inverted layout.
 
-        :param img_name: Name of the image context ("global" for global models).
+        :param img_name: Name of the active image context.
         :type img_name: str
-        :param model_name: Name of the target model architecture instance.
+        :param model_name: Name of the target model.
         :type model_name: str
-        :return: Path to the nested configuration directory.
+        :return: Resolved Path to the config directory.
         :rtype: Path
         """
-        # Path compilation with structural dictionary key
-        return self.get_model_dir(img_name=img_name, model_name=model_name) / self._layout["config"]
+        model_dir = self.get_model_dir(img_name=img_name, model_name=model_name)
+        target_path = model_dir / self._layout["model_config_subdir"]
+
+        if self.auto_create_dirs and not target_path.exists():
+            logger.debug("Auto-creating config subdirectory: %s", target_path)
+            target_path.mkdir(parents=True, exist_ok=True)
+
+        return target_path
 
     def get_latent_dir(self, img_name: str, model_name: str) -> Path:
         """
-        Calculates the path to the latent space storage directory associated with the target model.
+        Calculates the path to the latent space subdirectory under the inverted layout.
 
-        :param img_name: Name of the image context ("global" for global models).
+        :param img_name: Name of the active image context.
         :type img_name: str
-        :param model_name: Name of the target model architecture instance.
+        :param model_name: Name of the target model.
         :type model_name: str
-        :return: Path to the nested latent space representation directory.
+        :return: Resolved Path to the latent folder.
         :rtype: Path
         """
-        # Path compilation with structural dictionary key
-        return self.get_model_dir(img_name=img_name, model_name=model_name) / self._layout["latent"]
+        model_dir = self.get_model_dir(img_name=img_name, model_name=model_name)
+        target_path = model_dir / self._layout["model_latent_subdir"]
 
+        if self.auto_create_dirs and not target_path.exists():
+            logger.debug("Auto-creating latent subdirectory: %s", target_path)
+            target_path.mkdir(parents=True, exist_ok=True)
+
+        return target_path
+    
     def get_active_model_dir(self) -> Path:
         """
         Calculates the directory path targeting the currently active model context.

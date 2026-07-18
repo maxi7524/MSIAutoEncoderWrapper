@@ -3,7 +3,7 @@
 
 import inspect
 from typing import Any, Dict, Optional
-from .logger import get_custom_logger
+from ...utils.logger import get_custom_logger
 
 # Logger initialization
 logger = get_custom_logger(__name__)

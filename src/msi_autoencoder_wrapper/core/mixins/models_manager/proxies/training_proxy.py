@@ -75,32 +75,43 @@ class TrainingProxy(BaseModelsManagerProxy):
         :type training_config: Dict[str, Any]
         :return: Training history logs mapping phases and epochs to metric values.
         :rtype: Dict[str, Any]
+        :raises ValueError: If active_model or active_dataset is unassigned.
         """
-        # Heading 1 (Active States Verification)
-        ## Ensure active model and dataset are assigned on the wrapper
+        # Heading 1 (Pre-flight Validation Pass)
+        ## Verify that critical training components are actively bound to the wrapper context
         active_model = getattr(self._wrapper, "active_model", None)
         active_dataset = getattr(self._wrapper, "active_dataset", None)
-        
-        if not active_model:
-            raise_model_initialization_error(
-                model_name="ActiveModel",
-                message="Cannot execute training: active_model is unassigned on the wrapper."
-            )
-        if not active_dataset:
-            raise_validation_error(
-                context_name="ModelsManager",
-                message="Cannot execute training: active_dataset is unassigned on the wrapper."
-            )
 
-        # Heading 1 (Criterion Selection and Mismatch Checks)
-        ## Retrieve and check target loss configuration against registered criterions
-        target_loss = training_config.get("criterion") or training_config.get("loss")
+        if not active_model:
+            logger.error("Fit command aborted: Active network model structure is not initialized.")
+            raise ValueError("Execution halted: active_model is missing on the main wrapper.")
+
+        if not active_dataset:
+            logger.error("Fit command aborted: Active streaming dataset is not initialized.")
+            raise ValueError("Execution halted: active_dataset is missing on the main wrapper.")
+
+        # Heading 2 (Loss Criterion Cross-Check Validation)
+        ## Consult the criteria manager proxy to verify loss selection alignment
+        target_loss = None
+        if "loss" in training_config:
+            target_loss = training_config["loss"]
+        elif "criterion" in training_config:
+            target_loss = training_config["criterion"]
+        elif "phases" in training_config:
+            try:
+                first_phase = training_config["phases"][0]
+                if "criterions" in first_phase:
+                    target_loss = list(first_phase["criterions"].keys())[0]
+            except (IndexError, AttributeError):
+                pass
+
         if target_loss:
             try:
-                available_criterions = self.get_available_criterions()
-                if target_loss not in available_criterions:
+                ### Query the local criterions registry to ensure compatibility
+                compatible_criterions = self.get_available_criterions()
+                if target_loss not in compatible_criterions:
                     logger.warning(
-                        "Selected loss function '%s' is incompatible with active model category '%s'.", 
+                        "Loss criterion '%s' may be incompatible with active model category '%s'.", 
                         target_loss, 
                         self.active_model_type
                     )
@@ -108,7 +119,7 @@ class TrainingProxy(BaseModelsManagerProxy):
                 ### Non-blocking catch to allow fallback options if criterions discovery is bypassed
                 logger.debug("Bypassed deep criterion verification check. Reason: %s", str(validation_error))
 
-        # Heading 1 (Orchestration Engine Dispatch)
+        # Heading 2 (Orchestration Engine Dispatch)
         ## Instantiates a temporary TrainingManager instance bound to the master context
         logger.info("Instantiating execution training manager instance.")
         training_orchestrator = TrainingManager(wrapper_ref=self._wrapper)
