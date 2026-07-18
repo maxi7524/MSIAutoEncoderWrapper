@@ -170,20 +170,16 @@ class AutoencoderContextInterface:
         logger.info("Sequential structural image data translation complete.")
         return np.concatenate(embeddings_bucket, axis=0)
 
-    def compress_to_file(self, output_path: Union[str, Path]) -> None:
+    def compress_to_file(self, output_path: Union[str, Path]) -> Path:
         """
-        Transforms the active context imaging footprint into a compressed bin archive file along with layout metadata.
+        Save the active image transform as a latent imzML/ibd pair.
 
         :param output_path: Absolute or relative disk storage target destination path.
         :type output_path: Union[str, Path]
+        :return: Written latent imzML path.
+        :rtype: pathlib.Path
         """
-        raise_validation_error(
-            context_name="Autoencoder",
-            message=(
-                "NPZ latent export has been removed. Use the latent-context imzML "
-                "writer introduced by the latent-space API."
-            ),
-        )
+        return self._context.save_latent(output_path=output_path)
 
 
 # --------------------------------------------------

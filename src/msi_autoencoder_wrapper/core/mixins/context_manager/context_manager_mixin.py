@@ -314,6 +314,8 @@ class ContextManagerProxy:
             expected_type=expected_types[component_type],
             **kwargs,
         )
+        if getattr(resolved_instance, "active_context", None) is None:
+            resolved_instance.active_context = self._wrapper.active_context
 
         # Ledger registration save sequence
         ## Map the initialized component instance into the memory state database container
@@ -374,10 +376,24 @@ class ContextManagerProxy:
             if component is not None and not isinstance(component, dict):
                 component_configs[component_name] = get_component_config(component)
 
+        active_context = self._wrapper.active_context
+        is_instantiated_context = (
+            getattr(active_context, "_instantiated_image_key", None) == image_key
+        )
+        if (
+            is_instantiated_context
+            and active_context.latent_reader is not None
+        ):
+            component_configs["latent_reader"] = get_component_config(
+                active_context.latent_reader
+            )
+
         return {
             "schema_version": 1,
             "scope": "local_image",
             "image_key": image_key,
+            "coordinate_order": self._wrapper.coordinate_order,
+            "data_source": active_context.data_source if is_instantiated_context else "image",
             "components": component_configs,
         }
 

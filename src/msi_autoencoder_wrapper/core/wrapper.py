@@ -9,6 +9,7 @@ from .mixins.workspace.workspace_manager_mixin import WorkspaceMixin
 from .mixins.context_manager.context_manager_mixin import ContextManagerMixin
 from .mixins.active_context.active_context_mixin import ActiveContextMixin
 from .mixins.models_manager.models_manager_mixin import ModelsManagerMixin
+from .mixins.spatial_context_mixin import SpatialContextMixin, CoordinateOrder
 
 # Centralized utilities imports
 from ..utils.logger import get_custom_logger
@@ -18,6 +19,7 @@ logger = get_custom_logger(__name__)
 
 
 class MSIAutoEncoderWrapper(
+    SpatialContextMixin,  # Global XY versus matrix row-column convention
     WorkspaceMixin,        # Flat filesystem IO proxy interface
     ContextManagerMixin,   # Multi-image metadata configuration ledger database
     ActiveContextMixin,    # Dynamic transparent routing command proxy for the active target file
@@ -34,6 +36,7 @@ class MSIAutoEncoderWrapper(
         device: str = "cpu",
         auto_create_dirs: bool = True,
         layout: Optional[Dict[str, str]] = None,
+        coordinate_order: CoordinateOrder = "xy",
         *args: Any,
         **kwargs: Any
     ) -> None:
@@ -48,6 +51,8 @@ class MSIAutoEncoderWrapper(
         :type auto_create_dirs: bool
         :param layout: Custom dictionary layout definition. Defaults to None.
         :type layout: Optional[Dict[str, str]]
+        :param coordinate_order: Spatial API convention, ``xy`` or ``matrix``.
+        :type coordinate_order: Literal["xy", "matrix"]
         """
         # Pre-initialization state binding
         ## Set executing hardware device reference so cooperative mixins have instant access
@@ -60,6 +65,7 @@ class MSIAutoEncoderWrapper(
             project_path=project_path,
             auto_create_dirs=auto_create_dirs,
             layout=layout,
+            coordinate_order=coordinate_order,
             *args,
             **kwargs
         )
