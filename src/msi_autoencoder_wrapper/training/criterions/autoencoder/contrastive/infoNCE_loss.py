@@ -12,6 +12,7 @@ from ...base_criterion import MSIBaseCriterion
 from ...criterions_manager import CriterionsManager
 from .....models.datasets.base_dataset import MSIBaseDataset
 from .....utils.logger import get_custom_logger
+from .....utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -93,8 +94,10 @@ class MSIInfoNCELoss(MSIBaseCriterion):
         """
         # Heading 1 (Contrastive InfoNCE Metric Alignment Pass)
         if "projection" not in model_outputs:
-            logger.error("Evaluation aborted: 'projection' key missing from model outputs.")
-            raise KeyError("InfoNCELoss requires 'projection' field in model outputs.")
+            raise_incompatible_interface_error(
+                context_name="InfoNCELoss",
+                message="Model outputs must contain a 'projection' tensor.",
+            )
 
         projection = model_outputs["projection"]
         batch_size = projection.shape[0] // 2

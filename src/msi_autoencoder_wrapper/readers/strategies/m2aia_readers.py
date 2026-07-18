@@ -5,6 +5,7 @@ from typing import Optional, Any, Dict, Tuple, Union
 from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
+from ...utils.exceptions import raise_incompatible_interface_error, raise_project_config_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -35,9 +36,11 @@ class M2aiaReader(MSIBaseReader):
             self._img = m2.ImzMLReader(str(self.file_path))
             self._img.Load()
         except Exception as error:
-            from ...utils.exceptions import ProjectConfigError
             logger.error("Critical native C++ library exception intercepted during loader initialization.", exc_info=True)
-            raise ProjectConfigError(f"Critical M2aia engine failure opening target file {file_path}: {error}")
+            raise_project_config_error(
+                context_name="M2aiaReader",
+                message=f"Failed to open target file '{file_path}': {error}",
+            )
 
         # Lazy spatial lookup coordinates database cache
         self._spatial_lookup: Optional[Dict[Tuple[int, int, int], int]] = None
@@ -84,7 +87,13 @@ class M2aiaReader(MSIBaseReader):
                 logger.debug("Requested coordinates %s map outside the empirical tissue boundary layout.", target)
                 return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
         else:
-            raise TypeError(f"Unsupported target index descriptor type: '{type(target).__name__}'. Use flat int or a 3D coordinate tuple.")
+            raise_incompatible_interface_error(
+                context_name="M2aiaReader",
+                message=(
+                    f"Unsupported spectrum target type '{type(target).__name__}'. "
+                    "Use an integer index or a three-dimensional coordinate tuple."
+                ),
+            )
 
         # Execute direct native low-level C++ vector recovery commands
         xs, ys = self._img.GetSpectrum(flat_idx)

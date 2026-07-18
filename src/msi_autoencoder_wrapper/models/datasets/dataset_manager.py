@@ -2,9 +2,11 @@
 Central registration gateway and factory for managing Mass Spectrometry Imaging PyTorch dataset objects.
 """
 
-from typing import Type, Dict, Any, Union, Optional
+from typing import Any, Dict, Type
 from ...utils.logger import get_custom_logger
 from .base_dataset import MSIBaseDataset
+from ...utils.module_search import discover_modules
+from ...utils.validators import resolve_component, validate_subclass
 
 # Synchronized telemetry logger initialization
 logger = get_custom_logger(__name__)
@@ -32,35 +34,33 @@ class DatasetManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[MSIBaseDataset]) -> Type[MSIBaseDataset]:
-            if not issubclass(subclass, MSIBaseDataset):
-                logger.error("Registration rejected: Class '%s' fails inheritance test.", subclass.__name__)
-                raise TypeError(f"Class '{subclass.__name__}' must inherit from MSIBaseDataset.")
+            validate_subclass(subclass, MSIBaseDataset, "DatasetRegistry")
             cls._REGISTRY[name] = subclass
             logger.debug("Successfully appended dataset blueprint token '%s' into manager registry.", name)
             return subclass
         return decorator
 
     @classmethod
-    def get_dataset(cls, name: str, **kwargs: Any) -> MSIBaseDataset:
+    def get_dataset(cls, name: Any, **kwargs: Any) -> MSIBaseDataset:
         """
         Resolves dataset strategy classes and executes initialization setups using custom parameters.
 
-        :param name: Target lookup strategy string identifier key.
-        :type name: str
+        :param name: Registry key, dataset class, or ready dataset instance.
+        :type name: Any
         :param kwargs: Initialization parameters passed onto factory constructors.
         :return: Initialized concrete dataset instance complying with abstract contracts.
         :rtype: msi_autoencoder_wrapper.models.datasets.base_dataset.MSIBaseDataset
-        :raises KeyError: If the requested dataset token identifier is unknown.
+        :raises ProjectConfigError: If the dataset is unknown or required
+            constructor parameters are missing.
         """
-        # Validate entry availability within strategy cache
-        if name not in cls._REGISTRY:
-            error_msg = f"Dataset strategy '{name}' not found in registry. Available: {list(cls._REGISTRY.keys())}"
-            logger.error(error_msg)
-            raise KeyError(error_msg)
-        
-        # Factory initialization sequence
         logger.info("Resolving and instantiating dataset strategy '%s' from global registry.", name)
-        return cls._REGISTRY[name](**kwargs)
+        return resolve_component(
+            target=name,
+            registry=cls._REGISTRY,
+            component_type="Dataset",
+            expected_type=MSIBaseDataset,
+            **kwargs,
+        )
 
     # --------------------------------------------------
     # Section: Automated Strategy Discovery
@@ -72,8 +72,4 @@ class DatasetManager:
         Explicitly imports local strategies packages.
         Dynamic scanning inside their __init__.py files triggers automatic decorator registrations.
         """
-        try:
-            from . import strategies
-            logger.info("DatasetManager successfully auto-discovered and registered dataset strategies.")
-        except Exception as e:
-            logger.exception("DatasetManager critical failure during automatic strategy discovery: %s", e)
+        discover_modules(f"{__package__}.strategies")

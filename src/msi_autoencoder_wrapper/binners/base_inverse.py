@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from .base_binner import MSIBaseBinner
 from typing import Any, Optional
+from ..utils.exceptions import raise_validation_error
 
 class MSIBaseInverseBinner(ABC):
     """
@@ -27,7 +28,13 @@ class MSIBaseInverseBinner(ABC):
         elif active_context and getattr(active_context, "binner", None) is not None:
             self._Binner = active_context.binner
         else:
-            raise ValueError("Inverse Binner requires an explicit binner instance or a running active context with a registered binner.")
+            raise_validation_error(
+                context_name="InverseBinner",
+                message=(
+                    "An explicit binner instance or an active context with a registered "
+                    "binner is required."
+                ),
+            )
 
     def GetConfig(self) -> dict[str, Any]:
         """

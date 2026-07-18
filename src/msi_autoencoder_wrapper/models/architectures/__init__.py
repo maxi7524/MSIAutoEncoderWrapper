@@ -1,15 +1,5 @@
-"""
-Package initialization tracking clean network topology graphs blueprints.
-Triggers explicit auto-discovery reflection routing upon system startup.
-"""
+"""Architecture implementation registration package."""
 
-import os
-from .architectures_manager import ArchitecturesManager
+from msi_autoencoder_wrapper.utils.module_search import discover_modules
 
-# Execute self-discovery scans bounding registered subcomponents
-## Standard extraction loops evaluating package file boundaries context paths
-path_list = [os.path.dirname(__file__)]
-name_root = __name__
-
-## Trigger automated reflection imports bypassing schema definitions
-ArchitecturesManager.discover_architectures(path_list, name_root)
+discover_modules(__name__, excluded_parts={"schema"})

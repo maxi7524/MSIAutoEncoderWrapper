@@ -1,6 +1,8 @@
 from typing import Type, Dict, Any
 from .base_reader import MSIBaseReader
 from ..utils.logger import get_custom_logger
+from ..utils.module_search import discover_modules
+from ..utils.validators import resolve_component, validate_subclass
 
 logger = get_custom_logger(__name__)
 
@@ -27,29 +29,32 @@ class ReaderManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[MSIBaseReader]) -> Type[MSIBaseReader]:
+            validate_subclass(subclass, MSIBaseReader, "ReaderRegistry")
             # Register structural mapping class handler
             cls.REGISTRY[name] = subclass
             return subclass
         return decorator
 
     @classmethod
-    def get_reader(cls, name: str, **kwargs: Any) -> MSIBaseReader:
+    def get_reader(cls, name: Any, **kwargs: Any) -> MSIBaseReader:
         """
         Resolves driver classes and executes safe instantiation setups using custom parameter maps.
 
-        :param name: Target lookup key for the requested I/O driver strategy.
-        :type name: str
+        :param name: Registry key, reader class, or ready reader instance.
+        :type name: Any
         :param kwargs: Property keyword attributes delegated directly into class loaders.
         :return: Initialized concrete implementation sub-type inheriting from MSIBaseReader.
         :rtype: MSIBaseReader
-        :raises KeyError: If no structural loader matches the requested string query name.
+        :raises ProjectConfigError: If no reader matches the requested name or
+            required constructor parameters are missing.
         """
-        # Validate entry availability within driver cache
-        if name not in cls.REGISTRY:
-            raise KeyError(f"Loader '{name}' not found. Available: {list(cls.REGISTRY.keys())}")
-        
-        # Factory initialization sequence
-        return cls.REGISTRY[name](**kwargs)
+        return resolve_component(
+            target=name,
+            registry=cls.REGISTRY,
+            component_type="Reader",
+            expected_type=MSIBaseReader,
+            **kwargs,
+        )
 
     # --------------------------------------------------
     # Section: Automated Strategy Discovery
@@ -61,8 +66,4 @@ class ReaderManager:
         Explicitly imports local strategy packages. 
         Dynamic scanning inside strategies/__init__.py triggers automatic registration.
         """
-        try:
-            from . import strategies
-            logger.info("ReaderManager successfully auto-discovered and registered strategy drivers.")
-        except Exception as e:
-            logger.exception("ReaderManager critical failure during automatic strategy discovery: %s", e)
+        discover_modules(f"{__package__}.strategies")

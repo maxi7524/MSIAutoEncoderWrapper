@@ -9,7 +9,8 @@ import numpy as np
 from ..dataset_manager import DatasetManager
 from ..base_dataset import MSIBaseDataset
 from ....utils.logger import get_custom_logger
-from ....core.mixins.io.active_context_mixin import ActiveContextProxy
+from ....utils.exceptions import raise_validation_error
+from ....core.mixins.active_context.active_context_mixin import ActiveContextProxy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -40,7 +41,10 @@ class PixelDataset(MSIBaseDataset):
         """
         # Session state verification
         if not self.active_context or not getattr(self.active_context, "reader", None):
-            raise ValueError("PixelDataset length query failed: Active context has no valid reader session mounted.")
+            raise_validation_error(
+                context_name="PixelDataset",
+                message="The active image context has no reader instance.",
+            )
             
         return self.active_context.reader.GetNumberOfSpectra()
 
