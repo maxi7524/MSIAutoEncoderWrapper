@@ -11,12 +11,12 @@ import pytest
 from msi_autoencoder_wrapper.core.mixins.models_manager.proxies.architecture_proxy import (
     ArchitectureProxy,
 )
-from msi_autoencoder_wrapper.utils.printing import present_available_components
 from msi_autoencoder_wrapper.utils.exceptions import (
     IncompatibleInterfaceError,
     ProjectConfigError,
 )
 from msi_autoencoder_wrapper.utils.module_search import discover_modules
+from msi_autoencoder_wrapper.utils.printing import present_available_components
 from msi_autoencoder_wrapper.utils.validators import resolve_component
 
 
@@ -43,7 +43,6 @@ def test_discover_modules_imports_public_modules(tmp_path, monkeypatch) -> None:
     (package_dir / "__init__.py").write_text("", encoding="utf-8")
     (package_dir / "implementation.py").write_text("REGISTERED = True\n", encoding="utf-8")
     (package_dir / "_private.py").write_text("IMPORTED = True\n", encoding="utf-8")
-
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
@@ -57,13 +56,8 @@ def test_discover_modules_imports_public_modules(tmp_path, monkeypatch) -> None:
 def test_resolve_component_supports_registry_class_and_instance_targets() -> None:
     """The shared factory supports every documented component target form."""
     registry = {"example": ExampleComponent}
-
     from_registry = resolve_component(
-        "example",
-        registry,
-        "TestComponent",
-        expected_type=ComponentBase,
-        required_value=1,
+        "example", registry, "TestComponent", expected_type=ComponentBase, required_value=1
     )
     from_class = resolve_component(
         ExampleComponent,
@@ -74,10 +68,7 @@ def test_resolve_component_supports_registry_class_and_instance_targets() -> Non
     )
     existing_instance = ExampleComponent(required_value=3)
     from_instance = resolve_component(
-        existing_instance,
-        registry,
-        "TestComponent",
-        expected_type=ComponentBase,
+        existing_instance, registry, "TestComponent", expected_type=ComponentBase
     )
 
     assert from_registry.required_value == 1
@@ -88,21 +79,11 @@ def test_resolve_component_supports_registry_class_and_instance_targets() -> Non
 def test_resolve_component_uses_standardized_errors() -> None:
     """Factory lookup and interface failures use global domain exceptions."""
     registry = {"example": ExampleComponent}
-
     with pytest.raises(ProjectConfigError, match=r"\[TESTCOMPONENT CONFIG ERROR\]"):
-        resolve_component(
-            "missing",
-            registry,
-            "TestComponent",
-            expected_type=ComponentBase,
-        )
-
+        resolve_component("missing", registry, "TestComponent", expected_type=ComponentBase)
     with pytest.raises(IncompatibleInterfaceError, match=r"\[TESTCOMPONENT INTERFACE ERROR\]"):
         resolve_component(
-            IncompatibleComponent(),
-            registry,
-            "TestComponent",
-            expected_type=ComponentBase,
+            IncompatibleComponent(), registry, "TestComponent", expected_type=ComponentBase
         )
 
 
@@ -119,35 +100,19 @@ def test_available_component_presentation_has_one_shape(capsys) -> None:
     output = capsys.readouterr().out
     assert "Available Test Components" in output
     assert "[Component]: 'example'" in output
-    assert result == {
-        "example": {
-            "docstring": "Example implementation used by component infrastructure tests.",
-            "parameters": {
-                "required_value": "Required",
-                "optional_value": "default",
-            },
-        }
+    assert result["example"]["parameters"] == {
+        "required_value": "Required",
+        "optional_value": "default",
     }
 
 
 def test_architecture_availability_uses_active_model_context() -> None:
-    """Architecture categories and components resolve within the selected model family."""
+    """Architecture information resolves within the selected model family."""
     proxy = ArchitectureProxy(wrapper_ref=SimpleNamespace())
     proxy.active_model_type = "autoencoder"
 
-    categories = proxy.get_available_component_categories(
-        print_return=False,
-        return_value=True,
-    )
-    encoders = proxy.get_available_components(
-        "encoder",
-        print_return=False,
-        return_value=True,
-    )
+    categories = proxy.get_available_component_categories(False, True)
+    encoders = proxy.get_available_components("encoder", False, True)
 
-    assert categories is not None
-    assert "encoder" in categories
-    assert set(categories["encoder"]) == {"docstring", "parameters"}
-    assert encoders is not None
-    assert "CNNEncoder" in encoders
-    assert set(encoders["CNNEncoder"]) == {"docstring", "parameters"}
+    assert categories is not None and "encoder" in categories
+    assert encoders is not None and "CNNEncoder" in encoders

@@ -7,10 +7,11 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 # Base class and factory imports
 from .base_models_manager_proxy import BaseModelsManagerProxy
 from .....models.datasets.dataset_manager import DatasetManager
+from .....models.datasets.base_dataset import MSIBaseDataset
 
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
-from .....utils.exceptions import raise_validation_error
+from .....utils.validators import validate_component_target
 from .....utils.printing import present_available_components
 
 if TYPE_CHECKING:
@@ -59,28 +60,29 @@ class DatasetProxy(BaseModelsManagerProxy):
     # Section: Target State Selection
     # --------------------------------------------------
 
-    def set_dataset(self, name: str, **kwargs: Any) -> None:
+    def set_dataset(self, name: Any, **kwargs: Any) -> None:
         """
         Registers the target sampling strategy token to be constructed during final compilation.
 
-        :param name: Unique tracking token identifier for the registered dataset strategy.
-        :type name: str
+        :param name: Registry key, dataset class, or ready dataset instance.
+        :type name: Any
         :param kwargs: Keyword arguments used to initialize the dataset constructor.
         :type kwargs: Any
         """
-        # Strategy lookup verification
-        ## Ensure dataset exists inside central registrations
-        if name not in DatasetManager._REGISTRY:
-            raise_validation_error(
-                context_name="ModelsManager",
-                message=f"Dataset strategy '{name}' is unregistered within the DatasetManager registry."
-            )
+        validate_component_target(
+            target=name,
+            registry=DatasetManager._REGISTRY,
+            component_type="Dataset",
+            expected_type=MSIBaseDataset,
+        )
 
         # State updates
         ## Cache configuration details inside active building buffer maps
-        self._active_dataset_name = name
+        target_name = name if isinstance(name, str) else getattr(name, "__name__", type(name).__name__)
+        self._active_dataset_name = target_name
         self._building_buffer["dataset"] = {
-            "strategy": name,
-            "kwargs": kwargs
+            "target": name,
+            "strategy": target_name,
+            "kwargs": kwargs,
         }
         logger.debug("Buffered active target dataset strategy: %s with parameters: %s", name, kwargs)

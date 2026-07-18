@@ -14,6 +14,7 @@ from .....models.datasets.dataset_manager import DatasetManager
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
 from .....utils.exceptions import raise_validation_error, raise_model_initialization_error
+from .....utils.validators import validate_component_target
 from .....utils.printing import present_available_components, present_components_info
 
 if TYPE_CHECKING:
@@ -190,14 +191,14 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         }
         logger.debug("Buffered active model architecture type %s with implementation: %s", model_type, model_name)
 
-    def set_component(self, category: str, name: str, **kwargs: Any) -> None:
+    def set_component(self, category: str, name: Any, **kwargs: Any) -> None:
         """
         Registers a specific structural subcomponent configuration within the building buffer.
 
         :param category: The architectural category designation (e.g., 'encoder', 'decoder').
         :type category: str
-        :param name: The identifier token of the strategy to instantiate.
-        :type name: str
+        :param name: Registry key, component class, or ready component instance.
+        :type name: Any
         :param kwargs: Arbitrary initialization parameters passed to the component constructor.
         :type kwargs: Any
         :raises ValidationError: If the active model type is unset, or if category/strategy is unregistered.
@@ -225,19 +226,20 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                 message=f"Category '{category}' is unregistered for model type '{self.active_model_type}'."
             )
 
-        # Strategy verification
-        ## Ensure the specific strategy is registered under the given category
-        if name not in ArchitecturesManager._COMPONENT_REGISTRY[self.active_model_type][category]:
-            raise_validation_error(
-                context_name="ModelsManager",
-                message=f"Strategy '{name}' is unregistered under category '{category}' for model type '{self.active_model_type}'."
-            )
+        validate_component_target(
+            target=name,
+            registry=ArchitecturesManager._COMPONENT_REGISTRY[self.active_model_type][category],
+            component_type=f"{self.active_model_type}.{category}",
+            expected_type=nn.Module,
+        )
 
         # Stateful buffer updates
         ## Store the components configuration parameters inside the centralized shared buffer
+        target_name = name if isinstance(name, str) else getattr(name, "__name__", type(name).__name__)
         self._building_buffer[category] = {
-            "strategy": name,
-            "kwargs": kwargs
+            "target": name,
+            "strategy": target_name,
+            "kwargs": kwargs,
         }
         logger.debug("Buffered component strategy allocation: category='%s', strategy='%s'", category, name)
 
@@ -360,7 +362,7 @@ class ArchitectureProxy(BaseModelsManagerProxy):
             for key in ["encoder", "decoder", "head", "projector"]:
                 if key in self._building_buffer:
                     components_setup[key] = {
-                        "strategy": self._building_buffer[key].get("strategy"),
+                        "target": self._building_buffer[key].get("target", self._building_buffer[key].get("strategy")),
                         "params": self._building_buffer[key].get("kwargs", {})
                     }
 
@@ -384,15 +386,19 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         
         ## Instantiate the concrete dataset strategy tied explicitly to this context
         dataset_blueprint = self._building_buffer.get("dataset", {})
-        dataset_name = dataset_blueprint.get("strategy") or self._active_dataset_name or "PixelDataset"
+        dataset_target = dataset_blueprint.get("target")
+        if dataset_target is None:
+            dataset_target = dataset_blueprint.get("strategy")
+        if dataset_target is None:
+            dataset_target = self._active_dataset_name or "PixelDataset"
         dataset_kwargs = dataset_blueprint.get("kwargs", {}).copy()
 
-        logger.info("Compiling and binding dataset strategy: %s to the active model graph.", dataset_name)
+        logger.info("Compiling and binding dataset target: %s to the active model graph.", dataset_target)
         
         try:
             ## Invoke DatasetManager factory, passing the vital active_context
             compiled_dataset = DatasetManager.get_dataset(
-                name=dataset_name,
+                name=dataset_target,
                 active_context=active_context,
                 **dataset_kwargs
             )

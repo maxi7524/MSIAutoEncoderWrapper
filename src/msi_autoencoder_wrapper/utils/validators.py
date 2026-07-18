@@ -189,48 +189,80 @@ def resolve_component(
     :return: Validated instantiated strategy engine type matching structural criteria.
     :rtype: Any
     """
-    # Strategic component resolution pipeline
-    ## Case 1: Target is an explicit string registry identifier lookup key
-    if isinstance(target, str):
-        if target not in registry:
-            error_msg = (
-                f"Requested {component_type} identifier '{target}' is not registered. "
-                f"Available drivers: {list(registry.keys())}"
-            )
-            raise_project_config_error(context_name=component_type, message=error_msg)
+    validate_component_target(
+        target=target,
+        registry=registry,
+        component_type=component_type,
+        expected_type=expected_type,
+    )
 
+    if isinstance(target, str):
         component_class = registry[target]
-        _validate_component_class(component_class, expected_type, component_type)
         validate_constructor_kwargs(component_class, target, kwargs)
         logger.debug("Instantiating component driver: %s from registry", target)
         return component_class(**kwargs)
-    
-    ## Case 2: Target is already a raw uninstantiated class type reference
+
     if inspect.isclass(target):
-        _validate_component_class(target, expected_type, component_type)
         validate_constructor_kwargs(target, target.__name__, kwargs)
         logger.debug("Instantiating component driver via raw class reference: %s", target.__name__)
         return target(**kwargs)
 
-    ## Case 3: Target is an already initialized object instance
-    if target is not None:
-        if expected_type is not None and not isinstance(target, expected_type):
-            raise_incompatible_interface_error(
+    logger.debug(
+        "Direct compatible component instance verified for type '%s'. Bypassing factory initialization.",
+        component_type,
+    )
+    return target
+
+
+def validate_component_target(
+    target: Any,
+    registry: Dict[str, Type[Any]],
+    component_type: str,
+    expected_type: Optional[Type[Any]] = None,
+) -> None:
+    """Validate a registry key, implementation class, or ready instance.
+
+    :param target: Registry key, implementation class, or initialized instance.
+    :type target: Any
+    :param registry: Registry used to resolve string targets.
+    :type registry: Dict[str, Type[Any]]
+    :param component_type: Human-readable component category.
+    :type component_type: str
+    :param expected_type: Optional base contract required for the target.
+    :type expected_type: Optional[Type[Any]]
+    :raises ProjectConfigError: If the target is missing or a string key is unknown.
+    :raises IncompatibleInterfaceError: If a class or instance violates the base contract.
+    """
+    if target is None:
+        raise_project_config_error(
+            context_name=component_type,
+            message=f"Target configuration reference for {component_type} cannot be None.",
+        )
+
+    if isinstance(target, str):
+        if target not in registry:
+            raise_project_config_error(
                 context_name=component_type,
                 message=(
-                    f"Instance of type '{type(target).__name__}' must inherit from "
-                    f"'{expected_type.__name__}'."
+                    f"Requested identifier '{target}' is not registered. "
+                    f"Available implementations: {sorted(registry)}"
                 ),
             )
+        _validate_component_class(registry[target], expected_type, component_type)
+        return
 
-        logger.debug("Direct compatible component instance verified for type '%s'. Bypassing factory initialization.", component_type)
-        return target
-        
-    ### Handle unassigned null property references
-    raise_project_config_error(
-        context_name=component_type,
-        message=f"Target configuration reference for {component_type} cannot be None.",
-    )
+    if inspect.isclass(target):
+        _validate_component_class(target, expected_type, component_type)
+        return
+
+    if expected_type is not None and not isinstance(target, expected_type):
+        raise_incompatible_interface_error(
+            context_name=component_type,
+            message=(
+                f"Instance of type '{type(target).__name__}' must inherit from "
+                f"'{expected_type.__name__}'."
+            ),
+        )
 
 
 def _validate_component_class(

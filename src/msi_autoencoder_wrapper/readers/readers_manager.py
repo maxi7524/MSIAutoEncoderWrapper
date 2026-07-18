@@ -36,12 +36,12 @@ class ReaderManager:
         return decorator
 
     @classmethod
-    def get_reader(cls, name: str, **kwargs: Any) -> MSIBaseReader:
+    def get_reader(cls, name: Any, **kwargs: Any) -> MSIBaseReader:
         """
         Resolves driver classes and executes safe instantiation setups using custom parameter maps.
 
-        :param name: Target lookup key for the requested I/O driver strategy.
-        :type name: str
+        :param name: Registry key, reader class, or ready reader instance.
+        :type name: Any
         :param kwargs: Property keyword attributes delegated directly into class loaders.
         :return: Initialized concrete implementation sub-type inheriting from MSIBaseReader.
         :rtype: MSIBaseReader

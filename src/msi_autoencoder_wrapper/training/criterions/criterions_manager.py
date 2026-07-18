@@ -135,14 +135,14 @@ class CriterionsManager:
     # --------------------------------------------------
 
     @classmethod
-    def build_composite_loss(cls, model_type: str, loss_setup: Dict[str, Dict[str, Any]]) -> CompositeLoss:
+    def build_composite_loss(cls, model_type: str, loss_setup: Dict[str, Any]) -> CompositeLoss:
         """
         Dynamically instantiates and chains separate loss criteria blocks into a single CompositeLoss object.
 
         :param model_type: Targeted model category identifier token enforcing dictionary lookup alignments.
         :type model_type: str
         :param loss_setup: Phase setup block mapping loss names to their specific weight values and initial parameters.
-        :type loss_setup: Dict[str, Dict[str, Any]]
+        :type loss_setup: Dict[str, Any]
         :return: Completed weighted joint loss computational function container.
         :rtype: CompositeLoss
         """
@@ -156,12 +156,18 @@ class CriterionsManager:
         loss_weights: Dict[str, float] = {}
 
         for token, config_ledger in loss_setup.items():
-            weight = config_ledger.get("weight", 1.0)
-            params = config_ledger.get("params", {})
+            if isinstance(config_ledger, dict):
+                target = config_ledger.get("target", token)
+                weight = config_ledger.get("weight", 1.0)
+                params = config_ledger.get("params", {})
+            else:
+                target = config_ledger
+                weight = 1.0
+                params = {}
 
             logger.info("Assembling objective sub-criterion component: Name='%s' with assigned Weight=%s", token, weight)
             instantiated_losses[token] = resolve_component(
-                target=token,
+                target=target,
                 registry=cls._REGISTRY[model_type],
                 component_type=f"{model_type}.criterion",
                 expected_type=MSIBaseCriterion,
