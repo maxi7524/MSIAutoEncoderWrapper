@@ -184,6 +184,7 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         # State updates
         ## Cache configuration inside the stateful active building buffer dictionary
         self.active_model_type = model_type
+        self._active_model_name = model_name
         self._building_buffer["model"] = {
             "type": model_type,
             "strategy": model_name,

@@ -288,7 +288,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         :return: Absolute path to the main models folder.
         :rtype: Path
         """
-        return self.project_path_resolved / self._layout["models"]
+        return self.project_path_resolved / self._layout["models_root"]
 
     def get_model_dir(self, img_name: str, model_name: str) -> Path:
         """

@@ -89,6 +89,8 @@ class TrainingProxy(BaseModelsManagerProxy):
         :rtype: List[Dict[str, Any]]
         :raises ValidationError: If active_model or active_dataset is unassigned.
         """
+        self._training_config = training_config
+
         # Heading 1 (Pre-flight Validation Pass)
         ## Verify that critical training components are actively bound to the wrapper context
         active_model = getattr(self._wrapper, "active_model", None)
@@ -139,6 +141,7 @@ class TrainingProxy(BaseModelsManagerProxy):
         training_orchestrator = TrainingManager(wrapper_ref=self._wrapper)
 
         execution_history = training_orchestrator.fit(training_config=training_config)
+        self._training_history = execution_history
 
         ### Post-training model registration hook
         #### Re-attach compiled models to high-level interfaces if active model mixin is present

@@ -9,6 +9,7 @@ from ....utils.printing import present_available_components
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 from ....utils.validators import resolve_component
+from ....utils.configuration import get_component_config
 from ....readers.base_reader import MSIBaseReader
 from ....readers.readers_manager import ReaderManager
 from ....binners.base_binner import MSIBaseBinner
@@ -344,6 +345,41 @@ class ContextManagerProxy:
         # Render execution trace logs
         ## Direct standard string rendering from magic presentation layer down to system logger
         logger.info("ReadersManagerProxy Configuration Ledger Trace\n%s", str(self))
+
+    def get_context_config(self, img_name: Optional[str] = None) -> Dict[str, Any]:
+        """Return one local image context as a portable configuration dictionary.
+
+        :param img_name: Image key to serialize. Uses the active image when omitted.
+        :type img_name: Optional[str]
+        :return: Reader, binner, and inverse-binner configuration for one image.
+        :rtype: Dict[str, Any]
+        :raises ValidationError: If no image context or ledger entry is available.
+        """
+        image_key = img_name or self._wrapper.workspace.active_img_name
+        if not image_key:
+            raise_validation_error(
+                context_name="ContextManager",
+                message="Cannot build image configuration without an image key.",
+            )
+        if image_key not in self.config_ledger:
+            raise_validation_error(
+                context_name="ContextManager",
+                message=f"No local context is configured for image '{image_key}'.",
+            )
+
+        bucket = self.config_ledger[image_key]
+        component_configs: Dict[str, Any] = {}
+        for component_name in ("reader", "binner", "inverse_binner"):
+            component = bucket.get(component_name)
+            if component is not None and not isinstance(component, dict):
+                component_configs[component_name] = get_component_config(component)
+
+        return {
+            "schema_version": 1,
+            "scope": "local_image",
+            "image_key": image_key,
+            "components": component_configs,
+        }
 
 # --------------------------------------------------
 # Section: ReadersManagerMixin Injection Hook
