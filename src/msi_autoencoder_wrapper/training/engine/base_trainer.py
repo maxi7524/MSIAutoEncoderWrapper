@@ -13,12 +13,13 @@ from torch.utils.data import DataLoader
 from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
 from ...utils.exceptions import raise_project_config_error, raise_validation_error
+from ...utils.configuration import ConfigurableComponent, make_json_compatible
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-class MSIPyTorchTrainer:
+class MSIPyTorchTrainer(ConfigurableComponent):
     """
     High-performance, multi-phase execution engine automating optimization loops for generic MSI neural networks.
     """
@@ -36,6 +37,7 @@ class MSIPyTorchTrainer:
         self.patience_limit = patience_limit
         self.best_loss = float("inf")
         self.patience_counter = 0
+        self._config = {"patience_limit": patience_limit}
 
 # --------------------------------------------------
 # Section: Main training loop 
@@ -53,6 +55,7 @@ class MSIPyTorchTrainer:
         """
         # Execute pre-flight validations
         self.validate_training_setup(training_config=training_config)
+        self._config["training"] = make_json_compatible(training_config)
 
         # Deterministic reproducibility enforcement checks
         seed = training_config.get("seed")
@@ -68,7 +71,11 @@ class MSIPyTorchTrainer:
         model = self._wrapper.active_model
         dataset = self._wrapper.active_dataset
 
-        model_name = getattr(self._wrapper.models_manager, "active_model_type", "unknown_model")
+        model_type = getattr(self._wrapper.models_manager, "active_model_type", "unknown_model")
+        model_name = (
+            getattr(self._wrapper.models_manager, "_active_model_name", None)
+            or model_type
+        )
         image_key = active_context._instantiated_image_key
 
         global_history: List[Dict[str, Any]] = []
@@ -96,7 +103,7 @@ class MSIPyTorchTrainer:
             ## Heading 2 (Dynamic Mathematical Criteria Graph Compilation)
             criterions_setup = phase_config.get("criterions", {})
             composite_loss = CriterionsManager.build_composite_loss(
-                model_type=model_name,
+                model_type=model_type,
                 loss_setup=criterions_setup
             )
 
@@ -207,11 +214,10 @@ class MSIPyTorchTrainer:
 
                 ### Heading 3 (Workspace Metrics Stream Flushing Pass)
                 #### Delegate file appending directly to the workspace manager to maintain absolute decoupling
-                self._wrapper.workspace.save_training_metrics(
-                    image_key=image_key,
-                    model_type=model_name,
-                    phase_name=phase_name,
-                    metrics=mean_metrics
+                self._wrapper.workspace.save_history(
+                    img_name=image_key,
+                    model_name=model_name,
+                    history_dict=global_history,
                 )
 
                 ### Heading 3 (Early Stopping Validation Checkpoints)
@@ -221,9 +227,9 @@ class MSIPyTorchTrainer:
                     
                     #### Save optimal tracking model parameters checkpoints onto disk layouts structures via workspace proxy delegation
                     self._wrapper.workspace.save_model_weights(
-                        image_key=image_key,
-                        model_type=model_name,
-                        state_dict=model.state_dict()
+                        img_name=image_key,
+                        model_name=model_name,
+                        state_dict=model.state_dict(),
                     )
                     logger.debug("Performance milestone verified: Model weights updated via workspace delegation.")
                 else:

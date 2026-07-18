@@ -9,12 +9,13 @@ import torch.nn as nn
 
 from ...models.datasets.base_dataset import MSIBaseDataset
 from ...utils.logger import get_custom_logger
+from ...utils.configuration import ConfigurableComponent
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-class MSIBaseCriterion(nn.Module, ABC):
+class MSIBaseCriterion(nn.Module, ConfigurableComponent, ABC):
     """
     Abstract Base Class defining operational frameworks and lifecycle hooks for MSI cost functions.
     """
@@ -25,15 +26,6 @@ class MSIBaseCriterion(nn.Module, ABC):
         """
         super().__init__()
         self._config: Dict[str, Any] = {}
-
-    def GetConfig(self) -> Dict[str, Any]:
-        """
-        Retrieves serialized parameters mapping snapshots required to reproduce the criterion state.
-
-        :return: Internal dictionary containing hyperparameter definitions.
-        :rtype: Dict[str, Any]
-        """
-        return self._config
 
     def on_phase_start(self, model: nn.Module, dataset: MSIBaseDataset, transient_cache: Dict[str, Any]) -> None:
         """
@@ -56,7 +48,7 @@ class MSIBaseCriterion(nn.Module, ABC):
 
         Enables on-the-fly computational operations like chemical noise augmentations on the GPU.
 
-        :param batch_data: Tensors krotka returned from the active data loader.
+        :param batch_data: Tensor tuple returned from the active data loader.
         :type batch_data: Tuple[torch.Tensor, ...]
         :param transient_cache: Mutable global scratchpad tracking state variables across the active session.
         :type transient_cache: Dict[str, Any]
