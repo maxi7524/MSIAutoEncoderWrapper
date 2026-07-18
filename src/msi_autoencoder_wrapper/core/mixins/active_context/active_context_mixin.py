@@ -7,6 +7,7 @@ import torch
 
 # Base autoencoder operational interfaces and exceptions
 from .autoencoder_context_manager import AutoencoderContextInterface
+from .latent_context_mixin import LatentContextMixin
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 logger = get_custom_logger(__name__)
 
 
-class ActiveContextProxy:
+class ActiveContextProxy(LatentContextMixin):
     """
     Stateful boundary proxy representing the currently selected image execution context.
     Provides direct, lazy-loaded access to memory-resident pipelines (Readers, Binners, Autoencoders).
@@ -37,6 +38,7 @@ class ActiveContextProxy:
         self._cached_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
+        self._initialize_latent_context()
 
     # --------------------------------------------------
     # Section: Lazy Pipeline Resolution
@@ -174,6 +176,7 @@ class ActiveContextProxy:
         self._cached_reader = None
         self._cached_binner = None
         self._cached_inverse_binner = None
+        self.unload_latent()
 
 
 class ActiveContextMixin:

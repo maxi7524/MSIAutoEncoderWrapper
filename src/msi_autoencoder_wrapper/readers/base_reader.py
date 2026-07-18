@@ -4,6 +4,7 @@ import numpy as np
 from typing import Any, Optional, Dict, Tuple, Union
 
 from ..utils.configuration import ConfigurableComponent
+from ..utils.exceptions import raise_validation_error
 
 
 class MSIBaseReader(ConfigurableComponent, ABC):
@@ -27,6 +28,126 @@ class MSIBaseReader(ConfigurableComponent, ABC):
         self._config: dict[str, Any] = {"file_path": str(file_path)}
         ## Store the structural active context reference hook to ensure design uniformity
         self.active_context = active_context
+
+    def get_spectrum_at(
+        self,
+        coordinates: Tuple[int, int] | Tuple[int, int, int],
+        coordinate_order: Optional[str] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return a spectrum using the configured user coordinate convention.
+
+        :param coordinates: Two- or three-dimensional user coordinates.
+        :type coordinates: Tuple[int, int] | Tuple[int, int, int]
+        :param coordinate_order: Optional ``xy`` or ``matrix`` override.
+        :type coordinate_order: Optional[str]
+        :return: Spectrum axis and intensity values.
+        :rtype: Tuple[numpy.ndarray, numpy.ndarray]
+        """
+        if len(coordinates) not in {2, 3}:
+            raise_validation_error(
+                context_name="SpatialReader",
+                message="Spatial coordinates must contain two or three values.",
+            )
+        first, second, *remaining = coordinates
+        z_position = remaining[0] if remaining else self.GetSpectrumPosition(0)[2]
+        order = self._resolve_coordinate_order(coordinate_order)
+        storage_coordinates = (
+            (second, first, z_position)
+            if order == "matrix"
+            else (first, second, z_position)
+        )
+        return self.GetSpectrum(storage_coordinates)
+
+    def get_region(
+        self,
+        first: slice | int = slice(None),
+        second: slice | int = slice(None),
+        z: slice | int = slice(None),
+        coordinate_order: Optional[str] = None,
+    ) -> Dict[Tuple[int, int, int], Tuple[np.ndarray, np.ndarray]]:
+        """Return spectra whose coordinates match numeric spatial slices.
+
+        Slice bounds refer to coordinate values, not array offsets. The returned
+        keys use the selected user coordinate convention.
+
+        :param first: X coordinate or matrix row selector.
+        :type first: slice | int
+        :param second: Y coordinate or matrix column selector.
+        :type second: slice | int
+        :param z: Z coordinate selector.
+        :type z: slice | int
+        :param coordinate_order: Optional ``xy`` or ``matrix`` override.
+        :type coordinate_order: Optional[str]
+        :return: Mapping from user coordinates to spectra.
+        :rtype: Dict[Tuple[int, int, int], Tuple[numpy.ndarray, numpy.ndarray]]
+        """
+        order = self._resolve_coordinate_order(coordinate_order)
+        region: Dict[Tuple[int, int, int], Tuple[np.ndarray, np.ndarray]] = {}
+        for spectrum_index in range(self.GetNumberOfSpectra()):
+            x_position, y_position, z_position = self.GetSpectrumPosition(spectrum_index)
+            user_coordinates = (
+                (y_position, x_position, z_position)
+                if order == "matrix"
+                else (x_position, y_position, z_position)
+            )
+            if all(
+                self._matches_coordinate(value, selector)
+                for value, selector in zip(user_coordinates, (first, second, z))
+            ):
+                region[user_coordinates] = self.GetSpectrum(spectrum_index)
+        return region
+
+    def __getitem__(self, target: Any) -> Any:
+        """Read a flat spectrum, coordinate, or sliced spatial region.
+
+        :param target: Flat index, coordinate tuple, index slice, or spatial slices.
+        :type target: Any
+        :return: One spectrum, a spectrum list, or a coordinate-to-spectrum map.
+        :rtype: Any
+        """
+        if isinstance(target, slice):
+            indices = range(self.GetNumberOfSpectra())[target]
+            return [self.GetSpectrum(index) for index in indices]
+        if isinstance(target, tuple):
+            if any(isinstance(item, slice) for item in target):
+                selectors = (*target, slice(None), slice(None))[:3]
+                return self.get_region(*selectors)
+            return self.get_spectrum_at(target)
+        return self.GetSpectrum(target)
+
+    def _coordinate_order(self) -> str:
+        """Resolve the wrapper-wide coordinate order with an XY fallback."""
+        wrapper = getattr(self.active_context, "_wrapper", None)
+        return getattr(wrapper, "coordinate_order", "xy")
+
+    def _resolve_coordinate_order(self, override: Optional[str]) -> str:
+        """Validate and resolve an optional coordinate-order override."""
+        order = override if override is not None else self._coordinate_order()
+        if order not in {"xy", "matrix"}:
+            raise_validation_error(
+                context_name="SpatialReader",
+                message="coordinate_order must be either 'xy' or 'matrix'.",
+            )
+        return order
+
+    @staticmethod
+    def _matches_coordinate(value: int, selector: slice | int) -> bool:
+        """Return whether one coordinate is selected by a numeric slice."""
+        if isinstance(selector, int):
+            return value == selector
+        step = selector.step if selector.step is not None else 1
+        if step == 0:
+            raise_validation_error(
+                context_name="SpatialReader",
+                message="Spatial slice step cannot be zero.",
+            )
+        if step > 0:
+            start = selector.start if selector.start is not None else 0
+            stop = selector.stop if selector.stop is not None else value + 1
+            return start <= value < stop and (value - start) % step == 0
+        start = selector.start if selector.start is not None else value
+        stop = selector.stop if selector.stop is not None else value - 1
+        return stop < value <= start and (start - value) % abs(step) == 0
 
 
 # --------------------------------------------------
