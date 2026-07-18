@@ -2,8 +2,7 @@
 ## Specialized component managing model selection, components parameters reflection, preset configurations, and network graph compilation
 
 from __future__ import annotations
-import inspect
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 import torch
 import torch.nn as nn
 
@@ -15,7 +14,7 @@ from .....models.datasets.dataset_manager import DatasetManager
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
 from .....utils.exceptions import raise_validation_error, raise_model_initialization_error
-from ....utils.printing import extract_component_signatures, print_formatted_components
+from .....utils.printing import present_available_components, present_components_info
 
 if TYPE_CHECKING:
     pass
@@ -41,7 +40,7 @@ class ArchitectureProxy(BaseModelsManagerProxy):
     # Section: Strategy Discovery
     # --------------------------------------------------
 
-    def get_available_model_types(self, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, str]]:
+    def get_available_model_types(self, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, Dict[str, Any]]]:
         """
         Lists all registered master model types along with their foundational class descriptions.
 
@@ -49,98 +48,49 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         :type print_return: bool
         :param return_value: Returns the reflection mapping dictionary if True, defaults to False.
         :type return_value: bool
-        :return: Map linking model type tokens to their class docstrings, or None.
-        :rtype: Optional[Dict[str, str]]
+        :return: Structured model implementation information, or None.
+        :rtype: Optional[Dict[str, Dict[str, Any]]]
         """
-        # Strategy lookup
-        ## Extract classes from the main model registry
-        result: Dict[str, str] = {}
-        for m_type, cls_obj in ArchitecturesManager._MODEL_REGISTRY.items():
-            doc = inspect.getdoc(cls_obj)
-            result[m_type] = doc.split("\n")[0] if doc else "No description available."
+        return present_available_components(
+            registry=ArchitecturesManager._MODEL_REGISTRY,
+            title="Available Master Model Topologies",
+            key_label="Model Type",
+            print_return=print_return,
+            return_value=return_value,
+        )
 
-        if print_return:
-            ## Output formatting
-            ### Format and delegate console rendering to the centralized system printer
-            print_formatted_components(
-                title="Available Master Model Topologies",
-                key_label="Model Type",
-                components_info={
-                    name: {"docstring": desc, "parameters": {}} for name, desc in result.items()
-                }
-            )
-
-        if return_value:
-            return result
-        return None
-
-    def get_available_component_categories(self, print_return: bool = True, return_value: bool = False) -> Optional[List[str]]:
+    def get_available_component_categories(self, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, Dict[str, Any]]]:
         """
         Lists all available structural building block sub-component types registered inside the factory.
 
         :param print_return: Toggles formatted console printing, defaults to True.
         :type print_return: bool
-        :param return_value: Returns the list of category names if True, defaults to False.
-        :type return_value: Optional[List[str]]
-        """
-        # Category discovery
-        ## Fetch keys from the central component registry
-        categories = list(ArchitecturesManager._COMPONENT_REGISTRY.keys())
-
-        if print_return:
-            ## Output rendering
-            ### Print categorized list of modules using centralized system printer
-            print_formatted_components(
-                title="Registered Component Categories",
-                key_label="Category",
-                components_info={
-                    cat: {"docstring": "Registered component package", "parameters": {}} for cat in categories
-                }
-            )
-
-        if return_value:
-            return categories
-        return None
-
-    def _get_available_components_info(
-        self, 
-        registry: Dict[str, Any], 
-        title: str, 
-        key_label: str, 
-        print_return: bool,
-        return_value: bool
-    ) -> Optional[Dict[str, Dict[str, Any]]]:
-        """
-        Internal helper utility to extract documentation and constructor signatures across registries.
-        Delegated to unified printing module to avoid duplicate inspector code.
-
-        :param registry: Target manager registry dictionary mapping keys to component classes.
-        :type registry: Dict[str, Any]
-        :param title: Header string used during beautiful print formatting sequences.
-        :type title: str
-        :param key_label: Contextual descriptor label pointing to the strategy type.
-        :type key_label: str
-        :param print_return: Flag determining whether data logs are pushed to stdout streams.
-        :type print_return: bool
-        :param return_value: Flag determining whether return dict with data logs.
+        :param return_value: Returns structured category information if True, defaults to False.
         :type return_value: bool
-        :return: Deeply nested mapping matching strategy aliases to structural property states, or None.
+        :return: Structured component category information, or None.
         :rtype: Optional[Dict[str, Dict[str, Any]]]
         """
-        # Centralized Signature Extraction
-        result = extract_component_signatures(registry=registry)
-
-        if print_return:
-            ## Print details using unified layout engine
-            print_formatted_components(
-                title=title,
-                key_label=key_label,
-                components_info=result
+        if not self.active_model_type:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message="Cannot query component categories before selecting an active model type.",
             )
 
-        if return_value:
-            return result
-        return None
+        category_registry = ArchitecturesManager._COMPONENT_REGISTRY.get(self.active_model_type, {})
+        category_info = {
+            category: {
+                "docstring": f"Component category for model family '{self.active_model_type}'.",
+                "parameters": {},
+            }
+            for category in sorted(category_registry)
+        }
+        return present_components_info(
+            category_info,
+            title=f"Registered Component Categories for '{self.active_model_type}'",
+            key_label="Category",
+            print_return=print_return,
+            return_value=return_value,
+        )
 
     def get_available_components(self, category: str, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, Dict[str, Any]]]:
         """
@@ -155,26 +105,31 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         :return: Nested dictionary of component classes and signatures, or None.
         :rtype: Optional[Dict[str, Dict[str, Any]]]
         """
-        # Category validation
-        ## Verify component registry availability
-        if category not in ArchitecturesManager._COMPONENT_REGISTRY:
+        if not self.active_model_type:
             raise_validation_error(
                 context_name="ModelsManager",
-                message=f"Category '{category}' is unregistered within the ArchitecturesManager components registry."
+                message="Cannot query components before selecting an active model type.",
             )
 
-        # Extraction delegation
-        ## Route search parameters to the shared signature evaluator
-        registry_target = ArchitecturesManager._COMPONENT_REGISTRY[category]
-        return self._get_available_components_info(
-            registry=registry_target,
-            title=f"Available Components in Category: '{category}'",
+        model_components = ArchitecturesManager._COMPONENT_REGISTRY.get(self.active_model_type, {})
+        if category not in model_components:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message=(
+                    f"Category '{category}' is unregistered for model type "
+                    f"'{self.active_model_type}'."
+                ),
+            )
+
+        return present_available_components(
+            registry=model_components[category],
+            title=f"Available Components in '{self.active_model_type}.{category}'",
             key_label=category.capitalize(),
             print_return=print_return,
-            return_value=return_value
+            return_value=return_value,
         )
 
-    def get_available_model_presets(self, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, str]]:
+    def get_available_model_presets(self, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, Dict[str, Any]]]:
         """
         Lists all registered configuration presets and extracts their analytical docstring descriptions.
 
@@ -182,8 +137,8 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         :type print_return: bool
         :param return_value: Returns extracted configuration maps signatures if True, defaults to False.
         :type return_value: bool
-        :return: Presets description dictionary index map or None.
-        :rtype: Optional[Dict[str, str]]
+        :return: Structured preset implementation information, or None.
+        :rtype: Optional[Dict[str, Dict[str, Any]]]
         """
         # Validation checks
         ## 1. Ensure the active model type context has been set
@@ -193,28 +148,14 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                 message="Discovery blocked: Establish active model type context via set_model() first."
             )
 
-        # Retrieve configurations
-        ## Pull target closure blueprints registry
         preset_db = ArchitecturesManager._PRESET_REGISTRY.get(self.active_model_type, {})
-        result: Dict[str, str] = {}
-
-        for preset_name, preset_func in preset_db.items():
-            doc = inspect.getdoc(preset_func)
-            result[preset_name] = doc.split("\n")[0] if doc else "No description provided."
-
-        if print_return:
-            ## Delegate rendering task directly to unified printer helper
-            print_formatted_components(
-                title=f"Available Configuration Presets for Model Family: '{self.active_model_type}'",
-                key_label="Preset",
-                components_info={
-                    name: {"docstring": desc, "parameters": {}} for name, desc in result.items()
-                }
-            )
-
-        if return_value:
-            return result
-        return None
+        return present_available_components(
+            registry=preset_db,
+            title=f"Available Configuration Presets for '{self.active_model_type}'",
+            key_label="Preset",
+            print_return=print_return,
+            return_value=return_value,
+        )
 
     # --------------------------------------------------
     # Section: Core Model Configuration and Assembly

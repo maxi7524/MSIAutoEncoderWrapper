@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
+from ...utils.exceptions import raise_project_config_error, raise_validation_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -113,8 +114,10 @@ class MSIPyTorchTrainer:
                 logger.info("Optimizer blueprint unassigned: Deploying standard SOTA optimizer fallback parameters.")
 
             if not hasattr(torch.optim, opt_type):
-                logger.error("Requested optimizer class %s is missing from torch.optim modules database.", opt_type)
-                raise KeyError(f"Requested optimizer class '{opt_type}' is missing from torch.optim modules database.")
+                raise_project_config_error(
+                    context_name="Trainer",
+                    message=f"Optimizer '{opt_type}' is not available in torch.optim.",
+                )
             
             optimizer_class = getattr(torch.optim, opt_type)
             optimizer = optimizer_class(trainable_params, **opt_params)
@@ -262,22 +265,28 @@ class MSIPyTorchTrainer:
         model = getattr(self._wrapper, "active_model", None)
         dataset = getattr(self._wrapper, "active_dataset", None)
 
-        if not active_context or not model or not dataset:
-            logger.error("Pre-flight validation failed: Runtime environment components are unassigned.")
-            raise ValueError(
-                "Training setup validation failed: Ensure an active context is mounted, "
-                "and the model has been compiled with an initialized dataset."
+        if active_context is None or model is None or dataset is None:
+            raise_validation_error(
+                context_name="Trainer",
+                message=(
+                    "An active image context, compiled model, and initialized dataset "
+                    "are required."
+                ),
             )
 
         ## 2. Verify reader attachment inside the current execution context
         if not getattr(active_context, "reader", None):
-            logger.error("Pre-flight validation failed: Active context has no mounted data reader driver.")
-            raise ValueError("Training setup validation failed: Active context lacks an initialized data reader session.")
+            raise_validation_error(
+                context_name="Trainer",
+                message="The active image context has no reader instance.",
+            )
 
         ## 3. Enforce structural validation on the phases layout definition list
         phases = training_config.get("phases", [])
         if not phases or not isinstance(phases, list):
-            logger.error("Pre-flight validation failed: The configurations phases sequence is empty or invalid.")
-            raise ValueError("Training setup validation failed: Configuration must contain a non-empty 'phases' list.")
+            raise_validation_error(
+                context_name="Trainer",
+                message="Training configuration must contain a non-empty 'phases' list.",
+            )
 
         logger.info("Pre-flight validation successful. Training environment maps verified.")

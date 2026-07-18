@@ -9,6 +9,7 @@ import torch.nn as nn
 from ...base_criterion import MSIBaseCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
+from .....utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -42,8 +43,10 @@ class MSIMSELoss(MSIBaseCriterion):
         """
         # Heading 1 (Reconstruction Discrepancy Evaluation Pass)
         if "reconstruction" not in model_outputs:
-            logger.error("Evaluation aborted: 'reconstruction' key missing from model outputs.")
-            raise KeyError("MSELoss requires 'reconstruction' field in model outputs.")
+            raise_incompatible_interface_error(
+                context_name="MSELoss",
+                message="Model outputs must contain a 'reconstruction' tensor.",
+            )
 
         ## Unpack spectra matrix from data stream batch
         _, original_spectra = batch_data

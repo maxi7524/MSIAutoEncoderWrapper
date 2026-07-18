@@ -2,6 +2,8 @@ from typing import Type, Dict, Any
 from ..utils.logger import get_custom_logger
 from .base_binner import MSIBaseBinner
 from .base_inverse import MSIBaseInverseBinner
+from ..utils.module_search import discover_modules
+from ..utils.validators import resolve_component, validate_subclass
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -32,6 +34,7 @@ class BinnerManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[MSIBaseBinner]) -> Type[MSIBaseBinner]:
+            validate_subclass(subclass, MSIBaseBinner, "BinnerRegistry")
             cls.BINNER_REGISTRY[name] = subclass
             return subclass
         return decorator
@@ -47,6 +50,7 @@ class BinnerManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[MSIBaseInverseBinner]) -> Type[MSIBaseInverseBinner]:
+            validate_subclass(subclass, MSIBaseInverseBinner, "InverseBinnerRegistry")
             # Registry updates
             ## Map the dynamic string token directly to the type constructor reference
             cls.INVERSE_REGISTRY[name] = subclass
@@ -63,18 +67,16 @@ class BinnerManager:
         :param kwargs: Structural operational properties delegated to constructors.
         :return: Concrete initialized instance implementing the MSIBaseBinner interface.
         :rtype: MSIBaseBinner
-        :raises KeyError: If the requested strategy name is not found within the registry.
+        :raises ProjectConfigError: If the requested binner is not registered or
+            required constructor parameters are missing.
         """
-        # Strategy lookup block
-        ## Validate existence of target component key in registration cache
-        if name not in cls.BINNER_REGISTRY:
-            error_msg = f"Binner '{name}' not found in registry. Available: {list(cls.BINNER_REGISTRY.keys())}"
-            logger.error(error_msg)
-            raise KeyError(error_msg)
-        
-        # Instance generation pipeline
-        ## Resolve the constructor class from mapping and initialize with provided parameters
-        return cls.BINNER_REGISTRY[name](**kwargs)
+        return resolve_component(
+            target=name,
+            registry=cls.BINNER_REGISTRY,
+            component_type="Binner",
+            expected_type=MSIBaseBinner,
+            **kwargs,
+        )
 
     @classmethod
     def get_inverse_binner(cls, name: str, **kwargs: Any) -> MSIBaseInverseBinner:
@@ -86,18 +88,16 @@ class BinnerManager:
         :param kwargs: Parameters passed directly to target classes execution scopes.
         :return: Concrete initialized instance implementing the MSIBaseInverseBinner interface.
         :rtype: MSIBaseInverseBinner
-        :raises KeyError: If the requested strategy name is not found within the registry.
+        :raises ProjectConfigError: If the requested inverse binner is not
+            registered or required constructor parameters are missing.
         """
-        # Strategy lookup block
-        ## Validate existence of target component key in registration cache
-        if name not in cls.INVERSE_REGISTRY:
-            error_msg = f"Inverse Binner '{name}' not found in registry. Available: {list(cls.INVERSE_REGISTRY.keys())}"
-            logger.error(error_msg)
-            raise KeyError(error_msg)
-        
-        # Instance generation pipeline
-        ## Resolve the constructor class from mapping and initialize with provided parameters
-        return cls.INVERSE_REGISTRY[name](**kwargs)
+        return resolve_component(
+            target=name,
+            registry=cls.INVERSE_REGISTRY,
+            component_type="InverseBinner",
+            expected_type=MSIBaseInverseBinner,
+            **kwargs,
+        )
     
     # --------------------------------------------------
     # Section: Automated Strategy Discovery
@@ -109,9 +109,5 @@ class BinnerManager:
         Explicitly imports local strategy packages.
         Dynamic scanning inside their __init__.py files triggers automatic decorator registrations.
         """
-        try:
-            from . import binners_strategies
-            from . import inverse_strategies
-            logger.info("BinnerManager successfully auto-discovered and registered compression drivers.")
-        except Exception as e:
-            logger.exception("BinnerManager critical failure during automatic strategy discovery: %s", e)
+        discover_modules(f"{__package__}.binners_strategies")
+        discover_modules(f"{__package__}.inverse_strategies")
