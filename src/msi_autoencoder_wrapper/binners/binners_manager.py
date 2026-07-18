@@ -58,12 +58,12 @@ class BinnerManager:
         return decorator
 
     @classmethod
-    def get_binner(cls, name: str, **kwargs: Any) -> MSIBaseBinner:
+    def get_binner(cls, name: Any, **kwargs: Any) -> MSIBaseBinner:
         """
         Resolves binner classes and executes setup configurations using dynamic property parameter maps.
 
-        :param name: Target component lookup verification key.
-        :type name: str
+        :param name: Registry key, binner class, or ready binner instance.
+        :type name: Any
         :param kwargs: Structural operational properties delegated to constructors.
         :return: Concrete initialized instance implementing the MSIBaseBinner interface.
         :rtype: MSIBaseBinner
@@ -79,12 +79,12 @@ class BinnerManager:
         )
 
     @classmethod
-    def get_inverse_binner(cls, name: str, **kwargs: Any) -> MSIBaseInverseBinner:
+    def get_inverse_binner(cls, name: Any, **kwargs: Any) -> MSIBaseInverseBinner:
         """
         Resolves inverse binner classes and executes configuration routines.
 
-        :param name: Target structural lookup reference key.
-        :type name: str
+        :param name: Registry key, inverse binner class, or ready instance.
+        :type name: Any
         :param kwargs: Parameters passed directly to target classes execution scopes.
         :return: Concrete initialized instance implementing the MSIBaseInverseBinner interface.
         :rtype: MSIBaseInverseBinner

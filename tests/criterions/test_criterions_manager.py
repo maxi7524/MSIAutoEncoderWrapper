@@ -14,7 +14,6 @@ from msi_autoencoder_wrapper.utils.exceptions import IncompatibleInterfaceError
 def test_criterion_discovery_returns_uniform_component_information() -> None:
     """Criterion discovery populates the model-scoped registry and metadata shape."""
     CriterionsManager.discover_criterions()
-
     available = CriterionsManager.get_available_criterions("autoencoder")
 
     assert "MSELoss" in available
@@ -25,16 +24,12 @@ def test_criterion_discovery_returns_uniform_component_information() -> None:
 
 @pytest.mark.parametrize("criterion_name", ["MSELoss", "SobolevLoss"])
 def test_reconstruction_criterions_return_differentiable_scalars(criterion_name: str) -> None:
-    """Reconstruction criteria accept the current standardized model output mapping."""
-    criterion_class = CriterionsManager._REGISTRY["autoencoder"][criterion_name]
-    criterion = criterion_class()
+    """Reconstruction criteria accept the standardized model output mapping."""
+    criterion = CriterionsManager._REGISTRY["autoencoder"][criterion_name]()
     original = torch.randn(4, 16)
     reconstruction = torch.randn(4, 16, requires_grad=True)
 
-    loss = criterion(
-        {"reconstruction": reconstruction},
-        (torch.arange(4), original),
-    )
+    loss = criterion({"reconstruction": reconstruction}, (torch.arange(4), original))
     loss.backward()
 
     assert loss.ndim == 0
@@ -43,10 +38,10 @@ def test_reconstruction_criterions_return_differentiable_scalars(criterion_name:
 
 
 def test_composite_loss_combines_registered_criterions() -> None:
-    """The manager builds a weighted loss and exposes component-level metrics."""
+    """The manager builds a weighted loss and exposes component metrics."""
     composite = CriterionsManager.build_composite_loss(
-        model_type="autoencoder",
-        loss_setup={
+        "autoencoder",
+        {
             "MSELoss": {"weight": 1.0, "params": {}},
             "SobolevLoss": {"weight": 0.25, "params": {}},
         },
@@ -55,8 +50,7 @@ def test_composite_loss_combines_registered_criterions() -> None:
     reconstruction = torch.randn(4, 16, requires_grad=True)
 
     loss, metrics = composite(
-        {"reconstruction": reconstruction},
-        (torch.arange(4), original),
+        {"reconstruction": reconstruction}, (torch.arange(4), original)
     )
 
     assert loss.ndim == 0
@@ -65,9 +59,20 @@ def test_composite_loss_combines_registered_criterions() -> None:
     assert reconstruction.grad is not None
 
 
+def test_composite_loss_accepts_ready_criterion_instance() -> None:
+    """A user-created criterion is retained in the composite loss."""
+    criterion = CriterionsManager._REGISTRY["autoencoder"]["MSELoss"]()
+
+    composite = CriterionsManager.build_composite_loss(
+        "autoencoder",
+        {"custom_mse": criterion},
+    )
+
+    assert composite.loss_functions["custom_mse"] is criterion
+
+
 def test_criterion_output_contract_uses_global_interface_error() -> None:
     """Missing model output fields raise the standardized interface exception."""
     criterion_class = CriterionsManager._REGISTRY["autoencoder"]["MSELoss"]
-
     with pytest.raises(IncompatibleInterfaceError, match=r"\[MSELOSS INTERFACE ERROR\]"):
         criterion_class()({}, (torch.arange(1), torch.zeros(1, 4)))

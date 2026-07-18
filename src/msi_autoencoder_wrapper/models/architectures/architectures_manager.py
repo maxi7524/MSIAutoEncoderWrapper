@@ -134,9 +134,9 @@ class ArchitecturesManager:
 
             ## Heading 2 (Determine Configuration Node Level)
             ### Check if the current block represents a direct single component or a nested structural collection
-            strategy = setup_ledger.get("strategy") or setup_ledger.get("type") or setup_ledger.get("target")
+            strategy = cls._get_setup_target(setup_ledger)
 
-            if strategy:
+            if strategy is not None:
                 ### Case 1: Direct component configuration block detected
                 component_registry = cls._COMPONENT_REGISTRY.get(model_type, {}).get(category, {})
                 params = setup_ledger.get("params", {})
@@ -159,10 +159,10 @@ class ArchitecturesManager:
                     if not isinstance(sub_setup, dict):
                         continue
 
-                    sub_strategy = sub_setup.get("strategy") or sub_setup.get("type") or sub_setup.get("target")
+                    sub_strategy = cls._get_setup_target(sub_setup)
                     sub_params = sub_setup.get("params", {})
 
-                    if not sub_strategy:
+                    if sub_strategy is None:
                         logger.error("Subcomponent resolution pass aborted: Missing strategy descriptor inside collection '%s' for key: '%s'.", category, sub_key)
                         continue
 
@@ -191,6 +191,15 @@ class ArchitecturesManager:
         )
 
         return compiled_model
+
+    @staticmethod
+    def _get_setup_target(setup: Dict[str, Any]) -> Any:
+        """Return the first explicitly configured component target without truth testing it."""
+        for key in ("target", "strategy", "type"):
+            target = setup.get(key)
+            if target is not None:
+                return target
+        return None
 
     # --------------------------------------------------
     # Section: Recursive Auto-Discovery Loop

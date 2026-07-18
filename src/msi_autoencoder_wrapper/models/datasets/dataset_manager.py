@@ -41,12 +41,12 @@ class DatasetManager:
         return decorator
 
     @classmethod
-    def get_dataset(cls, name: str, **kwargs: Any) -> MSIBaseDataset:
+    def get_dataset(cls, name: Any, **kwargs: Any) -> MSIBaseDataset:
         """
         Resolves dataset strategy classes and executes initialization setups using custom parameters.
 
-        :param name: Target lookup strategy string identifier key.
-        :type name: str
+        :param name: Registry key, dataset class, or ready dataset instance.
+        :type name: Any
         :param kwargs: Initialization parameters passed onto factory constructors.
         :return: Initialized concrete dataset instance complying with abstract contracts.
         :rtype: msi_autoencoder_wrapper.models.datasets.base_dataset.MSIBaseDataset
