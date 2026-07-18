@@ -9,6 +9,7 @@ import torch.nn as nn
 from .proxies.architecture_proxy import ArchitectureProxy
 from .proxies.dataset_proxy import DatasetProxy
 from .proxies.training_proxy import TrainingProxy
+from .proxies.model_runtime_proxy import ModelRuntimeProxy
 
 # Centralized logging and configuration utilities
 from ....utils.logger import get_custom_logger
@@ -21,7 +22,7 @@ from ....utils.configuration import (
 logger = get_custom_logger(__name__)
 
 
-class ModelsManagerProxy(ArchitectureProxy, DatasetProxy, TrainingProxy):
+class ModelsManagerProxy(ArchitectureProxy, DatasetProxy, TrainingProxy, ModelRuntimeProxy):
     """
     Unified models manager controller. Aggregates building, dataset binding,
     and training operations through multiple inheritance, exposing a flat, zero-boilerplate API.
