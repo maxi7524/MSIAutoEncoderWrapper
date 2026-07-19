@@ -10,7 +10,7 @@ import torch
 
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
-from tests.mocks.components import MockDataset, build_small_autoencoder
+from tests.mocks.components import MockDataset, MockMSIReader, build_small_autoencoder
 
 
 def test_ready_autoencoder_is_detected_and_attached_without_an_image(
@@ -82,3 +82,34 @@ def test_saved_autoencoder_loads_and_attaches_without_original_image(
     assert loaded is loaded_wrapper.active_model
     assert loaded_wrapper.models_manager.autoencoder.is_trained
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_local_model_functionality_survives_loading_another_model(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Image-local inference remains available after loaded-model replacement."""
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path))
+    reader = MockMSIReader(msi_fixture_path)
+    wrapper.context_manager.set_reader(reader, str(msi_fixture_path))
+    wrapper.workspace.set_active_image(str(msi_fixture_path))
+    local_model = build_small_autoencoder()
+    replacement_model = build_small_autoencoder()
+
+    wrapper.models_manager.attach_model(
+        local_model,
+        model_name="local-ae",
+        trained=True,
+        bind_to_local_context=True,
+    )
+    local_functionality = wrapper.active_context.autoencoder
+    wrapper.models_manager.attach_model(
+        replacement_model,
+        model_name="loaded-ae",
+        trained=False,
+    )
+
+    assert wrapper.active_context.autoencoder is local_functionality
+    assert wrapper.models_manager.autoencoder is not local_functionality
+    assert wrapper.models_manager.loaded_model is replacement_model
+    assert local_functionality.torch_object is local_model

@@ -3,6 +3,7 @@ Module managing storage configurations, multi-image registries, and data reader 
 """
 
 import pprint
+from pathlib import Path
 from typing import Dict, Any, Optional
 from ...utils.decorators import manage_image_context
 from ....utils.printing import present_available_components
@@ -219,6 +220,7 @@ class ContextManagerProxy:
                 "reader": {"instance_name": "", "instance_params": {}},
                 "binner": {"instance_name": "", "instance_params": {}},
                 "inverse_binner": {"instance_name": "", "instance_params": {}},
+                "model_functionality": None,
                 "tmp": {}
             }
 
@@ -284,6 +286,18 @@ class ContextManagerProxy:
             if resolved_file_path:
                 kwargs["file_path"] = resolved_file_path
                 logger.debug("Dependency injection active: Set 'file_path' to target: %s", resolved_file_path)
+
+        if component_type == "reader" and not isinstance(target, MSIBaseReader):
+            reader_path = kwargs.get("file_path")
+            if reader_path is None or not Path(reader_path).is_file():
+                raise_validation_error(
+                    context_name="ContextManager",
+                    message=(
+                        f"Cannot initialize a reader because image file '{reader_path}' "
+                        "does not exist. Add the image to the workspace or pass an "
+                        "existing imzML path before configuring the reader."
+                    ),
+                )
 
         ## Automatically inject forward binner reference if compiling an inverse spectrum binner
         if component_type == "inverse_binner" and "binner" not in kwargs:

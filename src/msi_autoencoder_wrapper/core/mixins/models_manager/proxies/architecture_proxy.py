@@ -450,6 +450,10 @@ class ArchitectureProxy(BaseModelsManagerProxy):
             model_type=self.active_model_type,
             model_name=self._active_model_name,
             trained=False,
+            bind_to_local_context=(
+                getattr(self._wrapper.workspace, "active_img_name", None)
+                in self._wrapper.context_manager.config_ledger
+            ),
         )
         self._wrapper.active_dataset = compiled_dataset
 
