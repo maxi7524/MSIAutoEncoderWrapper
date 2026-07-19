@@ -18,7 +18,7 @@ The autoencoder family currently exposes:
 - `head`: reserved for objectives consuming a named `head_<name>` output and its
   dataset target.
 
-## Training configuration
+### Training configuration
 
 Use explicit categories in every phase:
 
