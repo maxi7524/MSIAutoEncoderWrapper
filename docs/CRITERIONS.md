@@ -65,6 +65,8 @@ stack original and augmented spectra into a `2N` batch. Reconstruction criteria
 then compare the corresponding `2N` reconstructions against the same prepared
 batch.
 
+## Implemented cost functions
+
 ## Masserstein reconstruction loss
 
 `MassersteinLoss` is a differentiable adaptation of the spectral regression
