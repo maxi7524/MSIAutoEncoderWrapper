@@ -1,5 +1,7 @@
 # Training criteria
 
+## Introduction
+ 
 Criteria are organized by model family and by the part of the model output they
 optimize. The registry has the following shape:
 
