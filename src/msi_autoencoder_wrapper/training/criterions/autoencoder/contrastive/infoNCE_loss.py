@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from scipy.signal import find_peaks, peak_widths
 
-from ...base_criterion import MSIContrastiveCriterion
+from ...autoencoder_base_criterions import MSIContrastiveCriterion
 from ...criterions_manager import CriterionsManager
 from .....models.datasets.base_dataset import MSIBaseDataset
 from .....utils.logger import get_custom_logger

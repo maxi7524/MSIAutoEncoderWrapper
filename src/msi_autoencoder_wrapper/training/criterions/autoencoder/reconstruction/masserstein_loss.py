@@ -6,7 +6,7 @@ from typing import Any, Dict, Literal, Tuple
 
 import torch
 
-from ...base_criterion import MSIReconstructionCriterion
+from ...autoencoder_base_criterions  import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....models.datasets.base_dataset import MSIBaseDataset
 from .....utils.exceptions import raise_validation_error

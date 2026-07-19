@@ -14,6 +14,9 @@ from ...utils.validators import resolve_component, validate_subclass
 from ...utils.printing import extract_component_signatures
 from .base_criterion import (
     MSIBaseCriterion,
+)
+
+from .autoencoder_base_criterions import (
     MSIContrastiveCriterion,
     MSIHeadCriterion,
     MSIReconstructionCriterion,
