@@ -109,6 +109,7 @@ class TrainingProxy(BaseModelsManagerProxy):
         :rtype: List[Dict[str, Any]]
         :raises ValidationError: If active_model or active_dataset is unassigned.
         """
+        #TODO - model powininen być zapisywany co epoke, w przypadku gdy jest najlepszy itd. - to powinno byc aktywnie śledzone i pilnowane 
         self._training_config = training_config
 
         # Heading 1 (Pre-flight Validation Pass)
