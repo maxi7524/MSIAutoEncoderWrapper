@@ -11,6 +11,9 @@ from .mixins.active_context.active_context_mixin import ActiveContextMixin
 from .mixins.models_manager.models_manager_mixin import ModelsManagerMixin
 from .mixins.spatial_context_mixin import SpatialContextMixin, CoordinateOrder
 
+# external libraries
+import torch
+
 # Centralized utilities imports
 from ..utils.logger import get_custom_logger
 
@@ -33,7 +36,7 @@ class MSIAutoEncoderWrapper(
     def __init__(
         self,
         project_path: str,
-        device: str = "cpu",
+        device: str = None,
         auto_create_dirs: bool = True,
         layout: Optional[Dict[str, str]] = None,
         coordinate_order: CoordinateOrder = "xy",
@@ -45,7 +48,7 @@ class MSIAutoEncoderWrapper(
 
         :param project_path: Resolved path to the project root directory.
         :type project_path: str
-        :param device: Default hardware training device target ('cpu', 'cuda', 'mps'). Defaults to 'cpu'.
+        :param device: Default hardware training device target ('cpu', 'cuda', 'mps'). Defaults to 'None', which sets local available.
         :type device: str
         :param auto_create_dirs: Toggles automatic directory structure layout creation. Defaults to True.
         :type auto_create_dirs: bool
@@ -56,7 +59,14 @@ class MSIAutoEncoderWrapper(
         """
         # Pre-initialization state binding
         ## Set executing hardware device reference so cooperative mixins have instant access
+        if device is None:
+            device = torch.device(
+                "cuda" if torch.cuda.is_available()
+                else "mps" if torch.backends.mps.is_available()
+                else "cpu"
+            )
         self.device = device
+
         logger.info("MSIAutoEncoderWrapper: Anchoring processing device state: %s", device)
 
         # Cooperative MRO initialization chain
