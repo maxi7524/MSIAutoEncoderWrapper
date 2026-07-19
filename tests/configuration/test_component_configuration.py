@@ -46,7 +46,7 @@ def test_json_normalization_handles_paths_and_rejects_runtime_objects() -> None:
 def test_json_normalization_describes_ready_functional_components() -> None:
     """Manually constructed components embedded in settings remain reproducible."""
     CriterionsManager.discover_criterions()
-    criterion = CriterionsManager._REGISTRY["autoencoder"]["MSELoss"](
+    criterion = CriterionsManager._REGISTRY["autoencoder"]["reconstruction"]["MSELoss"](
         reduction="sum"
     )
 

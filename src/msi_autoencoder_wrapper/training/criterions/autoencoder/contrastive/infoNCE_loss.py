@@ -6,9 +6,9 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
 
-from ...base_criterion import MSIBaseCriterion
+from ...base_criterion import MSIContrastiveCriterion
 from ...criterions_manager import CriterionsManager
 from .....models.datasets.base_dataset import MSIBaseDataset
 from .....utils.logger import get_custom_logger
@@ -18,13 +18,21 @@ from .....utils.exceptions import raise_incompatible_interface_error
 logger = get_custom_logger(__name__)
 
 
-@CriterionsManager.register_criterion("autoencoder", "InfoNCELoss")
-class MSIInfoNCELoss(MSIBaseCriterion):
+@CriterionsManager.register_criterion("autoencoder", "contrastive", "InfoNCELoss")
+class MSIInfoNCELoss(MSIContrastiveCriterion):
     """
     InfoNCE Contrastive Loss using automated chemical peak profiling noise caches.
     """
 
-    def __init__(self, temperature: float = 0.07, noise_level: float = 0.05) -> None:
+    def __init__(
+        self,
+        temperature: float = 0.07,
+        noise_level: float = 0.05,
+        max_peaks_per_spectrum: int = 2,
+        peak_sample_size: int = 1000,
+        peak_sample_seed: int = 0,
+        max_noise_peaks: int = 8,
+    ) -> None:
         """
         Configures hyperparameter states for contrastive mapping evaluations.
 
@@ -32,35 +40,78 @@ class MSIInfoNCELoss(MSIBaseCriterion):
         :type temperature: float
         :param noise_level: Amplitude modifier tracking injected random noise transformations.
         :type noise_level: float
+        :param max_peaks_per_spectrum: Peak envelopes retained per sampled spectrum.
+        :type max_peaks_per_spectrum: int
+        :param peak_sample_size: Maximum dataset spectra scanned for the peak bank.
+        :type peak_sample_size: int
+        :param peak_sample_seed: Reproducible dataset sampling seed.
+        :type peak_sample_seed: int
+        :param max_noise_peaks: Maximum foreign envelopes added to one spectrum.
+        :type max_noise_peaks: int
         """
         super().__init__()
-        self._config = {"temperature": temperature, "noise_level": noise_level}
+        self._config = {
+            "temperature": temperature,
+            "noise_level": noise_level,
+            "max_peaks_per_spectrum": max_peaks_per_spectrum,
+            "peak_sample_size": peak_sample_size,
+            "peak_sample_seed": peak_sample_seed,
+            "max_noise_peaks": max_noise_peaks,
+        }
         self.temperature = temperature
         self.noise_level = noise_level
+        self.max_peaks_per_spectrum = max_peaks_per_spectrum
+        self.peak_sample_size = peak_sample_size
+        self.peak_sample_seed = peak_sample_seed
+        self.max_noise_peaks = max_noise_peaks
 
     def on_phase_start(self, model: torch.nn.Module, dataset: MSIBaseDataset, transient_cache: Dict[str, Any]) -> None:
         """
         Pre-computes a steady noise mask across dataset spectra profiles to cache peak positions.
         """
         # Heading 1 (Chemical Peak Profiles Extraction Pass)
-        if "chemical_noise_mask" in transient_cache:
-            logger.info("Reusing initialized chemical noise mask channels from transient cache.")
+        if "chemical_peak_bank" in transient_cache:
+            logger.info("Reusing the chemical peak-envelope bank from transient cache.")
             return
 
-        logger.info("Pre-calculating chemical peak locations across dataset sample slices.")
-        sample_size = min(len(dataset), 100)
-        discovered_peaks = set()
+        logger.info("Pre-calculating reusable chemical peak envelopes.")
+        sample_size = min(len(dataset), self.peak_sample_size)
+        peak_bank = []
+        sample_indices = np.random.default_rng(self.peak_sample_seed).choice(
+            len(dataset),
+            size=sample_size,
+            replace=False,
+        )
 
-        for idx in range(sample_size):
-            try:
-                _, spectrum_tensor = dataset[idx]
-                peaks, _ = find_peaks(spectrum_tensor.numpy(), prominence=0.1)
-                discovered_peaks.update(peaks)
-            except Exception:
+        for idx in sample_indices:
+            _, spectrum_tensor = dataset[idx]
+            spectrum = spectrum_tensor.detach().cpu().numpy()
+            peaks, properties = find_peaks(
+                spectrum,
+                prominence=max(float(np.mean(spectrum)), 0.0),
+            )
+            if peaks.size == 0:
                 continue
+            prominences = properties.get("prominences", np.ones_like(peaks))
+            selected = peaks[np.argsort(prominences)[-self.max_peaks_per_spectrum :]]
+            _, _, left_ips, right_ips = peak_widths(
+                spectrum,
+                selected,
+                rel_height=0.8,
+            )
+            for left, right in zip(left_ips, right_ips):
+                start = max(0, int(np.floor(left)))
+                stop = min(len(spectrum), int(np.ceil(right)) + 1)
+                if stop > start:
+                    peak_bank.append(
+                        (start, stop, torch.as_tensor(spectrum[start:stop]).float())
+                    )
 
-        transient_cache["chemical_noise_mask"] = list(discovered_peaks)
-        logger.info("Chemical profiling complete. Cached %s distinct noise channels.", len(transient_cache["chemical_noise_mask"]))
+        transient_cache["chemical_peak_bank"] = peak_bank
+        logger.info(
+            "Chemical profiling complete. Cached %s peak envelopes.",
+            len(peak_bank),
+        )
 
     def on_batch_start(self, batch_data: Tuple[torch.Tensor, ...], transient_cache: Dict[str, Any]) -> Tuple[torch.Tensor, ...]:
         """
@@ -69,13 +120,27 @@ class MSIInfoNCELoss(MSIBaseCriterion):
         # Heading 1 (On-the-fly Batch Chemical Noise Augmentation Pass)
         spatial_indices, original_spectra = batch_data
         augmented_spectra = original_spectra.clone()
-        noise_channels = transient_cache.get("chemical_noise_mask", [])
+        peak_bank = transient_cache.get("chemical_peak_bank", [])
 
-        if noise_channels:
-            ### Generate Gaussian jitter noise targeted onto verified peak index channels
-            noise_tensor = torch.zeros_like(augmented_spectra)
-            noise_tensor[:, noise_channels] = torch.randn((augmented_spectra.shape[0], len(noise_channels))) * self.noise_level
-            augmented_spectra += noise_tensor
+        if peak_bank:
+            peak_mask = (
+                (original_spectra[:, 1:-1] > original_spectra[:, :-2])
+                & (original_spectra[:, 1:-1] > original_spectra[:, 2:])
+                & (original_spectra[:, 1:-1] > original_spectra.mean(dim=1, keepdim=True))
+            )
+            additions = torch.clamp(
+                (peak_mask.sum(dim=1).float() * self.noise_level).ceil().long(),
+                min=1,
+                max=self.max_noise_peaks,
+            )
+            for batch_index, addition_count in enumerate(additions.tolist()):
+                selected = torch.randint(len(peak_bank), (addition_count,)).tolist()
+                for bank_index in selected:
+                    start, stop, values = peak_bank[bank_index]
+                    augmented_spectra[batch_index, start:stop] += values.to(
+                        augmented_spectra.device,
+                        dtype=augmented_spectra.dtype,
+                    )
 
         ## Stack original and augmented spectra down the batch dimension to pass 2N features into forward pass
         combined_spectra = torch.cat([original_spectra, augmented_spectra], dim=0)
@@ -121,6 +186,10 @@ class MSIInfoNCELoss(MSIBaseCriterion):
 
         ## Isolate negative match locations by pruning identity reflection cells from calculation operations
         mask = torch.eye(2 * batch_size, device=projection.device, dtype=torch.bool)
+        pair_indices = (torch.arange(2 * batch_size, device=projection.device) + batch_size) % (
+            2 * batch_size
+        )
+        mask[torch.arange(2 * batch_size, device=projection.device), pair_indices] = True
         negatives = similarity_matrix[~mask].view(2 * batch_size, -1)
 
         ## Unify elements log representations and extract cumulative cross-entropy scores

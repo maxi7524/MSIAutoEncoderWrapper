@@ -10,6 +10,7 @@ import torch.nn as nn
 from ...models.datasets.base_dataset import MSIBaseDataset
 from ...utils.logger import get_custom_logger
 from ...utils.configuration import ConfigurableComponent
+from ...utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -41,6 +42,66 @@ class MSIBaseCriterion(nn.Module, ConfigurableComponent, ABC):
         :type transient_cache: Dict[str, Any]
         """
         pass
+
+
+class MSIReconstructionCriterion(MSIBaseCriterion, ABC):
+    """Base contract for losses comparing input and reconstructed spectra."""
+
+    criterion_type = "reconstruction"
+
+    @staticmethod
+    def reconstruction_pair(
+        model_outputs: Dict[str, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return reconstructed and target spectra after interface validation.
+
+        :param model_outputs: Output mapping returned by the model.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Dataset batch containing indices and input spectra.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Reconstruction followed by the target tensor on the same device.
+        :rtype: Tuple[torch.Tensor, torch.Tensor]
+        :raises IncompatibleInterfaceError: If required tensors are unavailable.
+        """
+        if "reconstruction" not in model_outputs:
+            raise_incompatible_interface_error(
+                context_name="ReconstructionCriterion",
+                message="Model outputs must contain a 'reconstruction' tensor.",
+            )
+        if len(batch_data) < 2 or not isinstance(batch_data[1], torch.Tensor):
+            raise_incompatible_interface_error(
+                context_name="ReconstructionCriterion",
+                message="Batch data must contain an input spectrum tensor at index 1.",
+            )
+        reconstruction = model_outputs["reconstruction"]
+        return reconstruction, batch_data[1].to(reconstruction.device)
+
+
+class MSIContrastiveCriterion(MSIBaseCriterion, ABC):
+    """Base contract for representation losses using augmented spectrum pairs."""
+
+    criterion_type = "contrastive"
+
+
+class MSIHeadCriterion(MSIBaseCriterion, ABC):
+    """Base contract for objectives attached to one named model head."""
+
+    criterion_type = "head"
+
+    def __init__(self, head_name: str) -> None:
+        """Initialize the output key used by a downstream objective.
+
+        :param head_name: Name used by the model's ``head_<name>`` output.
+        :type head_name: str
+        """
+        super().__init__()
+        self.head_name = head_name
+
+    @property
+    def output_key(self) -> str:
+        """Return the standardized model-output key for this head."""
+        return f"head_{self.head_name}"
 
     def on_batch_start(self, batch_data: Tuple[torch.Tensor, ...], transient_cache: Dict[str, Any]) -> Tuple[torch.Tensor, ...]:
         """

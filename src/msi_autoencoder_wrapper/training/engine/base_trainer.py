@@ -280,11 +280,17 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 ),
             )
 
-        ## 2. Verify reader attachment inside the current execution context
-        if not getattr(active_context, "reader", None):
+        ## 2. Verify the reader selected by the active dataset source
+        source = getattr(dataset, "source", "image")
+        data_reader_getter = getattr(active_context, "get_data_reader", None)
+        if callable(data_reader_getter):
+            selected_reader = data_reader_getter(source)
+        else:
+            selected_reader = getattr(active_context, "reader", None)
+        if selected_reader is None:
             raise_validation_error(
                 context_name="Trainer",
-                message="The active image context has no reader instance.",
+                message=f"The active '{source}' data source has no reader instance.",
             )
 
         ## 3. Enforce structural validation on the phases layout definition list

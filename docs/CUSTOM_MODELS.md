@@ -1,185 +1,154 @@
-# Creating Custom Models & Components
+# Custom local models and components
 
-This guide explains how to extend `MSIAutoEncoderWrapper` by implementing custom architectures, loss functions (criterions), and binning strategies.
+This guide describes the currently supported local-model extension path. A local
+model is associated with one image context. Support for model families trained
+across multiple independent images is planned but is not part of the current API.
 
-## General Concept
+## Runtime contexts
 
-The library is built on **Abstract Base Classes (ABCs)**. To ensure that your custom component works seamlessly with the automated loading/saving system and the trainer, you must:
-1. Inherit from the appropriate base class.
-2. Implement all required abstract methods.
-3. **Register** your class in the corresponding `__init__.py` file (or registry dictionary).
+The wrapper deliberately distinguishes two model references:
 
-### The Registry System
-Registration allows the `MSIAutoEncoder` manager to find and initialize your classes by name (e.g., from a config file). After defining a new class, add it to the registry in these locations:
-* **Architectures**: `src/MSIAutoEncoderWrapper/architectures/__init__.py` -> `ARCHITECTURES_REGISTRY`
-* **Criterions**: `src/MSIAutoEncoderWrapper/criterions/__init__.py` -> `CRITERIONS_REGISTRY`
-* **Binners**: `src/MSIAutoEncoderWrapper/utils/Binners.py` -> `BINNER_REGISTRY`
+- `wrapper.models_manager.loaded_model` is the one PyTorch model currently loaded
+  for configuration, training, or inference.
+- `wrapper.models_manager.model_functionality` is the registered high-level
+  interface for that loaded model. For an autoencoder it exposes `encode`,
+  `decode`, `transform`, and `compress_to_file`.
+- `wrapper.active_context.local_model_functionality` is the interface preserved
+  in the selected image ledger.
+- `wrapper.active_context.model_functionality` prefers the local interface and
+  falls back to the currently loaded interface when no local model is bound.
 
-### Automated Validation
-Our library consists of `pytest` suite to validate custom components. It automatically checks:
-* If model correctly implements methods 
-* If train loop is correctly running
-* If criterion returns *proper* values (tries null and ideal cases) 
+This separation allows a trained autoencoder to remain usable for one image while
+another model is loaded in `models_manager`:
 
+```python
+wrapper.models_manager.attach_model(
+    local_autoencoder,
+    model_name="bladder-autoencoder",
+    trained=True,
+    bind_to_local_context=True,
+)
 
-***
+local_functionality = wrapper.active_context.model_functionality
 
-## Custom ABCs
+wrapper.models_manager.load_model(
+    "global",
+    "another-model",
+    bind_to_local_context=False,
+)
 
-### Custom Architectures
-**Base Class**: `MSIBaseAutoencoderArchitecture`
-**Location**: `src/MSIAutoEncoderWrapper/architectures/base.py`
+assert wrapper.active_context.model_functionality is local_functionality
+```
 
-Every model must function as an Autoencoder.
+Use `wrapper.models_manager.bind_loaded_model_to_local_context()` when a model
+was loaded first and should be attached to the currently configured image later.
 
-#### Requirements:
-* **`_config`**: Must contain dictionary attribute with initialization values:
-* **`encode(x)`**: Must return the latent representation $z$.
-* **`decode(z)`**: Must reconstruct the spectrum from latent space.
-* **`forward(x)`**: Usually returns a tuple `(latent, reconstruction)`.
-* **`SetHyperparameters(...)`**: A static method that analyzes the `MSIDataset` to suggest optimal kernel sizes or layers before the model is initialized.
+## Architecture families
 
-#### Example
+`ArchitecturesManager` registers master model families. The library currently
+ships one complete family, `autoencoder`. Other local families can be added, but
+they require both an architecture contract and a matching runtime-functionality
+adapter before they can expose user-facing operations.
+
+> **TODO — global and multi-image models:** document the dedicated contracts once
+> datasets spanning multiple image contexts and their training lifecycle exist.
+
+## Adding autoencoder components
+
+An autoencoder is assembled from independently registered components:
+
+- an `encoder` producing `latent_space`;
+- an optional `decoder` producing `reconstruction`;
+- an optional `projector` producing `projection` for contrastive objectives;
+- optional named `heads`, exposed as `head_<name>` outputs.
+
+Each component must:
+
+1. inherit from the relevant base component or a compatible `torch.nn.Module`;
+2. save constructor parameters in `_config`;
+3. use an English, Sphinx-compatible docstring;
+4. be registered under the correct model family and component category.
+
+Example encoder:
 
 ```python
 import torch
 import torch.nn as nn
-from .base import MSIBaseAutoencoderArchitecture
 
-# We define separate nn.Module classes for the Encoder and Decoder 
-# to allow PyTorch to efficiently optimize the gradient flow.
+from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
+    ArchitecturesManager,
+)
+from msi_autoencoder_wrapper.models.architectures.types.autoencoders.encoders.base_encoder import (
+    MSIBaseEncoder,
+)
 
-class Encoder(nn.Module):
-    def __init__(self, input_dim, latent_dim):
+
+@ArchitecturesManager.register_component("autoencoder", "encoder", "LinearEncoder")
+class LinearEncoder(MSIBaseEncoder):
+    def __init__(self, input_dim: int, latent_dim: int) -> None:
         super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, latent_dim)
-        )
-    def forward(self, x):
-        return self.layers(x)
+        self._config = {"input_dim": input_dim, "latent_dim": latent_dim}
+        self.network = nn.Linear(input_dim, latent_dim)
 
-class Decoder(nn.Module):
-    def __init__(self, latent_dim, input_dim):
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(latent_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, input_dim)
-        )
-    def forward(self, z):
-        return self.layers(z)
-
-class MyCustomModel(MSIBaseAutoencoderArchitecture):
-    def __init__(self, input_dim, latent_dim):
-        super().__init__()
-        # We assign modules as attributes of the main class to 
-        # ensure all parameters are registered for the optimizer.
-        self.encoder = Encoder(input_dim, latent_dim)
-        self.decoder = Decoder(latent_dim, input_dim)
-        self._config = {
-            'input_dim': input_dim,
-            'latent_dim': latent_dim
-        }
-
-    def encode(self, x):
-        return self.encoder(x)
-
-    def decode(self, z):
-        return self.decoder(z)
-
-    def forward(self, x):
-        # Main flow using the modules defined above
-        z = self.encode(x)
-        x_reconstructed = self.decode(z)
-        return z, x_reconstructed
-
-    @staticmethod
-    def SetHyperparameters(MSIDataset, latent_dim, user_hyperparameters=None, initialize_model=True):
-        # Logic for automatic hyperparameter selection before initialization
-        params = {"input_dim": MSIDataset.GetGridXAxisDepth(), "latent_dim": latent_dim}
-        return MyCustomModel(**params) if initialize_model else params
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.network(x)
 ```
 
-***
-
-### Custom Criterions
-**Base Class**: `MSIABaseAutoEncoderCriterion`
-**Location**: `src/MSIAutoEncoderWrapper/criterions/base.py`
-
-The Criterion defines the training **logic**. Unlike standard PyTorch loss functions, it has access to the full context: the model, the dataloader, and spatial metadata.
-
-#### Key Features:
-* **Pre-training Setup**: Use the `REQUIRED_SETUP` list to define methods (e.g., `build_peak_bank`) that must run once before the training loop starts.
-* **Spatial Awareness**: The `forward` method receives `batch_data` containing spectral indices. You can use `dataloader.dataset.img.GetSpectrumPosition(idx)` to incorporate spatial relationships into your loss.
-* **Return Format**: Must return a tuple: `(total_loss_tensor, metrics_dict)`.
-
-
-#### Example
-
-Important: This is not just a loss function; it is a definition of how the cost 
-should be calculated and the logic for comparing spectra (e.g., considering noise or neighborhood).
+The registered name can then be used in portable configuration:
 
 ```python
-import torch.nn.functional as F
-from .base import MSIABaseAutoEncoderCriterion
-
-class MyComparisonCriterion(MSIABaseAutoEncoderCriterion):
-
-    # precalculation 
-    self.REQUIRED_SETUP = [
-            {
-                'func': self.precompute_peak_bank, 
-                'args': {'max_peaks_per_spectrum': max_peaks_per_spectrum}
-            }
-        ]
-    self._config = {
-        # similar to `Custom Architectures`
-        ...
-    }
-
-    def build_reference_bank(self, dataset):
-        # Method called automatically before the training loop.
-        # Can be used to pre-calculate features for the entire dataset.
-        print("Pre-calculating reference bank...")
-
-    def forward(self, batch_idx, batch_data, model, dataloader, device):
-        indices, spectra = batch_data # spectra shape: [Batch, M/Z]
-        
-        # 1. Define how the model processes the data
-        z, x_hat = model(spectra)
-        
-        # 2. Define how results are compared (e.g., MSE + custom logic)
-        recon_loss = F.mse_loss(x_hat, spectra)
-        
-        # Spatial comparison logic can be added here 
-        # by utilizing dataloader.dataset.img
-        
-        total_loss = recon_loss
-        return total_loss, {"total_loss": total_loss.item(), "recon": recon_loss.item()}
+wrapper.models_manager.set_model_type("autoencoder", "linear-autoencoder")
+wrapper.models_manager.set_component(
+    "encoder",
+    "LinearEncoder",
+    input_dim=1500,
+    latent_dim=32,
+)
 ```
 
-***
+Ready component instances and component classes are also accepted, but registered
+names plus JSON-compatible parameters are preferred because they can be recreated
+from saved configuration.
 
-### 3. Binners & Inverse Binners
-**Location**: `src/MSIAutoEncoderWrapper/utils/Binners.py`
+## Custom presets
 
-#### Binners
-Binners project irregular raw MSI spectra onto a fixed m/z grid. This is crucial because CNNs require spatially consistent features (the same index must always mean the same m/z).
-* **Requirement**: Must implement `__call__(xs, ys)` returning the binned intensities.
-* **Tip**: Pay attention to the binning resolution—too coarse loses information, too fine creates sparse tensors which brings noise.
+A preset is a function returning component strategies and parameters. It may use
+the active reader and binner to derive dimensions:
+
+```python
+from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
+    ArchitecturesManager,
+)
 
 
+@ArchitecturesManager.register_preset("autoencoder", "SmallLinear")
+def small_linear_preset(active_context, latent_dim: int = 16):
+    input_dim = active_context.binner.GetXAxisDepth()
+    return {
+        "encoder": {
+            "strategy": "LinearEncoder",
+            "params": {"input_dim": input_dim, "latent_dim": latent_dim},
+        },
+    }
+```
 
-#### Inverse Binners
-Used during reconstruction (e.g., exporting to `imzML`).
-* **Requirement**: They must ensure the output m/z range matches the original image.
-* **Consistency**: Ensure the `GetGridXAxis` results are consistent with the visualization tools to prevent coordinate shifting.
+Apply it after selecting the model family and configuring an image context:
 
-***
+```python
+wrapper.models_manager.set_model_type("autoencoder", "small-linear")
+wrapper.models_manager.set_model_preset("SmallLinear", latent_dim=16)
+```
 
-## Important Considerations
-1. **Device Handling**: Always use the `device` parameter passed to the methods. Do not hardcode `.cuda()`.
-2. **Memory**: MSI data is large. When pre-computing (like in `ContrastiveCriterion`), use `float16` or limit the number of samples to avoid OOM (Out Of Memory) errors.
-3. **Registration Check**: If your model is not found during `load()`, check if the string name in the registry matches your class name exactly.
+## Custom criteria
+
+Criteria are registered by model family and execution category. Reconstruction,
+contrastive, and head objectives have different input contracts and must inherit
+from their matching base class. See [CRITERIONS.md](CRITERIONS.md) for the registry,
+training configuration, lifecycle hooks, and Masserstein details.
+
+## Configuration requirements
+
+All reconstructable components must return JSON-compatible constructor state from
+`get_config()`/`GetConfig()`. Do not place runtime objects, datasets, readers,
+open file handles, devices, or tensor data in `_config`. Store only values needed
+to recreate the component.
