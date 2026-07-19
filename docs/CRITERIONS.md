@@ -69,7 +69,7 @@ batch.
 
 ## Implemented cost functions
 
-## Masserstein reconstruction loss
+### Masserstein reconstruction loss
 
 `MassersteinLoss` is a differentiable adaptation of the spectral regression
 method described in:
