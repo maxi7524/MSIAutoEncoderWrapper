@@ -36,3 +36,4 @@ class BaseModelsManagerProxy(BaseWrapperProxy):
         self._building_buffer: Dict[str, Any] = {}
         self._training_config: Optional[Dict[str, Any]] = None
         self._training_history: Optional[Any] = None
+        self._training_transient_cache: Dict[str, Any] = {}

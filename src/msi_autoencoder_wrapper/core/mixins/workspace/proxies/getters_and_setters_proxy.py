@@ -37,7 +37,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
     # --------------------------------------------------
     # Subsection: Single image setters
     # --------------------------------------------------
-    #TODO - Here is bug, even if img does not exists it gots accepted and later we obtain error because of it 
+    # Empty image keys are allowed here; reader creation performs file validation.
 
     def set_active_image(self, img_name_or_path: Optional[str] = None) -> None:
         """

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from msi_autoencoder_wrapper.binners.binners_manager import BinnerManager
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
+from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 from tests.mocks.components import MockMSIReader
 
 
@@ -38,3 +41,12 @@ def test_context_setters_accept_ready_reader_and_binners(
     assert image_config["reader"] is reader
     assert image_config["binner"] is binner
     assert image_config["inverse_binner"] is inverse_binner
+
+
+def test_reader_configuration_rejects_missing_workspace_image(tmp_path: Path) -> None:
+    """An empty workspace remains valid until a reader needs a missing image."""
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path))
+
+    wrapper.workspace.set_active_image("missing-image")
+    with pytest.raises(ValidationError, match="does not exist"):
+        wrapper.context_manager.set_reader("PyImzMLReader", "missing-image")
