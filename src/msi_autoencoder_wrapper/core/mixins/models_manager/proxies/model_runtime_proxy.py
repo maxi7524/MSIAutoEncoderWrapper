@@ -33,12 +33,31 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
         """
         return self._autoencoder_interface
 
+    @property
+    def model_functionality(self) -> Optional[Any]:
+        """Return the family interface for the one currently loaded model.
+
+        :return: Loaded-model functionality or ``None`` for an unsupported family.
+        :rtype: Optional[Any]
+        """
+        return self._autoencoder_interface
+
+    @property
+    def loaded_model(self) -> Optional[nn.Module]:
+        """Return the raw currently loaded PyTorch model.
+
+        :return: Loaded model object or ``None``.
+        :rtype: Optional[torch.nn.Module]
+        """
+        return getattr(self._wrapper, "active_model", None)
+
     def attach_model(
         self,
         torch_model: nn.Module,
         model_type: Optional[str] = None,
         model_name: Optional[str] = None,
         trained: bool = False,
+        bind_to_local_context: bool = False,
     ) -> nn.Module:
         """Attach a ready model and automatically expose its family interface.
 
@@ -50,6 +69,8 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
         :type model_name: Optional[str]
         :param trained: Whether weights are ready for inference.
         :type trained: bool
+        :param bind_to_local_context: Preserve this interface in the active image ledger.
+        :type bind_to_local_context: bool
         :return: The same attached model instance.
         :rtype: torch.nn.Module
         :raises ModelNotInitializedError: If no registered family matches the model.
@@ -69,6 +90,7 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
         target_device = getattr(self._wrapper, "device", "cpu")
         torch_model.to(target_device)
         self._wrapper.active_model = torch_model
+        self._training_transient_cache.clear()
         self.active_model_type = resolved_type
         if model_name is not None:
             self._active_model_name = model_name
@@ -80,6 +102,8 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
                 active_context=self._wrapper.active_context,
                 trained=trained,
             )
+        if bind_to_local_context:
+            self.bind_loaded_model_to_local_context()
         logger.info(
             "Attached loaded model '%s' as family '%s'.",
             self._active_model_name or type(torch_model).__name__,
@@ -87,7 +111,13 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
         )
         return torch_model
 
-    def load_model(self, img_name: str, model_name: str, strict: bool = True) -> nn.Module:
+    def load_model(
+        self,
+        img_name: str,
+        model_name: str,
+        strict: bool = True,
+        bind_to_local_context: bool = False,
+    ) -> nn.Module:
         """Load configuration and weights, reconstruct the model, and attach it.
 
         Loading the model does not require loading its original image.
@@ -98,6 +128,8 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
         :type model_name: str
         :param strict: Enforce exact state-dictionary key matching.
         :type strict: bool
+        :param bind_to_local_context: Bind the loaded interface to the active image.
+        :type bind_to_local_context: bool
         :return: Reconstructed and attached model.
         :rtype: torch.nn.Module
         """
@@ -118,7 +150,47 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
             model_type=model_type,
             model_name=configured_name or model_name,
             trained=True,
+            bind_to_local_context=bind_to_local_context,
         )
+
+    def bind_loaded_model_to_local_context(self) -> Any:
+        """Bind current model functionality to the selected image context.
+
+        The binding stores an independent interface reference in the image
+        ledger. Loading another model later replaces only the loaded-model
+        context and leaves this local binding available.
+
+        :return: Functionality bound to the active image.
+        :rtype: Any
+        :raises ValidationError: If no supported model or image context exists.
+        """
+        functionality = self.model_functionality
+        if functionality is None:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message="The loaded model does not expose registered functionality.",
+            )
+        active_context = self._wrapper.active_context
+        image_key = (
+            getattr(active_context, "_instantiated_image_key", None)
+            or getattr(self._wrapper.workspace, "active_img_name", None)
+        )
+        ledger = self._wrapper.context_manager.config_ledger
+        if not image_key or image_key not in ledger:
+            raise_validation_error(
+                context_name="ModelsManager",
+                message=(
+                    "A configured active image context is required before binding "
+                    "loaded model functionality locally."
+                ),
+            )
+        ledger[image_key]["model_functionality"] = functionality
+        active_context._cached_model_functionality = functionality
+        logger.info(
+            "Bound loaded model functionality to image context '%s'.",
+            image_key,
+        )
+        return functionality
 
     def mark_model_trained(self, trained: bool = True) -> None:
         """Update inference readiness for the currently loaded model.
@@ -141,6 +213,7 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
         self._autoencoder_interface = None
         self.active_model_type = None
         self._active_model_name = None
+        self._training_transient_cache.clear()
 
     @staticmethod
     def _detect_model_type(torch_model: nn.Module) -> Optional[str]:

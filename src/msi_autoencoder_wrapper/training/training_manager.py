@@ -31,7 +31,9 @@ class TrainingManager(ConfigurableComponent):
         # Stateful configuration transient cache
         ## Persistent memory tracking execution blocks variables (e.g., peak footprints for InfoNCE)
         ## Kept resident in memory across sequential fit calls until the active model is changed or recompiled.
-        self._training_transient_cache: Dict[str, Any] = {}
+        self._training_transient_cache = (
+            wrapper_ref.models_manager._training_transient_cache
+        )
         self._config: Dict[str, Any] = {}
         
         logger.debug("TrainingManager orchestration core module successfully initialized.")

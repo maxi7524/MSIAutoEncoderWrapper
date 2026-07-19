@@ -38,6 +38,7 @@ class ActiveContextProxy(LatentContextMixin):
         self._cached_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
+        self._cached_model_functionality: Optional[Any] = None
         self._initialize_latent_context()
 
     # --------------------------------------------------
@@ -93,6 +94,7 @@ class ActiveContextProxy(LatentContextMixin):
             self._cached_reader = img_bucket.get("reader")
             self._cached_binner = img_bucket.get("binner")
             self._cached_inverse_binner = img_bucket.get("inverse_binner")
+            self._cached_model_functionality = img_bucket.get("model_functionality")
         else:
             logger.error("Active reader mapping failed: No reader configuration has been recorded for image context '%s'", current_target)
             raise_validation_error(
@@ -142,14 +144,62 @@ class ActiveContextProxy(LatentContextMixin):
         :return: Autoencoder wrapper operational interface, or None if another model family is active.
         :rtype: Optional[AutoencoderContextInterface]
         """
+        functionality = self.model_functionality
+        return (
+            functionality
+            if isinstance(functionality, AutoencoderContextInterface)
+            else None
+        )
+
+    @property
+    def local_model_functionality(self) -> Optional[Any]:
+        """Return functionality bound to this image without using another model.
+
+        :return: Image-local model interface or ``None`` when it is not bound.
+        :rtype: Optional[Any]
+        """
+        if self._cached_model_functionality is not None:
+            return self._cached_model_functionality
+        image_key = (
+            self._instantiated_image_key
+            or getattr(self._wrapper.workspace, "active_img_name", None)
+        )
+        bucket = getattr(self._wrapper.context_manager, "config_ledger", {}).get(
+            image_key,
+            {},
+        )
+        functionality = bucket.get("model_functionality")
+        if functionality is not None:
+            self._cached_model_functionality = functionality
+        return functionality
+
+    @property
+    def model_functionality(self) -> Optional[Any]:
+        """Prefer image-local functionality, then use the currently loaded model.
+
+        :return: Local model interface or loaded-model fallback.
+        :rtype: Optional[Any]
+        """
+        local_functionality = self.local_model_functionality
+        if local_functionality is not None:
+            return local_functionality
         models_manager = getattr(self._wrapper, "models_manager", None)
-        return models_manager.autoencoder if models_manager is not None else None
+        return (
+            models_manager.model_functionality
+            if models_manager is not None
+            else None
+        )
 
     # --------------------------------------------------
     # Section: Model Capturing and Attachment
     # --------------------------------------------------
 
-    def attach_local_model(self, torch_model: torch.nn.Module, model_type: str) -> None:
+    def attach_local_model(
+        self,
+        torch_model: torch.nn.Module,
+        model_type: str,
+        trained: bool = False,
+    ) -> None:
         """
         Intercepts a compiled network module, maps its operational strategy, and deploys it onto the active session.
 
@@ -157,10 +207,14 @@ class ActiveContextProxy(LatentContextMixin):
         :type torch_model: torch.nn.Module
         :param model_type: Identity token family string defining the model class layout rules.
         :type model_type: str
+        :param trained: Whether the supplied model is ready for inference.
+        :type trained: bool
         """
         self._wrapper.models_manager.attach_model(
             torch_model=torch_model,
             model_type=model_type,
+            trained=trained,
+            bind_to_local_context=True,
         )
 
     # --------------------------------------------------
@@ -176,6 +230,7 @@ class ActiveContextProxy(LatentContextMixin):
         self._cached_reader = None
         self._cached_binner = None
         self._cached_inverse_binner = None
+        self._cached_model_functionality = None
         self.unload_latent()
 
 

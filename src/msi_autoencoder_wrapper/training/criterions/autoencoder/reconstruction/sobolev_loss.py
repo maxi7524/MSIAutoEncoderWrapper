@@ -5,17 +5,16 @@ Sobolev first-order derivative regularized loss function strategy.
 from typing import Any, Dict, Tuple
 import torch
 
-from ...base_criterion import MSIBaseCriterion
+from ...base_criterion import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
-from .....utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-@CriterionsManager.register_criterion("autoencoder", "SobolevLoss")
-class MSISobolevLoss(MSIBaseCriterion):
+@CriterionsManager.register_criterion("autoencoder", "reconstruction", "SobolevLoss")
+class MSISobolevLoss(MSIReconstructionCriterion):
     """
     Weighted RMSE Sobolev loss strategy calculating spectral derivative deviations.
     """
@@ -44,16 +43,10 @@ class MSISobolevLoss(MSIBaseCriterion):
         Computes the weighted mean squared derivative penalty scores.
         """
         # Heading 1 (Sobolev High-Order Gradient Discrepancy Pass)
-        if "reconstruction" not in model_outputs:
-            raise_incompatible_interface_error(
-                context_name="SobolevLoss",
-                message="Model outputs must contain a 'reconstruction' tensor.",
-            )
-
-        _, original_spectra = batch_data
-        reconstructed_spectra = model_outputs["reconstruction"]
-        target_device = reconstructed_spectra.device
-        original_spectra = original_spectra.to(target_device)
+        reconstructed_spectra, original_spectra = self.reconstruction_pair(
+            model_outputs,
+            batch_data,
+        )
 
         ## 1. Compute baseline dynamic spatial coordinate weights from average magnitudes
         mean_intensity = torch.mean(original_spectra, dim=1, keepdim=True)

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from .base_models_manager_proxy import BaseModelsManagerProxy
 from .....training.training_manager import TrainingManager
 from .....training.criterions.criterions_manager import CriterionsManager
+from .....training.resource_estimator import TrainingResourceEstimator
 
 # Centralized utilities imports
 from .....utils.logger import get_custom_logger
@@ -43,14 +44,17 @@ class TrainingProxy(BaseModelsManagerProxy):
 
     def get_available_criterions(
         self,
+        criterion_type: Optional[str] = None,
         print_return: bool = True,
         return_value: bool = False,
-    ) -> Optional[Dict[str, Dict[str, Any]]]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Queries the central registry factory to extract parameter sheets and docstrings compatible with the active model family.
 
-        :return: Map tracking blueprint capabilities, requirements, and descriptions of compatible loss functions.
-        :rtype: Dict[str, Dict[str, Any]]
+        :param criterion_type: Optional reconstruction, contrastive, or head filter.
+        :type criterion_type: Optional[str]
+        :return: Categorized compatible loss-function descriptions.
+        :rtype: Optional[Dict[str, Any]]
         """
         # Active state validation
         ## Verify if the parent models manager has selected an architecture layout
@@ -66,18 +70,34 @@ class TrainingProxy(BaseModelsManagerProxy):
         
         # Factory dispatch
         ## Retrieve list of valid criterions from registry database
-        criterion_info = CriterionsManager.get_available_criterions(model_type=model_type)
-        return present_components_info(
-            criterion_info,
-            title=f"Available Criterions for '{model_type}'",
-            key_label="Criterion",
-            print_return=print_return,
-            return_value=return_value,
+        criterion_info = CriterionsManager.get_available_criterions(
+            model_type=model_type,
+            criterion_type=criterion_type,
         )
+        if print_return:
+            grouped_info = (
+                {criterion_type: criterion_info}
+                if criterion_type is not None
+                else criterion_info
+            )
+            for category, category_info in grouped_info.items():
+                present_components_info(
+                    category_info,
+                    title=f"Available {category.title()} Criterions for '{model_type}'",
+                    key_label="Criterion",
+                    print_return=True,
+                    return_value=False,
+                )
+        return criterion_info if return_value else None
 
     # --------------------------------------------------
     # Section: Training Optimization Loop Execution
     # --------------------------------------------------
+
+    def clear_training_cache(self) -> None:
+        """Clear criterion data cached across phases and consecutive fit calls."""
+        self._training_transient_cache.clear()
+        logger.info("Cleared the loaded model training transient cache.")
 
     def fit(self, training_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -108,33 +128,6 @@ class TrainingProxy(BaseModelsManagerProxy):
                 message="Cannot start training because no active dataset is loaded.",
             )
 
-        # Heading 2 (Loss Criterion Cross-Check Validation)
-        ## Consult the criteria manager proxy to verify loss selection alignment
-        target_loss = None
-        if "loss" in training_config:
-            target_loss = training_config["loss"]
-        elif "criterion" in training_config:
-            target_loss = training_config["criterion"]
-        elif "phases" in training_config:
-            try:
-                first_phase = training_config["phases"][0]
-                if "criterions" in first_phase:
-                    target_loss = list(first_phase["criterions"].keys())[0]
-            except (IndexError, AttributeError):
-                pass
-
-        if target_loss:
-            compatible_criterions = self.get_available_criterions(
-                print_return=False,
-                return_value=True,
-            ) or {}
-            if target_loss not in compatible_criterions:
-                logger.warning(
-                    "Loss criterion '%s' may be incompatible with active model category '%s'.",
-                    target_loss,
-                    self.active_model_type,
-                )
-
         # Heading 2 (Orchestration Engine Dispatch)
         ## Instantiates a temporary TrainingManager instance bound to the master context
         logger.info("Instantiating execution training manager instance.")
@@ -146,3 +139,31 @@ class TrainingProxy(BaseModelsManagerProxy):
         self.mark_model_trained()
 
         return execution_history
+
+    def estimate_training_resources(
+        self,
+        training_config: Dict[str, Any],
+        resource_limits: Optional[Dict[str, int | float]] = None,
+        auto_adjust_batch_size: bool = False,
+        safety_factor: float = 1.25,
+    ) -> Dict[str, Any]:
+        """Estimate RAM, VRAM, and disk requirements before training.
+
+        :param training_config: Multi-phase trainer configuration.
+        :type training_config: Dict[str, Any]
+        :param resource_limits: Relative fractions or absolute byte limits.
+        :type resource_limits: Optional[Dict[str, int | float]]
+        :param auto_adjust_batch_size: Recommend smaller unsafe phase batches.
+        :type auto_adjust_batch_size: bool
+        :param safety_factor: Reserve multiplier applied to memory estimates.
+        :type safety_factor: float
+        :return: Detailed estimate and recommended copied configuration.
+        :rtype: Dict[str, Any]
+        """
+        estimator = TrainingResourceEstimator(wrapper_ref=self._wrapper)
+        return estimator.estimate(
+            training_config=training_config,
+            resource_limits=resource_limits,
+            auto_adjust_batch_size=auto_adjust_batch_size,
+            safety_factor=safety_factor,
+        )
