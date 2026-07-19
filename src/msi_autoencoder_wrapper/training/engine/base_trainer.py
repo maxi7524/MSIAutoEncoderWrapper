@@ -77,6 +77,9 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             or model_type
         )
         image_key = active_context._instantiated_image_key
+        if image_key is None:
+            image_key = getattr(self._wrapper.workspace, "active_img_name", None)
+        checkpoint_config = self._resolve_checkpoint_config(training_config)
 
         global_history: List[Dict[str, Any]] = []
         phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
@@ -135,13 +138,21 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 loss_fn.on_phase_start(model=model, dataset=dataset, transient_cache=transient_cache)
 
             # Heading 1 (Epoch Processing Execution Loop Partition)
-            ## Resolve batch size prioritization: Phase Payload -> Wrapper Manager -> Fallback Default
-            batch_size = phase_config.get(
-                "batch_size", 
-                getattr(self._wrapper.models_manager, "batch_size", 64)
+            ## Resolve DataLoader settings from the same configuration used by estimation
+            dataloader = self._build_dataloader(
+                dataset=dataset,
+                phase_config=phase_config,
+                device=getattr(self._wrapper, "device", "cpu"),
             )
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=2)
             total_batches = len(dataloader)
+            if total_batches < 1:
+                raise_validation_error(
+                    context_name="Trainer",
+                    message=(
+                        f"Phase '{phase_name}' produced an empty DataLoader. "
+                        "Reduce batch_size or disable drop_last."
+                    ),
+                )
             
             self.best_loss = float("inf")
             self.patience_counter = 0
@@ -157,18 +168,68 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     for loss_fn in composite_loss.loss_functions.values():
                         batch = loss_fn.on_batch_start(batch_data=batch, transient_cache=transient_cache)
 
-                    optimizer.zero_grad()
+                    self._ensure_finite_tensors(
+                        batch,
+                        location=(
+                            f"phase '{phase_name}', epoch {epoch + 1}, "
+                            f"batch {step_idx + 1} input"
+                        ),
+                    )
+
+                    optimizer.zero_grad(set_to_none=True)
                     
                     global_device = getattr(self._wrapper, "device", "cpu")
-                    spectra_tensor = batch[1].to(global_device)
+                    spectra_tensor = batch[1].to(
+                        global_device,
+                        non_blocking=dataloader.pin_memory,
+                    )
                     
                     #### Execute model forward computation step
                     model_outputs = model(spectra_tensor)
+                    self._ensure_finite_tensors(
+                        model_outputs,
+                        location=(
+                            f"phase '{phase_name}', epoch {epoch + 1}, "
+                            f"batch {step_idx + 1} model output"
+                        ),
+                    )
                     
                     #### Evaluate composite objective loss sum vector matrix calculations scores
                     loss, loss_logs = composite_loss(model_outputs=model_outputs, batch_data=batch)
+                    if not bool(torch.isfinite(loss).all()):
+                        raise_validation_error(
+                            context_name="Trainer",
+                            message=(
+                                f"Non-finite loss in phase '{phase_name}', epoch "
+                                f"{epoch + 1}, batch {step_idx + 1}. Check input "
+                                "normalization, learning rate, and criterion parameters."
+                            ),
+                        )
                     
                     loss.backward()
+                    gradient_clip_norm = phase_config.get("gradient_clip_norm")
+                    if gradient_clip_norm is not None:
+                        if (
+                            isinstance(gradient_clip_norm, bool)
+                            or float(gradient_clip_norm) <= 0
+                        ):
+                            raise_validation_error(
+                                context_name="Trainer",
+                                message="gradient_clip_norm must be greater than zero.",
+                            )
+                        gradient_norm = torch.nn.utils.clip_grad_norm_(
+                            trainable_params,
+                            max_norm=float(gradient_clip_norm),
+                            error_if_nonfinite=False,
+                        )
+                        if not bool(torch.isfinite(gradient_norm)):
+                            raise_validation_error(
+                                context_name="Trainer",
+                                message=(
+                                    f"Non-finite gradients in phase '{phase_name}', "
+                                    f"epoch {epoch + 1}, batch {step_idx + 1}."
+                                ),
+                            )
                     optimizer.step()
 
                     #### Accumulate numerical step tracking parameters metrics into localized registries
@@ -209,8 +270,19 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 for key, running_sum in accumulated_metrics.items():
                     mean_metrics[key] = running_sum / total_batches
 
-                global_history.append({"phase": phase_name, "metrics": mean_metrics})
                 current_epoch_loss = mean_metrics["total_loss"]
+                improved = (
+                    current_epoch_loss
+                    < self.best_loss - checkpoint_config["min_delta"]
+                )
+                mean_metrics["is_best"] = improved
+                if improved:
+                    self.best_loss = current_epoch_loss
+                    self.patience_counter = 0
+                else:
+                    self.patience_counter += 1
+                mean_metrics["best_loss"] = self.best_loss
+                global_history.append({"phase": phase_name, "metrics": mean_metrics})
 
                 ### Heading 3 (Workspace Metrics Stream Flushing Pass)
                 #### Delegate file appending directly to the workspace manager to maintain absolute decoupling
@@ -221,19 +293,17 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 )
 
                 ### Heading 3 (Early Stopping Validation Checkpoints)
-                if current_epoch_loss < self.best_loss:
-                    self.best_loss = current_epoch_loss
-                    self.patience_counter = 0
-                    
-                    #### Save optimal tracking model parameters checkpoints onto disk layouts structures via workspace proxy delegation
-                    self._wrapper.workspace.save_model_weights(
-                        img_name=image_key,
-                        model_name=model_name,
-                        state_dict=model.state_dict(),
+                if improved and checkpoint_config["enabled"]:
+                    self._wrapper.workspace.save_model(
+                        img_name=checkpoint_config["context_name"] or image_key,
+                        model_name=checkpoint_config["model_name"] or model_name,
+                        history=global_history,
                     )
-                    logger.debug("Performance milestone verified: Model weights updated via workspace delegation.")
-                else:
-                    self.patience_counter += 1
+                    logger.info(
+                        "Saved new best checkpoint for phase '%s' at epoch %s.",
+                        phase_name,
+                        epoch + 1,
+                    )
 
                 logger.info(
                     "=== Epoch Summary [%s] %03d/%03d | Avg Loss: %s | Patience: %s/%s | Duration: %s s ===",
@@ -250,8 +320,147 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     logger.info("Early stopping barrier triggered. Terminating active optimization loop sequence.")
                     break
 
+            if checkpoint_config["enabled"] and checkpoint_config["restore_best"]:
+                best_weights = self._wrapper.workspace.load_model_weights(
+                    img_name=checkpoint_config["context_name"] or image_key,
+                    model_name=checkpoint_config["model_name"] or model_name,
+                )
+                model.load_state_dict(best_weights)
+                logger.info(
+                    "Restored the best checkpoint after phase '%s'.",
+                    phase_name,
+                )
+
         logger.info("All configured sequential multi-phase training loops successfully completed.")
         return global_history
+
+    def _build_dataloader(
+        self,
+        dataset: Any,
+        phase_config: Dict[str, Any],
+        device: Any,
+    ) -> DataLoader:
+        """Build a phase DataLoader from validated user configuration.
+
+        :param dataset: Active training dataset.
+        :type dataset: Any
+        :param phase_config: Current phase configuration.
+        :type phase_config: Dict[str, Any]
+        :param device: Active torch device or device token.
+        :type device: Any
+        :return: Configured PyTorch DataLoader.
+        :rtype: torch.utils.data.DataLoader
+        :raises ValidationError: If DataLoader parameters are incompatible.
+        """
+        batch_size = int(
+            phase_config.get(
+                "batch_size",
+                getattr(self._wrapper.models_manager, "batch_size", 64),
+            )
+        )
+        if batch_size < 1:
+            raise_validation_error(
+                context_name="Trainer",
+                message="Every phase batch_size must be at least one.",
+            )
+        loader_config = dict(phase_config.get("dataloader", {}))
+        if "batch_size" in loader_config:
+            raise_validation_error(
+                context_name="Trainer",
+                message=(
+                    "Set batch_size on the phase, not inside the dataloader block."
+                ),
+            )
+        loader_config.setdefault("shuffle", True)
+        loader_config.setdefault("num_workers", 0)
+        loader_config.setdefault("pin_memory", str(device).startswith("cuda"))
+        loader_config.setdefault("drop_last", False)
+        workers = int(loader_config["num_workers"])
+        if workers < 0:
+            raise_validation_error(
+                context_name="Trainer",
+                message="dataloader.num_workers cannot be negative.",
+            )
+        if workers == 0:
+            loader_config.pop("prefetch_factor", None)
+            loader_config["persistent_workers"] = False
+        try:
+            return DataLoader(dataset, batch_size=batch_size, **loader_config)
+        except (TypeError, ValueError) as error:
+            raise_validation_error(
+                context_name="Trainer",
+                message=f"Invalid DataLoader configuration: {error}",
+            )
+
+    @classmethod
+    def _ensure_finite_tensors(cls, value: Any, location: str) -> None:
+        """Raise a standardized error when nested tensors contain NaN or infinity.
+
+        :param value: Tensor or nested tensor container.
+        :type value: Any
+        :param location: Human-readable training stage.
+        :type location: str
+        :raises ValidationError: If a discovered tensor is non-finite.
+        """
+        tensors: List[torch.Tensor] = []
+        if isinstance(value, torch.Tensor):
+            tensors.append(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                cls._ensure_finite_tensors(item, location)
+            return
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                if item is not None:
+                    cls._ensure_finite_tensors(item, location)
+            return
+        for tensor in tensors:
+            if tensor.is_floating_point() and not bool(torch.isfinite(tensor).all()):
+                raise_validation_error(
+                    context_name="Trainer",
+                    message=(
+                        f"Non-finite tensor detected at {location}. Check reader "
+                        "values, dataset normalization, and numerical settings."
+                    ),
+                )
+
+    @staticmethod
+    def _resolve_checkpoint_config(training_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and normalize best-checkpoint behavior.
+
+        :param training_config: Full training configuration.
+        :type training_config: Dict[str, Any]
+        :return: Normalized checkpoint settings.
+        :rtype: Dict[str, Any]
+        :raises ValidationError: If checkpoint settings are invalid.
+        """
+        configured = training_config.get("checkpoint", {})
+        if not isinstance(configured, dict):
+            raise_validation_error(
+                context_name="Trainer",
+                message="checkpoint must be a configuration dictionary.",
+            )
+        resolved = {
+            "enabled": configured.get("enabled", True),
+            "restore_best": configured.get("restore_best", True),
+            "min_delta": configured.get("min_delta", 0.0),
+            "context_name": configured.get("context_name"),
+            "model_name": configured.get("model_name"),
+        }
+        if not isinstance(resolved["enabled"], bool) or not isinstance(
+            resolved["restore_best"], bool
+        ):
+            raise_validation_error(
+                context_name="Trainer",
+                message="checkpoint enabled and restore_best values must be booleans.",
+            )
+        if isinstance(resolved["min_delta"], bool) or resolved["min_delta"] < 0:
+            raise_validation_error(
+                context_name="Trainer",
+                message="checkpoint.min_delta must be non-negative.",
+            )
+        resolved["min_delta"] = float(resolved["min_delta"])
+        return resolved
 
 # --------------------------------------------------
 # Section: Helpers

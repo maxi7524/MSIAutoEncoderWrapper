@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import shutil
 from pathlib import Path
@@ -166,6 +167,52 @@ class TrainingResourceEstimator:
         }
 
     @staticmethod
+    def format_report(report: Dict[str, Any]) -> str:
+        """Return a concise human-readable resource summary.
+
+        :param report: Report returned by :meth:`estimate`.
+        :type report: Dict[str, Any]
+        :return: Multiline RAM, VRAM, disk, and batch-size summary.
+        :rtype: str
+        """
+        lines = ["Training resource estimate"]
+        for phase in report["phases"]:
+            lines.append(
+                "- {phase}: batch {configured} -> {recommended}, RAM {ram}, "
+                "VRAM {vram}, fits limits: {fits}".format(
+                    phase=phase["phase"],
+                    configured=phase["configured_batch_size"],
+                    recommended=phase["recommended_batch_size"],
+                    ram=TrainingResourceEstimator._format_bytes(
+                        phase["estimated_ram_bytes"]
+                    ),
+                    vram=TrainingResourceEstimator._format_bytes(
+                        phase["estimated_vram_bytes"]
+                    ),
+                    fits=phase["fits_limits"],
+                )
+            )
+        lines.append(
+            "- disk: {disk}, fits limit: {fits}".format(
+                disk=TrainingResourceEstimator._format_bytes(
+                    report["estimated_disk_bytes"]
+                ),
+                fits=report["disk_fits_limit"],
+            )
+        )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        """Format a byte count using binary units."""
+        amount = float(value)
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if amount < 1024.0 or unit == "TiB":
+                return f"{amount:.2f} {unit}"
+            amount /= 1024.0
+        return f"{amount:.2f} TiB"
+
+    @staticmethod
     def _get_sample_tensor(dataset: Any) -> torch.Tensor:
         """Load one dataset item and return its feature tensor."""
         if len(dataset) < 1:
@@ -233,7 +280,7 @@ class TrainingResourceEstimator:
         )
         device = str(getattr(self._wrapper, "device", "cpu"))
         loader_config = phase.get("dataloader", {})
-        workers = int(loader_config.get("num_workers", 2))
+        workers = int(loader_config.get("num_workers", 0))
         prefetch = int(loader_config.get("prefetch_factor", 2)) if workers else 0
         loader_copies = 1 + workers * prefetch
         loader_bytes = sample_bytes * batch_size * expansion * loader_copies
@@ -303,7 +350,26 @@ class TrainingResourceEstimator:
         for name, config in entries:
             target = config.get("target", name) if isinstance(config, dict) else config
             if target == "MassersteinLoss":
-                workspace = max(workspace, 4 * (bins + 1) ** 2 * element_size)
+                params = config.get("params", {}) if isinstance(config, dict) else {}
+                penalty = float(params.get("denoising_penalty", 0.5))
+                entropy = float(params.get("entropy_regularization", 0.02))
+                tolerance = float(params.get("kernel_tolerance", 1e-7))
+                axis_step = float(params.get("axis_step", 1.0))
+                radius = max(
+                    1,
+                    math.ceil(
+                        (
+                            2.0 * penalty
+                            - entropy * math.log(tolerance)
+                        )
+                        / axis_step
+                    ),
+                )
+                masserstein_workspace = (
+                    14 * batch_size * (bins + 1)
+                    + 4 * (2 * radius + 1)
+                ) * element_size
+                workspace = max(workspace, masserstein_workspace)
             if target == "InfoNCELoss":
                 workspace += 3 * (2 * batch_size) ** 2 * element_size
         return workspace
