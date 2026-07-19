@@ -52,7 +52,7 @@ A weighted `CompositeLoss` evaluates every configured component and reports both
 individual values and `total_loss`. A flat legacy mapping remains accepted when
 every registered target belongs unambiguously to one category.
 
-## Lifecycle hooks
+### Lifecycle hooks
 
 `on_phase_start(model, dataset, transient_cache)` runs once before a phase. It is
 intended for reusable computations. `InfoNCELoss`, for example, samples spectra,
