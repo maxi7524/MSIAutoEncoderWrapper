@@ -54,6 +54,7 @@ def _wrapper(tmp_path: Path) -> MSIAutoEncoderWrapper:
 
 def test_resource_estimator_reports_ram_vram_disk_and_method(
     tmp_path: Path,
+    capsys,
 ) -> None:
     """A probe report separates resources and records estimation limitations."""
     wrapper = _wrapper(tmp_path)
@@ -66,6 +67,7 @@ def test_resource_estimator_reports_ram_vram_disk_and_method(
     assert report["phases"][0]["estimated_vram_bytes"] == 0
     assert report["phases"][0]["recommended_batch_size"] == 8
     assert report["limitations"]
+    assert "Training resource estimate" in capsys.readouterr().out
 
 
 def test_resource_estimator_can_reduce_batch_size_to_absolute_ram_limit(

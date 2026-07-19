@@ -6,6 +6,7 @@ from typing import Any, Optional, TYPE_CHECKING
 import torch
 
 # Base autoencoder operational interfaces and exceptions
+from .autoencoder_context_manager import AutoencoderContextInterface
 from .latent_context_mixin import LatentContextMixin
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
@@ -14,7 +15,6 @@ if TYPE_CHECKING:
     from ....readers.base_reader import MSIBaseReader
     from ....binners.base_binner import MSIBaseBinner
     from ....binners.base_inverse import MSIBaseInverseBinner
-    from .autoencoder_context_manager import AutoencoderContextInterface
 
 # Logger initialization
 logger = get_custom_logger(__name__)

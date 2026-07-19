@@ -109,7 +109,6 @@ class TrainingProxy(BaseModelsManagerProxy):
         :rtype: List[Dict[str, Any]]
         :raises ValidationError: If active_model or active_dataset is unassigned.
         """
-        #TODO - model powininen być zapisywany co epoke, w przypadku gdy jest najlepszy itd. - to powinno byc aktywnie śledzone i pilnowane 
         self._training_config = training_config
 
         # Heading 1 (Pre-flight Validation Pass)
@@ -147,6 +146,7 @@ class TrainingProxy(BaseModelsManagerProxy):
         resource_limits: Optional[Dict[str, int | float]] = None,
         auto_adjust_batch_size: bool = False,
         safety_factor: float = 1.25,
+        print_return: bool = True,
     ) -> Dict[str, Any]:
         """Estimate RAM, VRAM, and disk requirements before training.
 
@@ -158,13 +158,18 @@ class TrainingProxy(BaseModelsManagerProxy):
         :type auto_adjust_batch_size: bool
         :param safety_factor: Reserve multiplier applied to memory estimates.
         :type safety_factor: float
+        :param print_return: Print a concise report while still returning its dictionary.
+        :type print_return: bool
         :return: Detailed estimate and recommended copied configuration.
         :rtype: Dict[str, Any]
         """
         estimator = TrainingResourceEstimator(wrapper_ref=self._wrapper)
-        return estimator.estimate(
+        report = estimator.estimate(
             training_config=training_config,
             resource_limits=resource_limits,
             auto_adjust_batch_size=auto_adjust_batch_size,
             safety_factor=safety_factor,
         )
+        if print_return:
+            print(estimator.format_report(report))
+        return report

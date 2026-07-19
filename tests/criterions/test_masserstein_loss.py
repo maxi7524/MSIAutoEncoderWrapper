@@ -66,3 +66,24 @@ def test_masserstein_parameters_use_global_validation_errors() -> None:
     """Invalid optimal-transport settings use the shared exception format."""
     with pytest.raises(ValidationError, match="denoising_penalty"):
         MSIMassersteinLoss(denoising_penalty=0.0)
+
+
+def test_masserstein_batches_regular_high_resolution_axes(caplog) -> None:
+    """A regular high-resolution grid uses the batched convolution path."""
+    original = torch.rand(4, 2048)
+    reconstruction = torch.rand(4, 2048, requires_grad=True)
+    loss = MSIMassersteinLoss(
+        axis_step=0.1,
+        sinkhorn_iterations=3,
+        debias=False,
+    )
+
+    value = loss(
+        {"reconstruction": reconstruction},
+        (torch.arange(4), original),
+    )
+    value.backward()
+
+    assert torch.isfinite(value)
+    assert reconstruction.grad is not None
+    assert "irregular axis" not in caplog.text
