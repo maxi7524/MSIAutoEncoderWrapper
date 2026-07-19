@@ -28,94 +28,38 @@ class MSIBaseCriterion(nn.Module, ConfigurableComponent, ABC):
         super().__init__()
         self._config: Dict[str, Any] = {}
 
-    def on_phase_start(self, model: nn.Module, dataset: MSIBaseDataset, transient_cache: Dict[str, Any]) -> None:
-        """
-        Optional execution lifecycle hook triggered once before the phase epoch sequence loop initiates.
+    def on_phase_start(
+        self,
+        model: nn.Module,
+        dataset: MSIBaseDataset,
+        transient_cache: Dict[str, Any],
+    ) -> None:
+        """Run an optional hook before a training phase starts.
 
-        Useful for heavy pre-computations such as peak-picking or initializing shared statistical arrays.
-
-        :param model: The compiled master architecture model graph currently being optimized.
-        :type model: nn.Module
-        :param dataset: Bound dataset instance containing raw target spectra profiles.
+        :param model: Model optimized during the current phase.
+        :type model: torch.nn.Module
+        :param dataset: Dataset used during the current phase.
         :type dataset: MSIBaseDataset
-        :param transient_cache: Mutable global scratchpad tracking state variables across the active session.
+        :param transient_cache: Shared mutable training cache.
         :type transient_cache: Dict[str, Any]
         """
-        pass
+        del model, dataset, transient_cache
 
-
-class MSIReconstructionCriterion(MSIBaseCriterion, ABC):
-    """Base contract for losses comparing input and reconstructed spectra."""
-
-    criterion_type = "reconstruction"
-
-    @staticmethod
-    def reconstruction_pair(
-        model_outputs: Dict[str, torch.Tensor],
+    def on_batch_start(
+        self,
         batch_data: Tuple[torch.Tensor, ...],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return reconstructed and target spectra after interface validation.
+        transient_cache: Dict[str, Any],
+    ) -> Tuple[torch.Tensor, ...]:
+        """Run an optional hook before a batch forward pass.
 
-        :param model_outputs: Output mapping returned by the model.
-        :type model_outputs: Dict[str, torch.Tensor]
-        :param batch_data: Dataset batch containing indices and input spectra.
+        :param batch_data: Batch returned by the active data loader.
         :type batch_data: Tuple[torch.Tensor, ...]
-        :return: Reconstruction followed by the target tensor on the same device.
-        :rtype: Tuple[torch.Tensor, torch.Tensor]
-        :raises IncompatibleInterfaceError: If required tensors are unavailable.
-        """
-        if "reconstruction" not in model_outputs:
-            raise_incompatible_interface_error(
-                context_name="ReconstructionCriterion",
-                message="Model outputs must contain a 'reconstruction' tensor.",
-            )
-        if len(batch_data) < 2 or not isinstance(batch_data[1], torch.Tensor):
-            raise_incompatible_interface_error(
-                context_name="ReconstructionCriterion",
-                message="Batch data must contain an input spectrum tensor at index 1.",
-            )
-        reconstruction = model_outputs["reconstruction"]
-        return reconstruction, batch_data[1].to(reconstruction.device)
-
-
-class MSIContrastiveCriterion(MSIBaseCriterion, ABC):
-    """Base contract for representation losses using augmented spectrum pairs."""
-
-    criterion_type = "contrastive"
-
-
-class MSIHeadCriterion(MSIBaseCriterion, ABC):
-    """Base contract for objectives attached to one named model head."""
-
-    criterion_type = "head"
-
-    def __init__(self, head_name: str) -> None:
-        """Initialize the output key used by a downstream objective.
-
-        :param head_name: Name used by the model's ``head_<name>`` output.
-        :type head_name: str
-        """
-        super().__init__()
-        self.head_name = head_name
-
-    @property
-    def output_key(self) -> str:
-        """Return the standardized model-output key for this head."""
-        return f"head_{self.head_name}"
-
-    def on_batch_start(self, batch_data: Tuple[torch.Tensor, ...], transient_cache: Dict[str, Any]) -> Tuple[torch.Tensor, ...]:
-        """
-        Optional execution lifecycle hook triggered for every step batch stream iteration before forward calls.
-
-        Enables on-the-fly computational operations like chemical noise augmentations on the GPU.
-
-        :param batch_data: Tensor tuple returned from the active data loader.
-        :type batch_data: Tuple[torch.Tensor, ...]
-        :param transient_cache: Mutable global scratchpad tracking state variables across the active session.
+        :param transient_cache: Shared mutable training cache.
         :type transient_cache: Dict[str, Any]
-        :return: Transformed or untouched batch variables aligned to data specifications.
+        :return: Original or transformed batch.
         :rtype: Tuple[torch.Tensor, ...]
         """
+        del transient_cache
         return batch_data
 
     @abstractmethod
@@ -123,16 +67,17 @@ class MSIHeadCriterion(MSIBaseCriterion, ABC):
         self,
         model_outputs: Dict[str, torch.Tensor],
         batch_data: Tuple[torch.Tensor, ...],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> torch.Tensor:
-        """
-        Computes the target objective mathematical loss matrix score using extracted forward tensors.
+        """Compute a scalar or unreduced criterion value.
 
-        :param model_outputs: Collection mapping outputs generated by the active model forward pass.
+        :param model_outputs: Mapping returned by the model forward pass.
         :type model_outputs: Dict[str, torch.Tensor]
-        :param batch_data: Variables tuple matching data loader outputs.
+        :param batch_data: Batch returned by the active data loader.
         :type batch_data: Tuple[torch.Tensor, ...]
-        :return: Singular scalar tensor containing tracking gradients.
+        :param kwargs: Additional criterion-specific arguments.
+        :return: Differentiable criterion tensor.
         :rtype: torch.Tensor
         """
-        pass
+        raise NotImplementedError
+

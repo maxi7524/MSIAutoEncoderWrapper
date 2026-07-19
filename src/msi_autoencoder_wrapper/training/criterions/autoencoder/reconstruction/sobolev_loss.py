@@ -5,7 +5,7 @@ Sobolev first-order derivative regularized loss function strategy.
 from typing import Any, Dict, Tuple
 import torch
 
-from ...base_criterion import MSIReconstructionCriterion
+from ...autoencoder_base_criterions  import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
 
