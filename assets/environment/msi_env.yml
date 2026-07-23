@@ -35,4 +35,5 @@ dependencies:
   # --- PIP DEPENDENCIES ---
   - pip:
       - m2aia
+      - metaspace2020==2.0.9
       - pyimzml
