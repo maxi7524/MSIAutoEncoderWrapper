@@ -1,0 +1,13 @@
+{
+  "merged_dataset_id": "metaspace-pilot",
+  "output_path": "/path/to/workspace/datasets/merged/metaspace-pilot/dataset.imzML",
+  "row_width": 128,
+  "inputs": [
+    {
+      "source": "metaspace",
+      "dataset_id": "replace-with-dataset-id",
+      "imzml_path": "/path/to/workspace/datasets/sources/metaspace/replace-with-dataset-id/replace-with-dataset-id.imzML",
+      "spatial_ids": [0, 1, 2]
+    }
+  ]
+}
