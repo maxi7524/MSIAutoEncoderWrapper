@@ -6,17 +6,16 @@ from typing import Any, Dict, Tuple
 import torch
 import torch.nn as nn
 
-from ...base_criterion import MSIBaseCriterion
+from ...autoencoder_base_criterions import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
-from .....utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-@CriterionsManager.register_criterion("autoencoder", "MSELoss")
-class MSIMSELoss(MSIBaseCriterion):
+@CriterionsManager.register_criterion("autoencoder", "reconstruction", "MSELoss")
+class MSIMSELoss(MSIReconstructionCriterion):
     """
     Mean Squared Error (MSE) loss strategy evaluating raw profile reconstruction accuracy.
     """
@@ -42,15 +41,10 @@ class MSIMSELoss(MSIBaseCriterion):
         Evaluates the mean squared reconstruction error between target arrays.
         """
         # Heading 1 (Reconstruction Discrepancy Evaluation Pass)
-        if "reconstruction" not in model_outputs:
-            raise_incompatible_interface_error(
-                context_name="MSELoss",
-                message="Model outputs must contain a 'reconstruction' tensor.",
-            )
-
-        ## Unpack spectra matrix from data stream batch
-        _, original_spectra = batch_data
-        reconstructed_spectra = model_outputs["reconstruction"]
+        reconstructed_spectra, original_spectra = self.reconstruction_pair(
+            model_outputs,
+            batch_data,
+        )
 
         ## Compute and return the mathematical reduction error matrix score
-        return self.loss_fn(reconstructed_spectra, original_spectra.to(reconstructed_spectra.device))
+        return self.loss_fn(reconstructed_spectra, original_spectra)

@@ -40,7 +40,6 @@ def get_gradual_reduction_preset(
     :return: Completed nested components setup configuration blueprint map.
     :rtype: Dict[str, Any]
     """ 
-    #TODO - to jes tbez snesu `estimate_max_peak_width` jest źle zaimplentowane, pomimo wyraźnej uinstrukcji i kodu który to wszystko ustawiał ....
     # Context data resolution
     ## Safely query mass axis feature layout boundaries from the provided dataset object
     input_dim = active_context.binner.GetXAxisDepth()

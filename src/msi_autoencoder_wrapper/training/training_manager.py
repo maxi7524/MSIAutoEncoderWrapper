@@ -8,12 +8,13 @@ import torch.nn as nn
 
 from ..utils.logger import get_custom_logger
 from .engine.base_trainer import MSIPyTorchTrainer
+from ..utils.configuration import ConfigurableComponent, make_json_compatible
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-class TrainingManager:
+class TrainingManager(ConfigurableComponent):
     """
     Central orchestration facade coordinating optimization lifecycles, runtime transient environments, and execution dispatches.
     """
@@ -30,7 +31,10 @@ class TrainingManager:
         # Stateful configuration transient cache
         ## Persistent memory tracking execution blocks variables (e.g., peak footprints for InfoNCE)
         ## Kept resident in memory across sequential fit calls until the active model is changed or recompiled.
-        self._training_transient_cache: Dict[str, Any] = {}
+        self._training_transient_cache = (
+            wrapper_ref.models_manager._training_transient_cache
+        )
+        self._config: Dict[str, Any] = {}
         
         logger.debug("TrainingManager orchestration core module successfully initialized.")
 
@@ -52,6 +56,8 @@ class TrainingManager:
         :rtype: List[Dict[str, Any]]
         :raises ValueError: If active image contexts, models, or datasets tracking references are unbound.
         """
+
+        self._config = make_json_compatible(training_config)
 
         # Section (Optimizer Validation Heuristics Override Enforcements)
         ## Scan every phase configuration block to enforce the strict "all-or-nothing" optimizer specification criteria

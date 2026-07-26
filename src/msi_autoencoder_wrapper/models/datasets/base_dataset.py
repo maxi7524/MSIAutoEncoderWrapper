@@ -10,12 +10,13 @@ from torch.utils.data import Dataset
 if TYPE_CHECKING:
     from ...core.mixins.active_context.active_context_mixin import ActiveContextProxy
 from ...utils.logger import get_custom_logger
+from ...utils.configuration import ConfigurableComponent
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-class MSIBaseDataset(Dataset, ABC):
+class MSIBaseDataset(Dataset, ConfigurableComponent, ABC):
     """
     Abstract Base Class establishing the core contract for all decoupled dataset entities.
     
@@ -36,15 +37,6 @@ class MSIBaseDataset(Dataset, ABC):
         ## Anchor the unified active session tracking reference hook
         self.active_context = active_context
         self._config: dict[str, Any] = {}
-
-    def GetConfig(self) -> dict[str, Any]:
-        """
-        Retrieves baseline parameters configured across setup pipelines.
-
-        :return: Map containing foundational serialized configurations.
-        :rtype: dict[str, Any]
-        """
-        return self._config
 
     @abstractmethod
     def __len__(self) -> int:

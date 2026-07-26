@@ -2,10 +2,8 @@
 Module providing runtime context attachments and operational execution proxies for autoencoder models.
 """
 
-import json
-import time
 from pathlib import Path
-from typing import Any, Optional, Dict, Tuple, Union
+from typing import Any, Optional, Dict, Union
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -22,7 +20,12 @@ class AutoencoderContextInterface:
     High-level operational execution proxy providing concrete interface methods for locally mounted autoencoders.
     """
 
-    def __init__(self, torch_model: torch.nn.Module, active_context: Any) -> None:
+    def __init__(
+        self,
+        torch_model: torch.nn.Module,
+        active_context: Any,
+        trained: bool = False,
+    ) -> None:
         """
         Binds the compiled neural network and its execution context to the operational interface.
 
@@ -30,10 +33,12 @@ class AutoencoderContextInterface:
         :type torch_model: torch.nn.Module
         :param active_context: Reference back to the live hosting ActiveContextProxy session container.
         :type active_context: Any
+        :param trained: Whether the model weights are ready for inference.
+        :type trained: bool
         """
         self._architecture = torch_model
         self._context = active_context
-        self._is_trained = False
+        self._is_trained = trained
         
         logger.debug("Operational interface container initialized for local Autoencoder strategy.")
 
@@ -107,7 +112,7 @@ class AutoencoderContextInterface:
         :rtype: Any
         """
         # Heading 1 (Reconstructive Dimensional Decompressions Pass)
-        self._ensure_ready()
+        self._ensure_ready(require_inverse=not grid_xs)
         global_device = self._prepare_execution_environment()
         z_tensor = self._prepare_input(z)
 
@@ -119,7 +124,10 @@ class AutoencoderContextInterface:
         if grid_xs:
             return x_hat_arr
 
-        return self._context.inverse_binner(x_hat_arr)
+        inverse_binner = self._context.inverse_binner
+        if x_hat_arr.ndim == 1:
+            return inverse_binner(x_hat_arr)
+        return [inverse_binner(row) for row in x_hat_arr]
 
     def transform(self, torch_loader_config: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """
@@ -145,7 +153,7 @@ class AutoencoderContextInterface:
         loader_params = {
             "batch_size": batch_size,
             "pin_memory": True,
-            "num_workers": 2,
+            "num_workers": 0,
             "shuffle": False
         }
         if torch_loader_config:
@@ -162,48 +170,27 @@ class AutoencoderContextInterface:
         logger.info("Sequential structural image data translation complete.")
         return np.concatenate(embeddings_bucket, axis=0)
 
-    def compress_to_file(self, output_path: Union[str, Path]) -> None:
+    def compress_to_file(self, output_path: Union[str, Path]) -> Path:
         """
-        Transforms the active context imaging footprint into a compressed bin archive file along with layout metadata.
+        Save the active image transform as a latent imzML/ibd pair.
 
         :param output_path: Absolute or relative disk storage target destination path.
         :type output_path: Union[str, Path]
+        :return: Written latent imzML path.
+        :rtype: pathlib.Path
         """
-        # Heading 1 (Disk Archive High Compression Pass)
-        self._ensure_ready()
-        
-        final_path = Path(output_path)
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-
-        latent_embeddings = self.transform()
-
-        reader = self._context.reader
-        total_spectra = reader.GetNumberOfSpectra()
-        metadata = reader.GetMetaData()
-
-        coords_matrix = np.zeros((total_spectra, 3), dtype=np.int32)
-        for idx in range(total_spectra):
-            x, y, z = reader.GetSpectrumPosition(idx)
-            coords_matrix[idx] = [int(x), int(y), int(z)]
-
-        np.savez_compressed(
-            final_path,
-            embeddings=latent_embeddings,
-            metadata=json.dumps(metadata),
-            coordinates=coords_matrix
-        )
-        logger.info("Context compression operations successfully finalized. Exported target: %s", final_path)
+        return self._context.save_latent(output_path=output_path)
 
 
 # --------------------------------------------------
 # Section: Helpers
 # --------------------------------------------------
 
-    def _ensure_ready(self) -> None:
+    def _ensure_ready(self, require_inverse: bool = False) -> None:
         """
         Validates internal execution dependencies and training optimization status.
 
-        :raises RuntimeError: If dependencies are missing or if the model weights are unoptimized.
+        :raises ValidationError: If dependencies are missing or weights are not ready.
         """
         if self._architecture is None:
             raise_validation_error(
@@ -217,10 +204,10 @@ class AutoencoderContextInterface:
                 message="The model has not been trained or loaded with trained weights.",
             )
             
-        if not getattr(self._context, "binner", None) or not getattr(self._context, "inverse_binner", None):
+        if require_inverse and getattr(self._context, "inverse_binner", None) is None:
             raise_validation_error(
                 context_name="Autoencoder",
-                message="The active image context requires binner and inverse binner instances.",
+                message="Decoding to sparse m/z values requires an inverse binner.",
             )
 
     def _prepare_execution_environment(self) -> str:
@@ -238,5 +225,7 @@ class AutoencoderContextInterface:
         Standardizes alternative input data types into standard aligned PyTorch float tensors.
         """
         if isinstance(x, torch.Tensor):
-            return x.float()
-        return torch.tensor(np.array(x), dtype=torch.float32)
+            tensor = x.float()
+        else:
+            tensor = torch.tensor(np.array(x), dtype=torch.float32)
+        return tensor.unsqueeze(0) if tensor.dim() == 1 else tensor

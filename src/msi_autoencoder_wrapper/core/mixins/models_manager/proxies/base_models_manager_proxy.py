@@ -31,5 +31,9 @@ class BaseModelsManagerProxy(BaseWrapperProxy):
         
         # Stateful configuration registers shared across sub-proxies
         self.active_model_type: Optional[str] = None
+        self._active_model_name: Optional[str] = None
         self._active_dataset_name: Optional[str] = None
         self._building_buffer: Dict[str, Any] = {}
+        self._training_config: Optional[Dict[str, Any]] = None
+        self._training_history: Optional[Any] = None
+        self._training_transient_cache: Dict[str, Any] = {}

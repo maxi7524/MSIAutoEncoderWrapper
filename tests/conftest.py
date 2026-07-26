@@ -25,6 +25,7 @@ def mock_reader(msi_fixture_path: Path) -> MockMSIReader:
 @pytest.fixture
 def mock_active_context(mock_reader: MockMSIReader) -> MockActiveContext:
     """Return an active context with a reader and regular-grid binner."""
+    BinnerManager.discover_strategies()
     context = MockActiveContext(reader=mock_reader)
     context.binner = BinnerManager.get_binner(
         "LinearBinning",
