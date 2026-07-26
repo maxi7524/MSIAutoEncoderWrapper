@@ -156,7 +156,12 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         
         ## Otherwise, build path targeting the internal default workspace structure
         logger.debug("Resolving internal workspace dataset path for: %s", img_name)
-        return self.project_path_resolved / self._layout["imgs_dir"] / f"{img_name}{suffix}"
+        datasets_dir = self.get_datasets_dir()
+        nested_path = datasets_dir / img_name / f"{img_name}{suffix}"
+        legacy_path = datasets_dir / f"{img_name}{suffix}"
+        if legacy_path.is_file() and not nested_path.is_file():
+            return legacy_path
+        return nested_path
     
     ## Helper 1: Resolve incoming path or identifier token
     def _resolve_incoming_path(self, img_name_or_path: Optional[Union[str, Path]]) -> Tuple[Optional[str], Optional[Path]]:
@@ -205,7 +210,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         :rtype: Path
         """
         ## Obtain raw images directory path
-        imgs_dir = self.get_imgs_dir()
+        imgs_dir = self.get_datasets_dir()
         input_path = Path(img_name_or_path)
 
         ## Rule 1: If an absolute path is provided directly, target it; otherwise, anchor it to imgs_dir
@@ -215,11 +220,20 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         if target_file.is_file():
             return target_file
 
+        nested_file = imgs_dir / input_path.stem / input_path.name
+        if nested_file.is_file():
+            return nested_file
+
         ## Rule 3: If not found, try appending default extensions (e.g., .imzML)
         if not target_file.suffix:
             fallback_file = target_file.with_suffix(".imzML")
             if fallback_file.is_file():
                 return fallback_file
+            nested_fallback = (
+                imgs_dir / input_path.stem / input_path.stem
+            ).with_suffix(".imzML")
+            if nested_fallback.is_file():
+                return nested_fallback
 
         ## Fallback: Raise strict workspace error since the image file cannot be verified on disk
         logger.error("Failed to locate target image file on storage system: %s", img_name_or_path)
@@ -264,22 +278,37 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
     # Subsection: Model path getters
     # --------------------------------------------------
 
-    def get_imgs_dir(self) -> Path:
+    def get_datasets_dir(self) -> Path:
         """
-        Calculates the absolute path to the raw images workspace directory.
+        Calculate the workspace directory containing independently stored datasets.
         Automatically provisions the directory if auto_create_dirs is enabled.
 
-        :return: Path to the imgs folder.
+        :return: Path to the datasets folder.
         :rtype: Path
         """
-        ## Retrieve absolute imgs path from restored legacy key
-        target_path = self.project_path_resolved / self._layout["imgs_dir"]
+        target_path = self.project_path_resolved / self._layout["datasets_dir"]
 
         if self.auto_create_dirs and not target_path.exists():
             logger.info("Auto-creating missing images directory: %s", target_path)
             target_path.mkdir(parents=True, exist_ok=True)
 
         return target_path
+
+    def get_imgs_dir(self) -> Path:
+        """Return the datasets directory through the legacy workspace API.
+
+        :return: Path returned by :meth:`get_datasets_dir`.
+        :rtype: pathlib.Path
+        """
+        return self.get_datasets_dir()
+
+    def get_dataset_catalog_path(self) -> Path:
+        """Return the canonical SQLite catalog path for the workspace.
+
+        :return: ``datasets/catalog.sqlite`` path.
+        :rtype: pathlib.Path
+        """
+        return self.get_datasets_dir() / "catalog.sqlite"
 
     def get_models_root(self) -> Path:
         """

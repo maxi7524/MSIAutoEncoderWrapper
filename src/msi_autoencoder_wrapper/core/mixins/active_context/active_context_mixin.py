@@ -13,6 +13,7 @@ from ....utils.exceptions import raise_validation_error
 
 if TYPE_CHECKING:
     from ....readers.base_reader import MSIBaseReader
+    from ....annotations.base_annotation_reader import MSIBaseAnnotationReader
     from ....binners.base_binner import MSIBaseBinner
     from ....binners.base_inverse import MSIBaseInverseBinner
 
@@ -38,6 +39,7 @@ class ActiveContextProxy(LatentContextMixin):
         
         # Operational runtime object caches
         self._cached_reader: Optional[Any] = None
+        self._cached_annotation_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
         self._cached_model_functionality: Optional[Any] = None
@@ -94,6 +96,7 @@ class ActiveContextProxy(LatentContextMixin):
             ### Load reader, binner, and optional local model instances from ledger registry
             img_bucket = manager.config_ledger[current_target]
             self._cached_reader = img_bucket.get("reader")
+            self._cached_annotation_reader = img_bucket.get("annotation_reader")
             self._cached_binner = img_bucket.get("binner")
             self._cached_inverse_binner = img_bucket.get("inverse_binner")
             self._cached_model_functionality = img_bucket.get("model_functionality")
@@ -119,6 +122,17 @@ class ActiveContextProxy(LatentContextMixin):
         if self._cached_reader is None:
             self._resolve_active_pipeline()
         return self._cached_reader
+
+    @property
+    def annotation_reader(self) -> Optional[MSIBaseAnnotationReader]:
+        """Return the annotation reader bound to the active image, if configured.
+
+        :return: Active annotation reader or ``None``.
+        :rtype: Optional[MSIBaseAnnotationReader]
+        """
+        if self._cached_reader is None:
+            self._resolve_active_pipeline()
+        return self._cached_annotation_reader
 
     @property
     def binner(self) -> MSIBaseBinner:
@@ -230,6 +244,7 @@ class ActiveContextProxy(LatentContextMixin):
         logger.debug("ActiveContextProxy: Clearing active cached reader, binner and autoencoder interfaces.")
         self._instantiated_image_key = None
         self._cached_reader = None
+        self._cached_annotation_reader = None
         self._cached_binner = None
         self._cached_inverse_binner = None
         self._cached_model_functionality = None

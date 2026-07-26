@@ -42,8 +42,10 @@ class HelpersProxy(BaseWorkspaceProxy):
         
         lines = [
             f"{self.project_path_resolved}/",
-            f"├── {self._layout['imgs_dir']}/",
-            f"│   └── {img_part}.imzML / {img_part}.ibd",
+            f"├── {self._layout['datasets_dir']}/",
+            f"│   ├── catalog.sqlite",
+            f"│   └── {img_part}/",
+            f"│       └── {img_part}.imzML / {img_part}.ibd",
             f"└── {self._layout['models_root']}/",
             f"    ├── {GLOBAL_CONTEXT_KEY}/",
             f"    │   └── {model_part}/ (Global models layout)",

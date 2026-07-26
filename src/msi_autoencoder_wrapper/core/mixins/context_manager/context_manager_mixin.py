@@ -13,6 +13,8 @@ from ....utils.validators import resolve_component
 from ....utils.configuration import get_component_config
 from ....readers.base_reader import MSIBaseReader
 from ....readers.readers_manager import ReaderManager
+from ....annotations.base_annotation_reader import MSIBaseAnnotationReader
+from ....annotations.annotations_manager import AnnotationReaderManager
 from ....binners.base_binner import MSIBaseBinner
 from ....binners.base_inverse import MSIBaseInverseBinner
 from ....binners.binners_manager import BinnerManager
@@ -45,6 +47,7 @@ class ContextManagerProxy:
         # --------------------------------------------------
         logger.info("Enforcing automatic module discovery for reader and binner registries.")
         ReaderManager.discover_strategies()
+        AnnotationReaderManager.discover_strategies()
         BinnerManager.discover_strategies()
 
 # --------------------------------------------------
@@ -78,6 +81,29 @@ class ContextManagerProxy:
             target=reader_name_or_instance,
             img_name_or_path=img_name_or_path,
             **kwargs
+        )
+
+    def set_annotation_reader(
+        self,
+        reader_name_or_instance: Any,
+        img_name_or_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Register an annotation-reader strategy for an image context.
+
+        :param reader_name_or_instance: Registered annotation reader, class, or instance.
+        :type reader_name_or_instance: Any
+        :param img_name_or_path: Image context receiving the reader.
+        :type img_name_or_path: Optional[str]
+        :param kwargs: Constructor arguments for the annotation reader.
+        :return: Resolved annotation reader.
+        :rtype: Any
+        """
+        return self._set_component(
+            component_type="annotation_reader",
+            target=reader_name_or_instance,
+            img_name_or_path=img_name_or_path,
+            **kwargs,
         )
     
     # --------------------------------------------------
@@ -218,6 +244,7 @@ class ContextManagerProxy:
         if img_name not in self.config_ledger:
             self.config_ledger[img_name] = {
                 "reader": {"instance_name": "", "instance_params": {}},
+                "annotation_reader": None,
                 "binner": {"instance_name": "", "instance_params": {}},
                 "inverse_binner": {"instance_name": "", "instance_params": {}},
                 "model_functionality": None,
@@ -258,11 +285,13 @@ class ContextManagerProxy:
         ## Define localized registry routing boundaries for known pipeline blocks
         registries = {
             "reader": ReaderManager.REGISTRY,
+            "annotation_reader": AnnotationReaderManager.REGISTRY,
             "binner": BinnerManager.BINNER_REGISTRY,
             "inverse_binner": BinnerManager.INVERSE_REGISTRY
         }
         expected_types = {
             "reader": MSIBaseReader,
+            "annotation_reader": MSIBaseAnnotationReader,
             "binner": MSIBaseBinner,
             "inverse_binner": MSIBaseInverseBinner,
         }

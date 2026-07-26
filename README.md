@@ -79,6 +79,9 @@ Users can implement their own architectures and loss functions (criterions) by s
 * **[Development Guide: Custom Models](docs/CUSTOM_MODELS.md)**
 * **[Training Criteria](docs/CRITERIONS.md)** — criterion categories, lifecycle
   hooks, configuration, and the Masserstein reconstruction objective.
+* **[External Dataset Pipeline](docs/DATASET_PIPELINE.md)** — METASPACE
+  discovery, catalog-only and download modes, annotation readers, and imzML
+  merge provenance.
 
 ## Feedback & Support
 If you have questions, suggestions, or find any bugs, please feel free to open an issue or [contact me directly by mail](mailto:mb.strozyk@student.uw.edu.pl).
