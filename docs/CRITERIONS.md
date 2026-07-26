@@ -90,7 +90,7 @@ The important operations are:
 5. Signal farther apart than `2κ` is cheaper to destroy and recreate through `ω`
    than to transport directly. This is a soft optimal-transport decision, not a
    hard peak-matching window.
-6. A log-domain entropy-regularized Sinkhorn solver obtains the transport plan.
+6. A stabilized entropy-regularized Sinkhorn solver obtains the transport plan.
 7. Sinkhorn self-costs can be subtracted to remove entropy bias. Gradients are
    propagated through the converged dual potentials, avoiding storage of every
    solver iteration in the autograd graph.
@@ -116,6 +116,10 @@ criterion reads `binner.GetXAxis()` when available. Without a binner axis it use
 uniform positions separated by `axis_step`.
 
 Lower entropy regularization and more Sinkhorn iterations improve approximation
-accuracy but increase runtime. The ground-cost matrices are quadratic in the
-number of spectral bins. Run `models_manager.estimate_training_resources(...)`
-before using this loss on a high-resolution grid and monitor the first epoch.
+accuracy but increase runtime. On a regular binned axis, the exponentially
+decaying transport kernel is truncated at `kernel_tolerance` and evaluated as a
+one-dimensional convolution over the complete batch. Memory and runtime then
+scale with the number of bins and retained kernel radius instead of a dense
+bin-by-bin matrix. An irregular axis uses a bounded-memory chunked fallback with
+quadratic runtime. Run `models_manager.estimate_training_resources(...)` before
+using this loss on a high-resolution grid and monitor the first epoch.
