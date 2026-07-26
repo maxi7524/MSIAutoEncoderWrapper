@@ -17,6 +17,7 @@ logger = get_custom_logger(__name__)
 # Legacy layout structure definition restored for full backward compatibility
 DEFAULT_LAYOUT: Dict[str, str] = {
     "datasets_dir": "datasets",
+    # #TODO DEPRACATED : remove it in final library version. 
     "imgs_dir": "datasets",
     "models_root": "models",
     "model_config_subdir": "config",
@@ -63,6 +64,7 @@ class WorkspaceMixin:
     ) -> None:
         # Configuration setup
         ## Resolve layout dictionary parameters using legacy layout keys
+        # #TODO DEPRACATED : remove it in final library version. 
         supplied_layout = dict(layout or {})
         if "imgs_dir" in supplied_layout and "datasets_dir" not in supplied_layout:
             supplied_layout["datasets_dir"] = supplied_layout["imgs_dir"]
