@@ -7,17 +7,21 @@ import torch
 
 # Base autoencoder operational interfaces and exceptions
 from .autoencoder_context_manager import AutoencoderContextInterface
+from .latent_context_mixin import LatentContextMixin
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 
 if TYPE_CHECKING:
-    pass
+    from ....readers.base_reader import MSIBaseReader
+    from ....annotations.base_annotation_reader import MSIBaseAnnotationReader
+    from ....binners.base_binner import MSIBaseBinner
+    from ....binners.base_inverse import MSIBaseInverseBinner
 
 # Logger initialization
 logger = get_custom_logger(__name__)
 
 
-class ActiveContextProxy:
+class ActiveContextProxy(LatentContextMixin):
     """
     Stateful boundary proxy representing the currently selected image execution context.
     Provides direct, lazy-loaded access to memory-resident pipelines (Readers, Binners, Autoencoders).
@@ -35,9 +39,11 @@ class ActiveContextProxy:
         
         # Operational runtime object caches
         self._cached_reader: Optional[Any] = None
+        self._cached_annotation_reader: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
-        self._autoencoder_interface: Optional[AutoencoderContextInterface] = None
+        self._cached_model_functionality: Optional[Any] = None
+        self._initialize_latent_context()
 
     # --------------------------------------------------
     # Section: Lazy Pipeline Resolution
@@ -90,9 +96,10 @@ class ActiveContextProxy:
             ### Load reader, binner, and optional local model instances from ledger registry
             img_bucket = manager.config_ledger[current_target]
             self._cached_reader = img_bucket.get("reader")
+            self._cached_annotation_reader = img_bucket.get("annotation_reader")
             self._cached_binner = img_bucket.get("binner")
             self._cached_inverse_binner = img_bucket.get("inverse_binner")
-            self._autoencoder_interface = img_bucket.get("autoencoder")
+            self._cached_model_functionality = img_bucket.get("model_functionality")
         else:
             logger.error("Active reader mapping failed: No reader configuration has been recorded for image context '%s'", current_target)
             raise_validation_error(
@@ -108,7 +115,7 @@ class ActiveContextProxy:
     # --------------------------------------------------
 
     @property
-    def reader(self) -> Any:
+    def reader(self) -> MSIBaseReader:
         """
         Lazy-loaded property returning the active data reader instance.
         """
@@ -117,7 +124,18 @@ class ActiveContextProxy:
         return self._cached_reader
 
     @property
-    def binner(self) -> Any:
+    def annotation_reader(self) -> Optional[MSIBaseAnnotationReader]:
+        """Return the annotation reader bound to the active image, if configured.
+
+        :return: Active annotation reader or ``None``.
+        :rtype: Optional[MSIBaseAnnotationReader]
+        """
+        if self._cached_reader is None:
+            self._resolve_active_pipeline()
+        return self._cached_annotation_reader
+
+    @property
+    def binner(self) -> MSIBaseBinner:
         """
         Lazy-loaded property returning the active spectrum binner instance.
         """
@@ -126,7 +144,7 @@ class ActiveContextProxy:
         return self._cached_binner
 
     @property
-    def inverse_binner(self) -> Any:
+    def inverse_binner(self) -> MSIBaseInverseBinner:
         """
         Lazy-loaded property returning the active spectrum inverse binner instance.
         """
@@ -142,18 +160,62 @@ class ActiveContextProxy:
         :return: Autoencoder wrapper operational interface, or None if another model family is active.
         :rtype: Optional[AutoencoderContextInterface]
         """
-        if self._autoencoder_interface is None:
-            try:
-                self._resolve_active_pipeline()
-            except Exception:
-                pass
-        return self._autoencoder_interface
+        functionality = self.model_functionality
+        return (
+            functionality
+            if isinstance(functionality, AutoencoderContextInterface)
+            else None
+        )
+
+    @property
+    def local_model_functionality(self) -> Optional[Any]:
+        """Return functionality bound to this image without using another model.
+
+        :return: Image-local model interface or ``None`` when it is not bound.
+        :rtype: Optional[Any]
+        """
+        if self._cached_model_functionality is not None:
+            return self._cached_model_functionality
+        image_key = (
+            self._instantiated_image_key
+            or getattr(self._wrapper.workspace, "active_img_name", None)
+        )
+        bucket = getattr(self._wrapper.context_manager, "config_ledger", {}).get(
+            image_key,
+            {},
+        )
+        functionality = bucket.get("model_functionality")
+        if functionality is not None:
+            self._cached_model_functionality = functionality
+        return functionality
+
+    @property
+    def model_functionality(self) -> Optional[Any]:
+        """Prefer image-local functionality, then use the currently loaded model.
+
+        :return: Local model interface or loaded-model fallback.
+        :rtype: Optional[Any]
+        """
+        local_functionality = self.local_model_functionality
+        if local_functionality is not None:
+            return local_functionality
+        models_manager = getattr(self._wrapper, "models_manager", None)
+        return (
+            models_manager.model_functionality
+            if models_manager is not None
+            else None
+        )
 
     # --------------------------------------------------
     # Section: Model Capturing and Attachment
     # --------------------------------------------------
 
-    def attach_local_model(self, torch_model: torch.nn.Module, model_type: str) -> None:
+    def attach_local_model(
+        self,
+        torch_model: torch.nn.Module,
+        model_type: str,
+        trained: bool = False,
+    ) -> None:
         """
         Intercepts a compiled network module, maps its operational strategy, and deploys it onto the active session.
 
@@ -161,24 +223,15 @@ class ActiveContextProxy:
         :type torch_model: torch.nn.Module
         :param model_type: Identity token family string defining the model class layout rules.
         :type model_type: str
+        :param trained: Whether the supplied model is ready for inference.
+        :type trained: bool
         """
-        # Heading 2 (Model attachment evaluation)
-        self._autoencoder_interface = None
-
-        if model_type == "autoencoder":
-            logger.info("Active model capture trace: Building high-level Autoencoder proxy execution interface.")
-            self._autoencoder_interface = AutoencoderContextInterface(torch_model=torch_model, active_context=self)
-            
-            # Sync with ContextManager config ledger
-            ## Dynamically update ledger dictionary to persist this instance across context switches
-            current_target = self._instantiated_image_key or getattr(self._wrapper, "active_image_key", None)
-            if current_target:
-                manager = getattr(self._wrapper, "context_manager", None)
-                if manager and current_target in manager.config_ledger:
-                    manager.config_ledger[current_target]["autoencoder"] = self._autoencoder_interface
-                    logger.debug("Successfully saved local autoencoder interface in context ledger for image: %s", current_target)
-        else:
-            logger.debug("Active model capture trace: Applied model category '%s' bypasses context local proxying setups.", model_type)
+        self._wrapper.models_manager.attach_model(
+            torch_model=torch_model,
+            model_type=model_type,
+            trained=trained,
+            bind_to_local_context=True,
+        )
 
     # --------------------------------------------------
     # Section: Context Teardown and Cleanup
@@ -191,9 +244,11 @@ class ActiveContextProxy:
         logger.debug("ActiveContextProxy: Clearing active cached reader, binner and autoencoder interfaces.")
         self._instantiated_image_key = None
         self._cached_reader = None
+        self._cached_annotation_reader = None
         self._cached_binner = None
         self._cached_inverse_binner = None
-        self._autoencoder_interface = None
+        self._cached_model_functionality = None
+        self.unload_latent()
 
 
 class ActiveContextMixin:

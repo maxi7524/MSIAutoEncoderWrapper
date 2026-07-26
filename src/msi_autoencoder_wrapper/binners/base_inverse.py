@@ -3,8 +3,9 @@ import numpy as np
 from .base_binner import MSIBaseBinner
 from typing import Any, Optional
 from ..utils.exceptions import raise_validation_error
+from ..utils.configuration import ConfigurableComponent
 
-class MSIBaseInverseBinner(ABC):
+class MSIBaseInverseBinner(ConfigurableComponent, ABC):
     """
     Abstract Base Class establishing architectural interfaces for reverse signal reconstructors.
     """
@@ -35,15 +36,6 @@ class MSIBaseInverseBinner(ABC):
                     "binner is required."
                 ),
             )
-
-    def GetConfig(self) -> dict[str, Any]:
-        """
-        Retrieves serialized configuration dictionary specifications for pipeline preservation.
-
-        :return: Map containing parameters required to instantiate identical inverse components.
-        :rtype: dict
-        """
-        return self._config
 
     @abstractmethod
     def __call__(self, grid_ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
