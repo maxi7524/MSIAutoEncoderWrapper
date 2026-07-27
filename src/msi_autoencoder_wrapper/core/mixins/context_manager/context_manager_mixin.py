@@ -47,7 +47,7 @@ class ContextManagerProxy:
         # --------------------------------------------------
         logger.info("Enforcing automatic module discovery for reader and binner registries.")
         ReaderManager.discover_strategies()
-        AnnotationReaderManager.discover_strategies()
+        AnnotationReaderManager.load_builtin_reader()
         BinnerManager.discover_strategies()
 
 # --------------------------------------------------

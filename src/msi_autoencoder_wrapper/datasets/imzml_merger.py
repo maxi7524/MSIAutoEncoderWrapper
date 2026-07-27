@@ -28,15 +28,15 @@ class ImzMLMergeInput:
     :type dataset_id: str
     :param imzml_path: Local source imzML path.
     :type imzml_path: pathlib.Path
-    :param spatial_ids: Optional source spectrum indices to retain. ``None``
+    :param spectrum_ids: Optional source spectrum indices to retain. ``None``
         retains every spectrum.
-    :type spatial_ids: Sequence[int] | None
+    :type spectrum_ids: Sequence[int] | None
     """
 
     source: str
     dataset_id: str
     imzml_path: Path
-    spatial_ids: Optional[Sequence[int]] = None
+    spectrum_ids: Optional[Sequence[int]] = None
 
 
 class ImzMLMerger:
@@ -80,7 +80,7 @@ class ImzMLMerger:
         output.parent.mkdir(parents=True, exist_ok=True)
 
         prepared = self._prepare_inputs(inputs)
-        spectrum_count = sum(len(spatial_ids) for _, spatial_ids in prepared)
+        spectrum_count = sum(len(spectrum_ids) for _, spectrum_ids in prepared)
         if spectrum_count == 0:
             raise_validation_error("ImzMLMerge", "The selected inputs contain no spectra.")
         width = row_width or int(math.ceil(math.sqrt(spectrum_count)))
@@ -96,9 +96,9 @@ class ImzMLMerger:
         try:
             with ImzMLWriter(str(temporary), mode="processed") as writer:
                 merged_index = 0
-                for merge_input, (reader, spatial_ids) in zip(inputs, prepared):
-                    for source_spatial_id in spatial_ids:
-                        mass_axis, intensities = reader.GetSpectrum(source_spatial_id)
+                for merge_input, (reader, spectrum_ids) in zip(inputs, prepared):
+                    for source_spectrum_id in spectrum_ids:
+                        mass_axis, intensities = reader.GetSpectrum(source_spectrum_id)
                         x_position = merged_index % width + 1
                         y_position = merged_index // width + 1
                         writer.addSpectrum(
@@ -108,14 +108,14 @@ class ImzMLMerger:
                             userParams=[
                                 {"name": "source", "value": merge_input.source},
                                 {"name": "source_dataset_id", "value": merge_input.dataset_id},
-                                {"name": "source_spatial_id", "value": str(source_spatial_id)},
+                                {"name": "source_spectrum_id", "value": str(source_spectrum_id)},
                             ],
                         )
                         mappings.append(
                             {
                                 "source": merge_input.source,
                                 "source_dataset_id": merge_input.dataset_id,
-                                "source_spatial_id": source_spatial_id,
+                                "source_spectrum_id": source_spectrum_id,
                                 "merged_spectrum_index": merged_index,
                             }
                         )
@@ -153,16 +153,16 @@ class ImzMLMerger:
                 )
             reader = PyImzMLReader(merge_input.imzml_path)
             count = reader.GetNumberOfSpectra()
-            spatial_ids = (
+            spectrum_ids = (
                 list(range(count))
-                if merge_input.spatial_ids is None
-                else [int(value) for value in merge_input.spatial_ids]
+                if merge_input.spectrum_ids is None
+                else [int(value) for value in merge_input.spectrum_ids]
             )
-            invalid = [value for value in spatial_ids if value < 0 or value >= count]
+            invalid = [value for value in spectrum_ids if value < 0 or value >= count]
             if invalid:
                 raise_validation_error(
                     "ImzMLMerge",
-                    f"Dataset '{merge_input.dataset_id}' has invalid spatial IDs: {invalid}",
+                    f"Dataset '{merge_input.dataset_id}' has invalid spectrum IDs: {invalid}",
                 )
-            prepared.append((reader, spatial_ids))
+            prepared.append((reader, spectrum_ids))
         return prepared

@@ -146,8 +146,11 @@ class DatasetCatalog:
         :rtype: int
         """
         prepared: List[tuple[Any, ...]] = []
+        spectrum_links: List[tuple[Any, ...]] = []
         for position, annotation in enumerate(annotations):
             raw = dict(annotation)
+            spectrum_ids = raw.pop("spectrum_ids", None)
+            spectrum_values = raw.pop("spectrum_values", {})
             source_annotation_id = str(
                 raw.get("annotation_id")
                 or raw.get("id")
@@ -177,6 +180,21 @@ class DatasetCatalog:
                     _json_dump(raw),
                 )
             )
+            if spectrum_ids is not None:
+                spectrum_links.extend(
+                    (
+                        source,
+                        dataset_id,
+                        annotation_id,
+                        int(spectrum_id),
+                        _optional_float(
+                            spectrum_values.get(
+                                str(spectrum_id), spectrum_values.get(spectrum_id)
+                            )
+                        ),
+                    )
+                    for spectrum_id in spectrum_ids
+                )
         with self.connection() as connection:
             connection.execute(
                 "DELETE FROM annotations WHERE source = ? AND dataset_id = ?",
@@ -190,6 +208,14 @@ class DatasetCatalog:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 prepared,
+            )
+            connection.executemany(
+                """
+                INSERT INTO spectrum_annotations (
+                    source, dataset_id, annotation_id, spectrum_id, intensity
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                spectrum_links,
             )
         return len(prepared)
 
@@ -225,6 +251,60 @@ class DatasetCatalog:
             rows = connection.execute(query, parameters).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]
 
+    def get_spectrum_annotations(
+        self,
+        *,
+        source: str,
+        dataset_id: str,
+        spectrum_id: int,
+        filters: Optional[Mapping[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return canonical molecular annotations linked to one spectrum.
+
+        :param source: External source identifier.
+        :type source: str
+        :param dataset_id: Stable source dataset identifier.
+        :type dataset_id: str
+        :param spectrum_id: Reader-compatible zero-based spectrum identifier.
+        :type spectrum_id: int
+        :param filters: Optional annotation filters.
+        :type filters: Mapping[str, Any] | None
+        :return: Matching canonical annotation records.
+        :rtype: List[Dict[str, Any]]
+
+        Dataset-level annotations without spectrum links are deliberately not
+        returned here. They remain available through :meth:`get_annotations`.
+        """
+        filters = dict(filters or {})
+        clauses = [
+            "a.source = ?",
+            "a.dataset_id = ?",
+            "sa.spectrum_id = ?",
+        ]
+        parameters: List[Any] = [source, dataset_id, int(spectrum_id)]
+        for field in ("database_name", "database_version", "formula", "adduct"):
+            if filters.get(field) is not None:
+                clauses.append(f"a.{field} = ?")
+                parameters.append(filters[field])
+        if filters.get("max_fdr") is not None:
+            clauses.append("a.fdr <= ?")
+            parameters.append(float(filters["max_fdr"]))
+        query = (
+            "SELECT a.raw_json, sa.intensity FROM annotations AS a "
+            "JOIN spectrum_annotations AS sa USING (source, dataset_id, annotation_id) "
+            "WHERE " + " AND ".join(clauses) + " ORDER BY a.annotation_id"
+        )
+        with self.connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        results: List[Dict[str, Any]] = []
+        for row in rows:
+            record = json.loads(row["raw_json"])
+            record["spectrum_id"] = int(spectrum_id)
+            if row["intensity"] is not None:
+                record["intensity"] = float(row["intensity"])
+            results.append(record)
+        return results
+
     def register_merged_dataset(self, merged_dataset_id: str, path: Path | str) -> None:
         """Register an imzML dataset produced by a merge operation."""
         with self.connection() as connection:
@@ -252,7 +332,7 @@ class DatasetCatalog:
                 merged_dataset_id,
                 str(mapping["source"]),
                 str(mapping["source_dataset_id"]),
-                int(mapping["source_spatial_id"]),
+                int(mapping["source_spectrum_id"]),
                 int(mapping["merged_spectrum_index"]),
             )
             for mapping in mappings
@@ -266,7 +346,7 @@ class DatasetCatalog:
                 """
                 INSERT INTO spectrum_mappings (
                     merged_dataset_id, source, source_dataset_id,
-                    source_spatial_id, merged_spectrum_index
+                    source_spectrum_id, merged_spectrum_index
                 ) VALUES (?, ?, ?, ?, ?)
                 """,
                 rows,
@@ -278,21 +358,21 @@ class DatasetCatalog:
         merged_dataset_id: str,
         source: str,
         source_dataset_id: str,
-        source_spatial_id: int,
+        source_spectrum_id: int,
     ) -> Optional[int]:
-        """Resolve a source spectrum/spatial ID to its merged spectrum index."""
+        """Resolve a source spectrum ID to its merged spectrum index."""
         with self.connection() as connection:
             row = connection.execute(
                 """
                 SELECT merged_spectrum_index FROM spectrum_mappings
                 WHERE merged_dataset_id = ? AND source = ?
-                  AND source_dataset_id = ? AND source_spatial_id = ?
+                  AND source_dataset_id = ? AND source_spectrum_id = ?
                 """,
                 (
                     merged_dataset_id,
                     source,
                     source_dataset_id,
-                    source_spatial_id,
+                    source_spectrum_id,
                 ),
             ).fetchone()
         return int(row["merged_spectrum_index"]) if row is not None else None
@@ -307,7 +387,7 @@ class DatasetCatalog:
         with self.connection() as connection:
             row = connection.execute(
                 """
-                SELECT source, source_dataset_id, source_spatial_id
+                SELECT source, source_dataset_id, source_spectrum_id
                 FROM spectrum_mappings
                 WHERE merged_dataset_id = ? AND merged_spectrum_index = ?
                 """,
@@ -359,6 +439,18 @@ class DatasetCatalog:
                         REFERENCES datasets(source, dataset_id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS spectrum_annotations (
+                    source TEXT NOT NULL,
+                    dataset_id TEXT NOT NULL,
+                    annotation_id TEXT NOT NULL,
+                    spectrum_id INTEGER NOT NULL,
+                    intensity REAL,
+                    PRIMARY KEY (source, dataset_id, annotation_id, spectrum_id),
+                    FOREIGN KEY (source, dataset_id, annotation_id)
+                        REFERENCES annotations(source, dataset_id, annotation_id)
+                        ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS merged_datasets (
                     merged_dataset_id TEXT PRIMARY KEY,
                     path TEXT NOT NULL,
@@ -369,12 +461,12 @@ class DatasetCatalog:
                     merged_dataset_id TEXT NOT NULL,
                     source TEXT NOT NULL,
                     source_dataset_id TEXT NOT NULL,
-                    source_spatial_id INTEGER NOT NULL,
+                    source_spectrum_id INTEGER NOT NULL,
                     merged_spectrum_index INTEGER NOT NULL,
                     PRIMARY KEY (merged_dataset_id, merged_spectrum_index),
                     UNIQUE (
                         merged_dataset_id, source, source_dataset_id,
-                        source_spatial_id
+                        source_spectrum_id
                     ),
                     FOREIGN KEY (merged_dataset_id)
                         REFERENCES merged_datasets(merged_dataset_id)
@@ -383,10 +475,12 @@ class DatasetCatalog:
 
                 CREATE INDEX IF NOT EXISTS idx_annotations_dataset
                     ON annotations(source, dataset_id);
+                CREATE INDEX IF NOT EXISTS idx_spectrum_annotations_lookup
+                    ON spectrum_annotations(source, dataset_id, spectrum_id);
                 CREATE INDEX IF NOT EXISTS idx_spectrum_mapping_source
                     ON spectrum_mappings(
                         merged_dataset_id, source, source_dataset_id,
-                        source_spatial_id
+                        source_spectrum_id
                     );
                 """
             )
@@ -413,6 +507,14 @@ def _first_value(record: Mapping[str, Any], *names: str) -> Optional[str]:
 
 def _numeric_value(record: Mapping[str, Any], *names: str) -> Optional[float]:
     value = _first_value(record, *names)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    """Convert an optional annotation intensity to a SQLite number."""
     try:
         return float(value) if value is not None else None
     except (TypeError, ValueError):

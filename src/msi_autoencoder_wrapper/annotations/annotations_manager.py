@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Type
 
-from ..utils.module_search import discover_modules
 from ..utils.validators import resolve_component, validate_subclass
 from .base_annotation_reader import MSIBaseAnnotationReader
 
@@ -37,6 +36,8 @@ class AnnotationReaderManager:
         )
 
     @classmethod
-    def discover_strategies(cls) -> None:
-        """Import bundled annotation-reader strategies."""
-        discover_modules(f"{__package__}.strategies")
+    def load_builtin_reader(cls) -> None:
+        """Import the canonical SQLite annotation reader."""
+        from . import sqlite_annotation_reader
+
+        del sqlite_annotation_reader

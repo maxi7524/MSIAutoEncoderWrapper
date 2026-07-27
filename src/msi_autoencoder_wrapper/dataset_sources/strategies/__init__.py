@@ -1,4 +1,4 @@
-"""Bundled external data-source adapters."""
+"""Bundled external dataset-source adapters."""
 
 from .metaspace_source import MetaspaceDatasetSource
 

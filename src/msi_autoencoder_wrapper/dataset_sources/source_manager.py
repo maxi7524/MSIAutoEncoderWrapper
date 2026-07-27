@@ -1,4 +1,4 @@
-"""Registry and factory for external MSI data sources."""
+"""Registry and factory for external MSI dataset sources."""
 
 from __future__ import annotations
 

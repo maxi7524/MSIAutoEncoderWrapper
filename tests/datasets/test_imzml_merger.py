@@ -24,13 +24,13 @@ def test_merger_writes_rectangular_coordinates_and_index_mapping(
                 source="metaspace",
                 dataset_id="dataset-a",
                 imzml_path=msi_fixture_path,
-                spatial_ids=[0, 2],
+                spectrum_ids=[0, 2],
             ),
             ImzMLMergeInput(
                 source="metaspace",
                 dataset_id="dataset-b",
                 imzml_path=msi_fixture_path,
-                spatial_ids=[1],
+                spectrum_ids=[1],
             ),
         ],
         output_path=output,
@@ -49,7 +49,7 @@ def test_merger_writes_rectangular_coordinates_and_index_mapping(
         merged_dataset_id="test-merge",
         source="metaspace",
         source_dataset_id="dataset-a",
-        source_spatial_id=2,
+        source_spectrum_id=2,
     ) == 1
     assert catalog.get_source_index(
         merged_dataset_id="test-merge",
