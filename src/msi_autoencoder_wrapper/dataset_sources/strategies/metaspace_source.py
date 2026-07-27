@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+import numpy as np
+
 from ...utils.exceptions import raise_project_config_error
 from ...utils.logger import get_custom_logger
 from ..base_source import DatasetSource
@@ -94,12 +96,26 @@ class MetaspaceDatasetSource(DatasetSource):
         for database in databases:
             results = dataset.results(database=database, fdr=fdr)
             database_name, database_version = _database_parts(database)
-            for row in _records_from_table(results):
+            database_records = _records_from_table(results)
+            spatial_images = _spatial_images_by_molecule(
+                dataset,
+                database,
+                fdr,
+                enabled=bool(options.get("include_spatial", True)),
+            )
+            for row in database_records:
+                formula = row.get("formula", row.get("sumFormula"))
+                key = (str(formula or ""), str(row.get("adduct") or ""))
                 records.append(
                     {
                         **row,
                         "database_name": database_name,
                         "database_version": database_version,
+                        **(
+                            {"ion_image": spatial_images[key].tolist()}
+                            if key in spatial_images
+                            else {}
+                        ),
                     }
                 )
         logger.info(
@@ -167,11 +183,15 @@ def _object_mapping(value: Any) -> Dict[str, Any]:
 def _records_from_table(value: Any) -> List[Dict[str, Any]]:
     if hasattr(value, "to_dict"):
         try:
-            return [dict(record) for record in value.to_dict(orient="records")]
+            table = value.reset_index() if hasattr(value, "reset_index") else value
+            return [dict(record) for record in table.to_dict(orient="records")]
         except TypeError:
             pass
     if isinstance(value, list):
-        return [dict(record) if isinstance(record, Mapping) else {"value": record} for record in value]
+        return [
+            dict(record) if isinstance(record, Mapping) else {"value": record}
+            for record in value
+        ]
     return []
 
 
@@ -179,3 +199,46 @@ def _database_parts(database: Any) -> tuple[Optional[str], Optional[str]]:
     if isinstance(database, (tuple, list)) and len(database) >= 2:
         return str(database[0]), str(database[1])
     return str(database), None
+
+
+def _spatial_images_by_molecule(
+    dataset: Any,
+    database: Any,
+    fdr: float,
+    *,
+    enabled: bool,
+) -> Dict[tuple[str, str], np.ndarray]:
+    """Return first-isotope ion images keyed by formula and adduct.
+
+    :param dataset: Official METASPACE dataset object.
+    :type dataset: Any
+    :param database: METASPACE molecular database selector.
+    :type database: Any
+    :param fdr: Retrieval FDR threshold.
+    :type fdr: float
+    :param enabled: Whether spatial annotation retrieval is requested.
+    :type enabled: bool
+    :return: Ion images indexed by canonical molecule identity.
+    :rtype: Dict[tuple[str, str], numpy.ndarray]
+
+    Older or injected clients may expose tabular annotations without the ion
+    image API. In that case dataset-level annotations are still preserved.
+    """
+    if not enabled or not hasattr(dataset, "all_annotation_images"):
+        return {}
+    images = dataset.all_annotation_images(
+        database=database,
+        fdr=fdr,
+        only_first_isotope=True,
+        scale_intensity=True,
+    )
+    result: Dict[tuple[str, str], np.ndarray] = {}
+    for images_for_annotation in images:
+        if len(images_for_annotation) == 0 or images_for_annotation[0] is None:
+            continue
+        key = (
+            str(getattr(images_for_annotation, "formula", "") or ""),
+            str(getattr(images_for_annotation, "adduct", "") or ""),
+        )
+        result[key] = np.asarray(images_for_annotation[0])
+    return result

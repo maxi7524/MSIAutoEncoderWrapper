@@ -1,4 +1,4 @@
-"""Reusable discovery and materialization stages for external MSI datasets."""
+"""Reusable query and materialization operations for external MSI datasets."""
 
 from __future__ import annotations
 
@@ -7,26 +7,29 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+import numpy as np
 from pyimzml.ImzMLWriter import ImzMLWriter
 
+from ..annotations.validators import validate_annotation_record
 from ..readers.strategies.pyimzml_reader import PyImzMLReader
 from ..utils.exceptions import raise_validation_error, raise_workspace_error
 from ..utils.logger import get_custom_logger
 from ..workspace.dataset_catalog import DatasetCatalog
 from .base_source import DatasetSource
+from .validators import validate_imzml_pair, validate_selection, validate_source_record
 
 
 logger = get_custom_logger(__name__)
 
 
-def discover_to_manifest(
+def query_to_selection(
     *,
     source: DatasetSource,
     filters: Mapping[str, Any],
     catalog: DatasetCatalog,
-    manifest_path: Path | str,
+    selection_path: Path | str,
 ) -> List[Dict[str, Any]]:
-    """Discover dataset metadata, update the catalog, and write a manifest.
+    """Query dataset metadata, update SQLite, and write a reproducible selection.
 
     :param source: External provider adapter.
     :type source: DatasetSource
@@ -34,14 +37,15 @@ def discover_to_manifest(
     :type filters: Mapping[str, Any]
     :param catalog: Workspace dataset catalog.
     :type catalog: DatasetCatalog
-    :param manifest_path: Destination JSON manifest.
-    :type manifest_path: pathlib.Path | str
-    :return: Manifest dataset records.
+    :param selection_path: Destination JSON selection file.
+    :type selection_path: pathlib.Path | str
+    :return: Selected dataset records.
     :rtype: List[Dict[str, Any]]
     """
     records = source.search_datasets(filters)
-    manifest_records: List[Dict[str, Any]] = []
+    selection_records: List[Dict[str, Any]] = []
     for record in records:
+        validate_source_record(record)
         dataset_id = str(record["dataset_id"])
         name = str(record.get("name", dataset_id))
         metadata = dict(record.get("metadata", {}))
@@ -51,7 +55,7 @@ def discover_to_manifest(
             name=name,
             metadata=metadata,
         )
-        manifest_records.append(
+        selection_records.append(
             {
                 "source": source.source_name,
                 "dataset_id": dataset_id,
@@ -59,38 +63,37 @@ def discover_to_manifest(
                 "metadata": metadata,
             }
         )
-    manifest = {
+    selection = {
         "schema_version": 1,
         "source": source.source_name,
         "filters": dict(filters),
-        "datasets": manifest_records,
+        "datasets": selection_records,
     }
-    target = Path(manifest_path)
+    target = Path(selection_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+        json.dumps(selection, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    logger.info("Wrote discovery manifest with %s datasets to %s", len(records), target)
-    return manifest_records
+    logger.info("Wrote query selection with %s datasets to %s", len(records), target)
+    return selection_records
 
 
-def materialize_manifest(
+def materialize_selection(
     *,
     source: DatasetSource,
-    manifest_path: Path | str,
+    selection_path: Path | str,
     datasets_dir: Path | str,
     catalog: DatasetCatalog,
     annotation_options: Optional[Mapping[str, Any]] = None,
     dataset_ids: Optional[Sequence[str]] = None,
 ) -> List[Path]:
-    """Download manifest datasets and import their complete annotations.
+    """Download selected datasets and import their complete annotations.
 
-    :param source: Adapter matching the manifest source.
+    :param source: Adapter matching the selection source.
     :type source: DatasetSource
-    :param manifest_path: Discovery manifest created by
-        :func:`discover_to_manifest`.
-    :type manifest_path: pathlib.Path | str
+    :param selection_path: Query selection created by :func:`query_to_selection`.
+    :type selection_path: pathlib.Path | str
     :param datasets_dir: Workspace datasets directory.
     :type datasets_dir: pathlib.Path | str
     :param catalog: Workspace dataset catalog.
@@ -98,31 +101,36 @@ def materialize_manifest(
     :param annotation_options: Provider retrieval options, not experimental
         read-time filters.
     :type annotation_options: Mapping[str, Any] | None
-    :param dataset_ids: Optional explicit subset of manifest IDs.
+    :param dataset_ids: Optional explicit subset of selected IDs.
     :type dataset_ids: Sequence[str] | None
     :return: Materialized dataset directories.
     :rtype: List[pathlib.Path]
-    :raises ValueError: If the manifest belongs to another source.
+    :raises ValueError: If the selection belongs to another source.
     """
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    if manifest.get("source") != source.source_name:
+    selection = json.loads(Path(selection_path).read_text(encoding="utf-8"))
+    validate_selection(selection)
+    if selection.get("source") != source.source_name:
         raise ValueError(
-            f"Manifest source '{manifest.get('source')}' does not match "
+            f"Selection source '{selection.get('source')}' does not match "
             f"adapter '{source.source_name}'."
         )
     selected_ids = set(dataset_ids or [])
     output_root = Path(datasets_dir) / "sources" / source.source_name
     materialized: List[Path] = []
-    for record in manifest.get("datasets", []):
+    for record in selection.get("datasets", []):
         dataset_id = str(record["dataset_id"])
         if selected_ids and dataset_id not in selected_ids:
             continue
         destination = output_root / dataset_id
         logger.info("Materializing dataset %s", dataset_id)
         source.download_dataset(dataset_id, destination)
+        validate_imzml_pair(destination, dataset_id)
         metadata_record = source.get_dataset_metadata(dataset_id)
         metadata = dict(metadata_record.get("metadata", {}))
-        annotations = source.get_annotations(dataset_id, annotation_options)
+        reader = PyImzMLReader(validate_imzml_pair(destination, dataset_id))
+        annotations = _normalize_spectrum_annotations(
+            source.get_annotations(dataset_id, annotation_options), reader
+        )
         catalog.upsert_dataset(
             source=source.source_name,
             dataset_id=dataset_id,
@@ -136,22 +144,14 @@ def materialize_manifest(
             dataset_id=dataset_id,
             annotations=annotations,
         )
-        (destination / "metadata.json").write_text(
-            json.dumps(metadata_record, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-        (destination / "annotations.json").write_text(
-            json.dumps(annotations, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
         materialized.append(destination)
     return materialized
 
 
-def materialize_and_merge_manifest(
+def materialize_and_merge_selection(
     *,
     source: DatasetSource,
-    manifest_path: Path | str,
+    selection_path: Path | str,
     datasets_dir: Path | str,
     catalog: DatasetCatalog,
     output_path: Path | str,
@@ -163,10 +163,10 @@ def materialize_and_merge_manifest(
 ) -> Path:
     """Download, append, and release one dataset at a time.
 
-    :param source: Adapter matching the discovery manifest.
+    :param source: Adapter matching the query selection.
     :type source: DatasetSource
-    :param manifest_path: Discovery manifest path.
-    :type manifest_path: pathlib.Path | str
+    :param selection_path: Query selection path.
+    :type selection_path: pathlib.Path | str
     :param datasets_dir: Workspace datasets directory.
     :type datasets_dir: pathlib.Path | str
     :param catalog: Workspace dataset catalog.
@@ -179,7 +179,7 @@ def materialize_and_merge_manifest(
     :type row_width: int
     :param annotation_options: Provider retrieval options.
     :type annotation_options: Mapping[str, Any] | None
-    :param dataset_ids: Optional manifest subset.
+    :param dataset_ids: Optional selection subset.
     :type dataset_ids: Sequence[str] | None
     :param keep_downloads: Retain source pairs after they are appended. Defaults
         to ``False`` for bounded temporary disk usage.
@@ -194,23 +194,24 @@ def materialize_and_merge_manifest(
     """
     if row_width <= 0:
         raise_validation_error("DownloadMerge", "row_width must be greater than zero.")
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    if manifest.get("source") != source.source_name:
+    selection = json.loads(Path(selection_path).read_text(encoding="utf-8"))
+    validate_selection(selection)
+    if selection.get("source") != source.source_name:
         raise_validation_error(
             "DownloadMerge",
             (
-                f"Manifest source '{manifest.get('source')}' does not match "
+                f"Selection source '{selection.get('source')}' does not match "
                 f"adapter '{source.source_name}'."
             ),
         )
     selected_ids = set(dataset_ids or [])
     records = [
         record
-        for record in manifest.get("datasets", [])
+        for record in selection.get("datasets", [])
         if not selected_ids or str(record["dataset_id"]) in selected_ids
     ]
     if not records:
-        raise_validation_error("DownloadMerge", "The manifest selection is empty.")
+        raise_validation_error("DownloadMerge", "The dataset selection is empty.")
 
     output = Path(output_path).with_suffix(".imzML")
     if output.exists() or output.with_suffix(".ibd").exists():
@@ -233,8 +234,13 @@ def materialize_and_merge_manifest(
                 if destination.exists():
                     shutil.rmtree(destination)
                 source.download_dataset(dataset_id, destination)
+                validate_imzml_pair(destination, dataset_id)
                 metadata_record = source.get_dataset_metadata(dataset_id)
-                annotations = source.get_annotations(dataset_id, annotation_options)
+                imzml_path = validate_imzml_pair(destination, dataset_id)
+                reader = PyImzMLReader(imzml_path)
+                annotations = _normalize_spectrum_annotations(
+                    source.get_annotations(dataset_id, annotation_options), reader
+                )
                 metadata = dict(metadata_record.get("metadata", {}))
                 catalog.upsert_dataset(
                     source=source.source_name,
@@ -249,21 +255,19 @@ def materialize_and_merge_manifest(
                     dataset_id=dataset_id,
                     annotations=annotations,
                 )
-                imzml_path = destination / f"{dataset_id}.imzML"
-                reader = PyImzMLReader(imzml_path)
-                selected_spatial_ids = record.get("spatial_ids")
-                spatial_ids = (
+                selected_spectrum_ids = record.get("spectrum_ids")
+                spectrum_ids = (
                     list(range(reader.GetNumberOfSpectra()))
-                    if selected_spatial_ids is None
-                    else [int(value) for value in selected_spatial_ids]
+                    if selected_spectrum_ids is None
+                    else [int(value) for value in selected_spectrum_ids]
                 )
-                for source_spatial_id in spatial_ids:
-                    if source_spatial_id < 0 or source_spatial_id >= reader.GetNumberOfSpectra():
+                for source_spectrum_id in spectrum_ids:
+                    if source_spectrum_id < 0 or source_spectrum_id >= reader.GetNumberOfSpectra():
                         raise_validation_error(
                             "DownloadMerge",
-                            f"Dataset '{dataset_id}' has invalid spatial ID {source_spatial_id}.",
+                            f"Dataset '{dataset_id}' has invalid spectrum ID {source_spectrum_id}.",
                         )
-                    mass_axis, intensities = reader.GetSpectrum(source_spatial_id)
+                    mass_axis, intensities = reader.GetSpectrum(source_spectrum_id)
                     writer.addSpectrum(
                         mass_axis,
                         intensities,
@@ -275,14 +279,14 @@ def materialize_and_merge_manifest(
                         userParams=[
                             {"name": "source", "value": source.source_name},
                             {"name": "source_dataset_id", "value": dataset_id},
-                            {"name": "source_spatial_id", "value": str(source_spatial_id)},
+                            {"name": "source_spectrum_id", "value": str(source_spectrum_id)},
                         ],
                     )
                     mappings.append(
                         {
                             "source": source.source_name,
                             "source_dataset_id": dataset_id,
-                            "source_spatial_id": source_spatial_id,
+                            "source_spectrum_id": source_spectrum_id,
                             "merged_spectrum_index": merged_index,
                         }
                     )
@@ -293,14 +297,6 @@ def materialize_and_merge_manifest(
                     if retained.exists():
                         shutil.rmtree(retained)
                     destination.replace(retained)
-                    (retained / "metadata.json").write_text(
-                        json.dumps(metadata_record, ensure_ascii=False, indent=2, default=str),
-                        encoding="utf-8",
-                    )
-                    (retained / "annotations.json").write_text(
-                        json.dumps(annotations, ensure_ascii=False, indent=2, default=str),
-                        encoding="utf-8",
-                    )
                 else:
                     shutil.rmtree(destination)
         if merged_index == 0:
@@ -321,3 +317,47 @@ def materialize_and_merge_manifest(
         output,
     )
     return output
+
+
+def _normalize_spectrum_annotations(
+    annotations: Sequence[Mapping[str, Any]],
+    reader: PyImzMLReader,
+) -> List[Dict[str, Any]]:
+    """Map provider ion-image coordinates to canonical ``spectrum_id`` links.
+
+    :param annotations: Provider records, optionally containing ``ion_image``.
+    :type annotations: Sequence[Mapping[str, Any]]
+    :param reader: Reader defining stable spectrum IDs and coordinates.
+    :type reader: PyImzMLReader
+    :return: Canonical records suitable for SQLite storage.
+    :rtype: List[Dict[str, Any]]
+
+    Positive finite ion-image values are stored sparsely. The full imzML
+    spectrum remains the source of intensity data; this relation is only the
+    spatial molecular annotation supplied by the external database.
+    """
+    normalized: List[Dict[str, Any]] = []
+    for annotation in annotations:
+        record = dict(annotation)
+        validate_annotation_record(record)
+        ion_image_value = record.pop("ion_image", None)
+        if ion_image_value is None:
+            normalized.append(record)
+            continue
+        ion_image = np.asarray(ion_image_value)
+        spectrum_ids: List[int] = []
+        spectrum_values: Dict[int, float] = {}
+        for spectrum_id in range(reader.GetNumberOfSpectra()):
+            x_position, y_position, _ = reader.GetSpectrumPosition(spectrum_id)
+            row = y_position - 1
+            column = x_position - 1
+            if row < 0 or column < 0 or row >= ion_image.shape[0] or column >= ion_image.shape[1]:
+                continue
+            intensity = float(ion_image[row, column])
+            if np.isfinite(intensity) and intensity > 0:
+                spectrum_ids.append(spectrum_id)
+                spectrum_values[spectrum_id] = intensity
+        record["spectrum_ids"] = spectrum_ids
+        record["spectrum_values"] = spectrum_values
+        normalized.append(record)
+    return normalized

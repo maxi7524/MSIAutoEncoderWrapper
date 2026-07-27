@@ -6,11 +6,11 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from msi_autoencoder_wrapper.data_sources.base_source import DatasetSource
-from msi_autoencoder_wrapper.data_sources.pipeline import (
-    discover_to_manifest,
-    materialize_and_merge_manifest,
-    materialize_manifest,
+from msi_autoencoder_wrapper.dataset_sources.base_source import DatasetSource
+from msi_autoencoder_wrapper.dataset_sources.pipeline import (
+    materialize_and_merge_selection,
+    materialize_selection,
+    query_to_selection,
 )
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
 from msi_autoencoder_wrapper.workspace.dataset_catalog import DatasetCatalog
@@ -54,20 +54,20 @@ def test_discovery_and_download_are_separate_stages(
     source = FakeDatasetSource(msi_fixture_path)
     datasets_dir = tmp_path / "datasets"
     catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
-    manifest = datasets_dir / "manifests" / "candidate.json"
+    selection = datasets_dir / "selections" / "candidate.json"
 
-    discover_to_manifest(
+    query_to_selection(
         source=source,
         filters={"organism": "mouse"},
         catalog=catalog,
-        manifest_path=manifest,
+        selection_path=selection,
     )
-    assert manifest.is_file()
+    assert selection.is_file()
     assert not (datasets_dir / "sources" / "fake" / "one").exists()
 
-    materialized = materialize_manifest(
+    materialized = materialize_selection(
         source=source,
-        manifest_path=manifest,
+        selection_path=selection,
         datasets_dir=datasets_dir,
         catalog=catalog,
     )
@@ -84,18 +84,18 @@ def test_low_disk_mode_downloads_merges_and_releases_staging_data(
     source = FakeDatasetSource(msi_fixture_path)
     datasets_dir = tmp_path / "datasets"
     catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
-    manifest = datasets_dir / "manifests" / "candidate.json"
-    discover_to_manifest(
+    selection = datasets_dir / "selections" / "candidate.json"
+    query_to_selection(
         source=source,
         filters={"organism": "mouse"},
         catalog=catalog,
-        manifest_path=manifest,
+        selection_path=selection,
     )
     output = datasets_dir / "merged" / "pilot" / "dataset.imzML"
 
-    result = materialize_and_merge_manifest(
+    result = materialize_and_merge_selection(
         source=source,
-        manifest_path=manifest,
+        selection_path=selection,
         datasets_dir=datasets_dir,
         catalog=catalog,
         output_path=output,
@@ -112,5 +112,5 @@ def test_low_disk_mode_downloads_merges_and_releases_staging_data(
     ) == {
         "source": "fake",
         "source_dataset_id": "one",
-        "source_spatial_id": 5,
+        "source_spectrum_id": 5,
     }

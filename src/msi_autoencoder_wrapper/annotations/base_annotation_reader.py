@@ -28,18 +28,28 @@ class MSIBaseAnnotationReader(ConfigurableComponent, ABC):
 
     def get_spectrum_annotations(
         self,
-        spatial_id: int,
+        spectrum_id: int,
         filters: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Return annotations associated with a source spectrum/spatial ID.
+        """Return annotations associated with a source spectrum ID.
 
-        The base implementation selects records whose optional ``spatial_ids``
-        collection contains the requested ID. Provider strategies may override
-        this method to use ion-image storage more efficiently.
+        The base implementation selects records whose optional ``spectrum_ids``
+        collection contains the requested ID. Canonical SQLite readers override
+        this method with an indexed lookup.
         """
         selected: List[Dict[str, Any]] = []
         for annotation in self.get_annotations(filters):
-            spatial_ids = annotation.get("spatial_ids")
-            if spatial_ids is not None and spatial_id in spatial_ids:
+            spectrum_ids = annotation.get("spectrum_ids")
+            if spectrum_ids is not None and spectrum_id in spectrum_ids:
                 selected.append(annotation)
         return selected
+
+    def get_spectrum_metadata(self, spectrum_id: int) -> Dict[str, Any]:
+        """Return source dataset metadata associated with one spectrum.
+
+        :param spectrum_id: Reader-compatible zero-based spectrum identifier.
+        :type spectrum_id: int
+        :return: Complete metadata record for the owning source dataset.
+        :rtype: Dict[str, Any]
+        """
+        return self.get_dataset_metadata()

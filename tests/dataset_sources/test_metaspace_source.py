@@ -6,8 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
-from msi_autoencoder_wrapper.data_sources.strategies.metaspace_source import (
+import pandas as pd
+
+from msi_autoencoder_wrapper.dataset_sources.strategies.metaspace_source import (
     MetaspaceDatasetSource,
+    _records_from_table,
 )
 
 
@@ -71,3 +74,17 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     assert annotations[0]["database_version"] == "v4"
     assert client.value.result_calls == [{"database": ("HMDB", "v4"), "fdr": 0.5}]
     assert (destination / "dataset-a.imzML").is_file()
+
+
+def test_metaspace_dataframe_index_is_preserved_as_molecule_identity() -> None:
+    """Formula and adduct indices from the official client survive normalization."""
+    table = pd.DataFrame(
+        [{"fdr": 0.1, "intensity": 2.0}],
+        index=pd.MultiIndex.from_tuples(
+            [("C6H12O6", "+H")], names=["formula", "adduct"]
+        ),
+    )
+
+    assert _records_from_table(table) == [
+        {"formula": "C6H12O6", "adduct": "+H", "fdr": 0.1, "intensity": 2.0}
+    ]

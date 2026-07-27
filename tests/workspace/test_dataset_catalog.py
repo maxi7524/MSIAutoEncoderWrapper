@@ -55,7 +55,7 @@ def test_catalog_preserves_metadata_and_filters_annotations_at_read_time(
     assert [annotation["id"] for annotation in selected] == ["a-1"]
 
 
-def test_catalog_maps_only_source_spatial_id_to_merged_index(tmp_path: Path) -> None:
+def test_catalog_maps_only_source_spectrum_id_to_merged_index(tmp_path: Path) -> None:
     """Merge provenance remains independent from spatial coordinate transforms."""
     catalog = DatasetCatalog(tmp_path / "catalog.sqlite")
     catalog.register_merged_dataset("merged-a", tmp_path / "merged-a.imzML")
@@ -65,7 +65,7 @@ def test_catalog_maps_only_source_spatial_id_to_merged_index(tmp_path: Path) -> 
             {
                 "source": "metaspace",
                 "source_dataset_id": "dataset-a",
-                "source_spatial_id": 7,
+                "source_spectrum_id": 7,
                 "merged_spectrum_index": 2,
             }
         ],
@@ -75,7 +75,7 @@ def test_catalog_maps_only_source_spatial_id_to_merged_index(tmp_path: Path) -> 
         merged_dataset_id="merged-a",
         source="metaspace",
         source_dataset_id="dataset-a",
-        source_spatial_id=7,
+        source_spectrum_id=7,
     ) == 2
     assert catalog.get_source_index(
         merged_dataset_id="merged-a",
@@ -83,8 +83,45 @@ def test_catalog_maps_only_source_spatial_id_to_merged_index(tmp_path: Path) -> 
     ) == {
         "source": "metaspace",
         "source_dataset_id": "dataset-a",
-        "source_spatial_id": 7,
+        "source_spectrum_id": 7,
     }
+
+
+def test_catalog_indexes_molecular_annotations_by_spectrum_id(tmp_path: Path) -> None:
+    """Canonical annotations are stored sparsely and queried by reader ID."""
+    catalog = DatasetCatalog(tmp_path / "catalog.sqlite")
+    catalog.upsert_dataset(
+        source="metaspace",
+        dataset_id="dataset-a",
+        name="Dataset A",
+        metadata={"condition": "disease"},
+    )
+    catalog.replace_annotations(
+        source="metaspace",
+        dataset_id="dataset-a",
+        annotations=[
+            {
+                "id": "glucose",
+                "formula": "C6H12O6",
+                "adduct": "+H",
+                "spectrum_ids": [1, 3],
+                "spectrum_values": {1: 2.5, 3: 4.0},
+            }
+        ],
+    )
+
+    assert catalog.get_spectrum_annotations(
+        source="metaspace", dataset_id="dataset-a", spectrum_id=0
+    ) == []
+    selected = catalog.get_spectrum_annotations(
+        source="metaspace", dataset_id="dataset-a", spectrum_id=3
+    )
+    assert selected[0]["formula"] == "C6H12O6"
+    assert selected[0]["spectrum_id"] == 3
+    assert selected[0]["intensity"] == 4.0
+    stored = catalog.get_annotations(source="metaspace", dataset_id="dataset-a")
+    assert "spectrum_ids" not in stored[0]
+    assert "spectrum_values" not in stored[0]
 
 
 def test_workspace_resolves_nested_dataset_and_keeps_legacy_alias(tmp_path: Path) -> None:
