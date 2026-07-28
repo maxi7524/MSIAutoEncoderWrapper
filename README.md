@@ -150,6 +150,9 @@ by the previous one:
    imzML, slice latent images, and monitor memory.
 5. **[Multi-image models — TODO](assets/notebooks/tutorials/05_multi_image_models_todo.ipynb)**
    — records the planned scope without presenting unimplemented APIs as usable.
+6. **[PRIDE dataset explorer](assets/notebooks/tutorials/06_pride_dataset_explorer.ipynb)**
+   — explores annotated MSI pairs, reviews rejection diagnostics, and exports
+   reusable query filters.
 
 ## Creating Custom Models
 Users can implement their own architectures and loss functions (criterions) by subclassing the base modules. For detailed instructions on how to integrate your own PyTorch models into the wrapper, please refer to:
