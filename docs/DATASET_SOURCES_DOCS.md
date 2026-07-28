@@ -169,6 +169,14 @@ This is the provenance needed to recover source annotations after merging.
 Spatial coordinates remain owned by the imzML readers and are not duplicated in
 the annotation database.
 
+When an input does not declare explicit ``spectrum_ids``, merge includes only
+spectra linked to at least one molecule in ``spectrum_annotations``. Optional
+``unannotated_ratio`` and ``unannotated_amount`` settings add a reproducible
+sample of spectra without molecular annotations. If both are supplied, merge
+uses the larger requested count and caps it by the available unannotated
+spectra. These spectra are controls; they are not assumed to be biological
+background. ``random_seed`` makes the selection reproducible.
+
 #### Low-disk download and merge
 
 Use `download-merge` when all source imzML pairs should not coexist on disk:

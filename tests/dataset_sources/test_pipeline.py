@@ -36,7 +36,14 @@ class FakeDatasetSource(DatasetSource):
         dataset_id: str,
         options: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        return [{"id": "annotation-1", "sumFormula": "C6H12O6", "fdr": 0.5}]
+        return [
+            {
+                "id": "annotation-1",
+                "sumFormula": "C6H12O6",
+                "fdr": 0.5,
+                "spectrum_ids": list(range(6)),
+            }
+        ]
 
     def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
         target = Path(destination)
