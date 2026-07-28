@@ -19,10 +19,11 @@ def test_criterion_discovery_returns_uniform_component_information() -> None:
     CriterionsManager.discover_criterions()
     available = CriterionsManager.get_available_criterions("autoencoder")
 
-    assert set(available) == {"reconstruction", "contrastive"}
+    assert set(available) == {"reconstruction", "contrastive", "head"}
     assert "MSELoss" in available["reconstruction"]
     assert "SobolevLoss" in available["reconstruction"]
     assert "InfoNCELoss" in available["contrastive"]
+    assert "MultiLabelBCELoss" in available["head"]
     assert set(available["reconstruction"]["MSELoss"]) == {
         "docstring",
         "parameters",

@@ -420,7 +420,8 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                     compiled_network.eval()
                     with torch.no_grad():
                         ### Extract single tensor and dynamically correct dimensions
-                        _, sample_tensor = compiled_dataset[0]
+                        sample = compiled_dataset[0]
+                        sample_tensor = sample[1]
                         if sample_tensor.dim() == 1:
                             mock_batch = sample_tensor.unsqueeze(0)
                         else:
