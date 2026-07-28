@@ -90,13 +90,18 @@ class DatasetExplorer:
         """
         if filters is not None:
             self.set_filters(filters)
-        discovered = self.source.search_datasets(self._filters)
+        provider_filters = dict(self._filters)
+        configured_exclusions = {
+            str(value) for value in provider_filters.pop("exclude_dataset_ids", ())
+        }
+        discovered = self.source.search_datasets(provider_filters)
         self._records = []
         for record in discovered:
             validate_source_record(record)
             normalized = dict(record)
             normalized.setdefault("source", self.source.source_name)
-            self._records.append(normalized)
+            if str(normalized["dataset_id"]) not in configured_exclusions:
+                self._records.append(normalized)
         logger.info(
             "Explorer retained %s records from source %s",
             len(self._records),
@@ -193,9 +198,20 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
         "source": str(record.get("source", "")),
         "project_accession": metadata.get("project_accession"),
         "project_url": metadata.get("project_url"),
-        "organisms": _names(project.get("organisms", metadata.get("organisms"))),
+        "organisms": _names(
+            project.get(
+                "organisms",
+                metadata.get("organisms", metadata.get("organism")),
+            )
+        ),
         "organism_parts": _names(
-            project.get("organismParts", metadata.get("organism_parts"))
+            project.get(
+                "organismParts",
+                metadata.get(
+                    "organism_parts",
+                    metadata.get("organismPart", metadata.get("tissue")),
+                ),
+            )
         ),
         "diseases": _names(project.get("diseases", metadata.get("diseases"))),
         "instruments": _names(
