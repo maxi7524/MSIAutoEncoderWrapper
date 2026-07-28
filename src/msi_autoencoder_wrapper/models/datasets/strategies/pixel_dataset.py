@@ -2,7 +2,7 @@
 Concrete dataset strategy executing single-pixel spectra mapping sequences driven by an active context.
 """
 
-from typing import Tuple, Any, Optional, Literal, Mapping, Sequence, Dict
+from typing import Tuple, Any, Optional, Literal, Mapping, Dict
 import torch
 import numpy as np
 
@@ -29,8 +29,7 @@ class PixelDataset(MSIBaseDataset):
         source: Literal["image", "latent"] = "image",
         normalization: Optional[Literal["none", "tic", "max", "l2"]] = None,
         normalization_epsilon: float = 1e-12,
-        target_fields: Optional[Sequence[str]] = None,
-        class_mappings: Optional[Mapping[str, Mapping[str, int]]] = None,
+        target_specs: Optional[Mapping[str, Mapping[str, Any]]] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -45,11 +44,10 @@ class PixelDataset(MSIBaseDataset):
         :type normalization: Optional[Literal["none", "tic", "max", "l2"]]
         :param normalization_epsilon: Positive denominator safety threshold.
         :type normalization_epsilon: float
-        :param target_fields: Metadata fields and/or ``molecule`` to return as
-            targets. When omitted, the historical two-item sample is returned.
-        :type target_fields: Sequence[str] | None
-        :param class_mappings: Optional explicit semantic value-to-class maps.
-        :type class_mappings: Mapping[str, Mapping[str, int]] | None
+        :param target_specs: Target definitions keyed by annotation field. Each
+            definition requires ``type`` (``single_label`` or ``multi_label``)
+            and may provide ``class_mapping``.
+        :type target_specs: Mapping[str, Mapping[str, Any]] | None
         :raises ValidationError: If normalization settings are invalid.
         """
         super().__init__(active_context=active_context, **kwargs)
@@ -71,18 +69,13 @@ class PixelDataset(MSIBaseDataset):
         self.source = source
         self.normalization = resolved_normalization
         self.normalization_epsilon = float(normalization_epsilon)
-        self.target_fields = tuple(target_fields or ())
-        self.class_mappings = {
-            str(field): {str(value): int(index) for value, index in mapping.items()}
-            for field, mapping in dict(class_mappings or {}).items()
-        }
+        self.target_specs = self._validate_target_specs(target_specs or {})
         self._resolved_class_mappings: Optional[Dict[str, Dict[str, int]]] = None
         self._config = {
             "source": source,
             "normalization": resolved_normalization,
             "normalization_epsilon": self.normalization_epsilon,
-            "target_fields": list(self.target_fields),
-            "class_mappings": self.class_mappings,
+            "target_specs": self.target_specs,
         }
 
     def __len__(self) -> int:
@@ -108,8 +101,9 @@ class PixelDataset(MSIBaseDataset):
 
         :param idx: Flat position tracking coordinate index targeting an explicit single tissue pixel.
         :type idx: int
-        :return: Aligned tuple holding the unique flat spatial key index token and its intensity tensor.
-        :rtype: Tuple[int, torch.Tensor]
+        :return: Spectrum identifier and tensor, optionally followed by target
+            and availability-mask dictionaries.
+        :rtype: Tuple[Any, ...]
         """
         # Context extraction layer
         reader = self.active_context.get_data_reader(self.source)
@@ -137,7 +131,7 @@ class PixelDataset(MSIBaseDataset):
                 context_name="PixelDataset",
                 message=f"Binned spectrum {idx} contains non-finite values.",
             )
-        ## It returns (spectrum_id, spectrum, targets) if targets else (spectrum_id, spectrum,) 
+        ## Attach configured annotation targets after spectrum transformation
         return self._sample(idx, torch.from_numpy(self._normalize(mapped_values)))
 
     def get_class_mappings(self) -> Dict[str, Dict[str, int]]:
@@ -154,30 +148,39 @@ class PixelDataset(MSIBaseDataset):
         if annotation_reader is None:
             raise_validation_error(
                 "PixelDataset",
-                "target_fields require an annotation reader in the active context.",
+                "target_specs require an annotation reader in the active context.",
             )
         metadata = annotation_reader.get_dataset_metadata()
         all_annotations = annotation_reader.get_annotations()
         mappings: Dict[str, Dict[str, int]] = {}
-        for field in self.target_fields:
+        for field, spec in self.target_specs.items():
             values = (
                 [molecule_key(annotation) for annotation in all_annotations]
                 if field == "molecule"
                 else metadata_values(metadata, field)
             )
-            mappings[field] = build_class_mapping(values, self.class_mappings.get(field))
+            mappings[field] = build_class_mapping(values, spec.get("class_mapping"))
         self._resolved_class_mappings = mappings
         return mappings
 
     def _sample(self, spectrum_id: int, spectrum: torch.Tensor) -> Tuple[Any, ...]:
-        """Attach configured metadata and multi-label molecule targets."""
-        if not self.target_fields:
+        """Attach configured targets and per-target availability masks.
+
+        :param spectrum_id: Stable spectrum identifier used by annotation readers.
+        :type spectrum_id: int
+        :param spectrum: Transformed spectrum tensor.
+        :type spectrum: torch.Tensor
+        :return: Sample tuple with optional target and mask dictionaries.
+        :rtype: Tuple[Any, ...]
+        """
+        if not self.target_specs:
             return spectrum_id, spectrum
         annotation_reader = self.active_context.annotation_reader
         mappings = self.get_class_mappings()
         metadata = annotation_reader.get_spectrum_metadata(spectrum_id)
         targets: Dict[str, torch.Tensor] = {}
-        for field in self.target_fields:
+        target_masks: Dict[str, torch.Tensor] = {}
+        for field, spec in self.target_specs.items():
             mapping = mappings[field]
             if field == "molecule":
                 target = torch.zeros(len(mapping), dtype=torch.float32)
@@ -186,21 +189,78 @@ class PixelDataset(MSIBaseDataset):
                     if class_index is not None:
                         target[class_index] = 1.0
                 targets[field] = target
+                target_masks[field] = torch.tensor(True)
                 continue
             values = metadata_values(metadata, field)
-            if len(values) != 1:
+            if spec["type"] == "multi_label":
+                target = torch.zeros(len(mapping), dtype=torch.float32)
+                for value in values:
+                    class_index = mapping.get(value)
+                    if class_index is not None:
+                        target[class_index] = 1.0
+                targets[field] = target
+                target_masks[field] = torch.tensor(bool(values))
+                continue
+            if len(values) > 1:
                 raise_validation_error(
                     "PixelDataset",
                     f"Target '{field}' is ambiguous for spectrum {spectrum_id}.",
                 )
-            class_index = mapping.get(values[0])
+            class_index = mapping.get(values[0]) if values else None
+            if not values:
+                targets[field] = torch.tensor(0, dtype=torch.long)
+                target_masks[field] = torch.tensor(False)
+                continue
             if class_index is None:
                 raise_validation_error(
                     "PixelDataset",
                     f"Target '{field}' value '{values[0]}' has no class mapping.",
                 )
             targets[field] = torch.tensor(class_index, dtype=torch.long)
-        return spectrum_id, spectrum, targets
+            target_masks[field] = torch.tensor(True)
+        return spectrum_id, spectrum, targets, target_masks
+
+    @staticmethod
+    def _validate_target_specs(
+        target_specs: Mapping[str, Mapping[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Validate and copy configurable target definitions.
+
+        :param target_specs: Target definitions keyed by annotation field.
+        :type target_specs: Mapping[str, Mapping[str, Any]]
+        :return: Independent normalized target definition mapping.
+        :rtype: Dict[str, Dict[str, Any]]
+        :raises ValidationError: If a target type or molecule definition is invalid.
+        """
+        validated: Dict[str, Dict[str, Any]] = {}
+        for field, raw_spec in target_specs.items():
+            spec = dict(raw_spec)
+            target_type = spec.get("type")
+            if target_type not in {"single_label", "multi_label"}:
+                raise_validation_error(
+                    "PixelDataset",
+                    f"Target '{field}' type must be 'single_label' or 'multi_label'.",
+                )
+            if field == "molecule" and target_type != "multi_label":
+                raise_validation_error(
+                    "PixelDataset", "Target 'molecule' must be multi_label."
+                )
+            mapping = spec.get("class_mapping")
+            if mapping is not None:
+                spec["class_mapping"] = {
+                    str(value): int(index) for value, index in mapping.items()
+                }
+                indices = sorted(spec["class_mapping"].values())
+                if indices != list(range(len(indices))):
+                    raise_validation_error(
+                        "PixelDataset",
+                        (
+                            f"Target '{field}' class_mapping indices must be "
+                            "unique and contiguous from zero."
+                        ),
+                    )
+            validated[str(field)] = spec
+        return validated
 
     def _normalize(self, values: np.ndarray) -> np.ndarray:
         """Return one spectrum using the configured stable scale.

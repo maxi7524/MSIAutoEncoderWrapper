@@ -24,11 +24,35 @@ def test_criterion_discovery_returns_uniform_component_information() -> None:
     assert "SobolevLoss" in available["reconstruction"]
     assert "InfoNCELoss" in available["contrastive"]
     assert "MultiLabelBCELoss" in available["head"]
+    assert "MaskedCrossEntropyLoss" in available["head"]
     assert set(available["reconstruction"]["MSELoss"]) == {
         "docstring",
         "parameters",
     }
     assert available["reconstruction"]["MSELoss"]["parameters"]["reduction"] == "mean"
+
+
+def test_named_head_losses_bind_head_id_to_its_target_field() -> None:
+    composite = CriterionsManager.build_model_composite_loss(
+        "autoencoder",
+        {
+            "heads": {
+                "condition_a": {
+                    "ce": {
+                        "target": "MaskedCrossEntropyLoss",
+                        "weight": 1.0,
+                        "params": {},
+                    }
+                }
+            }
+        },
+        head_specs={"condition_a": {"target_field": "condition"}},
+    )
+
+    criterion = composite.loss_functions["condition_a__ce"]
+
+    assert criterion.head_id == "condition_a"
+    assert criterion.target_field == "condition"
 
 
 @pytest.mark.parametrize("criterion_name", ["MSELoss", "SobolevLoss"])
