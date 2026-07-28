@@ -69,3 +69,43 @@ def test_reader_validates_coordinate_overrides_and_zero_slice_steps(
         reader.get_region(slice(None, None, 0))
     with pytest.raises(ValidationError, match="two or three values"):
         reader.get_spectrum_at((1, 2, 3, 4))
+
+
+def test_reader_maps_spectrum_values_to_native_grid(msi_fixture_path: Path) -> None:
+    """One scalar per spectrum preserves coordinate positions and missing pixels."""
+    reader = MockMSIReader(msi_fixture_path)
+    values = np.arange(reader.GetNumberOfSpectra(), dtype=np.float32)
+
+    image = reader.MapSpectrumValuesToImage(values)
+
+    assert image.values.shape == (1, 2, 3)
+    assert image.extent == (1, 3, 1, 2, 1, 1)
+    assert image.valid_mask.all()
+    assert image.values[0, 1, 2] == pytest.approx(values[5])
+
+
+@pytest.mark.parametrize(
+    ("aggregation", "expected"),
+    [("mean", 15.0), ("sum", 30.0), ("max", 20.0), ("median", 15.0)],
+)
+def test_reader_ion_image_supports_window_aggregations(
+    aggregation: str,
+    expected: float,
+) -> None:
+    """Raw ion images expose consistent provider-independent aggregation semantics."""
+
+    class SmallReader(MockMSIReader):
+        def GetNumberOfSpectra(self) -> int:
+            return 1
+
+        def GetSpectrum(self, target):
+            del target
+            return np.array([99.95, 100.0, 100.1]), np.array([10.0, 20.0, 30.0])
+
+        def GetSpectrumPosition(self, idx: int):
+            assert idx == 0
+            return 1, 1, 1
+
+    image = SmallReader().GetIonImage(100.0, 0.06, aggregation=aggregation)
+
+    assert image.values[0, 0, 0] == pytest.approx(expected)

@@ -2,10 +2,17 @@ from pathlib import Path
 import numpy as np
 import m2aia as m2
 from typing import Optional, Any, Dict, Tuple, Union
+from collections.abc import Iterator
+import SimpleITK as sitk
 from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
-from ...utils.exceptions import raise_incompatible_interface_error, raise_project_config_error
+from ...utils.exceptions import (
+    raise_incompatible_interface_error,
+    raise_project_config_error,
+    raise_validation_error,
+)
+from ..spatial import Aggregation, SpatialImage
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -129,6 +136,74 @@ class M2aiaReader(MSIBaseReader):
         #     }
         # }
         return self._img.GetMetaData()
+
+    def IterSpectra(
+        self,
+    ) -> Iterator[tuple[int, Tuple[int, int, int], np.ndarray, np.ndarray]]:
+        """Yield spectra through the native M²aia iterator."""
+        for spectrum_id, mz_axis, intensities in self._img.SpectrumIterator():
+            spectrum_id = int(spectrum_id)
+            yield (
+                spectrum_id,
+                self.GetSpectrumPosition(spectrum_id),
+                np.asarray(mz_axis, dtype=np.float32),
+                np.asarray(intensities, dtype=np.float32),
+            )
+
+    def GetIonImage(
+        self,
+        mz: float,
+        tolerance: float,
+        aggregation: Aggregation = "mean",
+        fill_value: float = np.nan,
+    ) -> SpatialImage:
+        """Use native M²aia ion-image extraction for maximum aggregation."""
+        if aggregation != "max":
+            return super().GetIonImage(mz, tolerance, aggregation, fill_value)
+        if tolerance < 0:
+            raise_validation_error("IonImage", "tolerance cannot be negative.")
+        values = sitk.GetArrayFromImage(
+            self._img.GetImage(float(mz), float(tolerance))
+        ).astype(np.float32, copy=False)
+        mask = sitk.GetArrayFromImage(self._img.GetMaskImage()).astype(bool)
+        result = np.where(mask, values, fill_value)
+        coordinates = [
+            self.GetSpectrumPosition(index)
+            for index in range(self.GetNumberOfSpectra())
+        ]
+        xs, ys, zs = zip(*coordinates)
+        return SpatialImage(
+            values=result,
+            valid_mask=mask,
+            extent=(min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)),
+        )
+
+    def MapSpectrumValuesToImage(
+        self,
+        values: np.ndarray,
+        fill_value: float = np.nan,
+    ) -> SpatialImage:
+        """Map spectrum values with M²aia's native index and mask images."""
+        array = np.asarray(values)
+        count = self.GetNumberOfSpectra()
+        if array.ndim != 1 or len(array) != count:
+            return super().MapSpectrumValuesToImage(array, fill_value)
+        indices = sitk.GetArrayFromImage(self._img.GetIndexImage()).astype(np.int64)
+        mask = sitk.GetArrayFromImage(self._img.GetMaskImage()).astype(bool)
+        result_dtype = (
+            array.dtype
+            if np.issubdtype(array.dtype, np.floating)
+            else np.result_type(array.dtype, np.asarray(fill_value).dtype)
+        )
+        result = np.full(indices.shape, fill_value, dtype=result_dtype)
+        result[mask] = array[indices[mask]]
+        coordinates = [self.GetSpectrumPosition(index) for index in range(count)]
+        xs, ys, zs = zip(*coordinates)
+        return SpatialImage(
+            values=result,
+            valid_mask=mask,
+            extent=(min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)),
+        )
 
     @property
     def native_reader(self) -> m2.ImzMLReader:
