@@ -199,6 +199,11 @@ class CriterionsManager:
 
         instantiated_losses: Dict[str, MSIBaseCriterion] = {}
         loss_weights: Dict[str, float] = {}
+        if "heads" in loss_setup:
+            raise_validation_error(
+                "CriterionsManager",
+                "build_composite_loss requires head_specs; use build_model_composite_loss.",
+            )
 
         for criterion_type, typed_setup in cls._normalize_loss_setup(
             model_type,
@@ -225,6 +230,46 @@ class CriterionsManager:
                 )
 
         return CompositeLoss(loss_functions=instantiated_losses, weights=loss_weights)
+
+    @classmethod
+    def build_model_composite_loss(
+        cls,
+        model_type: str,
+        loss_setup: Dict[str, Any],
+        head_specs: Optional[Dict[str, Dict[str, str]]] = None,
+    ) -> CompositeLoss:
+        """Build losses and bind nested head criteria by head identifier.
+
+        :param model_type: Registered model family identifier.
+        :type model_type: str
+        :param loss_setup: Categorized loss configuration, optionally containing
+            losses nested under ``heads.<head_id>``.
+        :type loss_setup: Dict[str, Any]
+        :param head_specs: Model head-to-target binding definitions.
+        :type head_specs: Optional[Dict[str, Dict[str, str]]]
+        :return: Weighted composite criterion for one training phase.
+        :rtype: CompositeLoss
+        :raises ValidationError: If a configured head identifier is unknown.
+        """
+        expanded = dict(loss_setup)
+        configured_heads = expanded.pop("heads", {})
+        if configured_heads:
+            flattened: Dict[str, Any] = dict(expanded.get("head", {}))
+            for head_id, head_losses in configured_heads.items():
+                spec = dict((head_specs or {}).get(head_id, {}))
+                target_field = spec.get("target_field")
+                if target_field is None:
+                    raise_validation_error(
+                        "CriterionsManager", f"Unknown configured head '{head_id}'."
+                    )
+                for token, raw_config in head_losses.items():
+                    config = dict(raw_config)
+                    params = dict(config.get("params", {}))
+                    params.update({"head_id": head_id, "target_field": target_field})
+                    config["params"] = params
+                    flattened[f"{head_id}__{token}"] = config
+            expanded["head"] = flattened
+        return cls.build_composite_loss(model_type, expanded)
 
     @classmethod
     def _build_loss_component(

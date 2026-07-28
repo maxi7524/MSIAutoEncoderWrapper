@@ -94,20 +94,14 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             ## Heading 2 (Gradient Lock Adjustments)
             ### Adjust layer weight modifications status dynamically by traversing model child boundaries
             freeze_targets = phase_config.get("freeze", [])
-            for name, child_module in model.named_children():
-                if name in freeze_targets:
-                    logger.info("Gradient routing policy: Freezing component parameter gradients for: %s", name)
-                    for param in child_module.parameters():
-                        param.requires_grad = False
-                else:
-                    for param in child_module.parameters():
-                        param.requires_grad = True
+            self._apply_freeze_configuration(model, freeze_targets)
 
             ## Heading 2 (Dynamic Mathematical Criteria Graph Compilation)
             criterions_setup = phase_config.get("criterions", {})
-            composite_loss = CriterionsManager.build_composite_loss(
+            composite_loss = CriterionsManager.build_model_composite_loss(
                 model_type=model_type,
-                loss_setup=criterions_setup
+                loss_setup=criterions_setup,
+                head_specs=getattr(model, "head_specs", {}),
             )
 
             ## Heading 2 (Dynamic Optimizer Reflection Allocation)
@@ -335,6 +329,41 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
         logger.info("All configured sequential multi-phase training loops successfully completed.")
         return global_history
+
+    @staticmethod
+    def _apply_freeze_configuration(
+        model: nn.Module,
+        freeze_targets: List[str],
+    ) -> None:
+        """Reset gradients and freeze configured component paths for one phase.
+
+        :param model: Model whose parameter flags are updated in place.
+        :type model: torch.nn.Module
+        :param freeze_targets: Attribute paths such as ``encoder`` or
+            ``heads.condition_primary``.
+        :type freeze_targets: List[str]
+        :return: None.
+        :rtype: None
+        :raises ValidationError: If a component path does not exist.
+        """
+        for parameter in model.parameters():
+            parameter.requires_grad = True
+        for target in freeze_targets:
+            component: nn.Module = model
+            try:
+                for part in str(target).split("."):
+                    component = (
+                        component[part]
+                        if isinstance(component, nn.ModuleDict)
+                        else getattr(component, part)
+                    )
+            except (AttributeError, KeyError):
+                raise_validation_error(
+                    "Trainer", f"Unknown freeze target '{target}'."
+                )
+            logger.info("Freezing component path: %s", target)
+            for parameter in component.parameters():
+                parameter.requires_grad = False
 
     def _build_dataloader(
         self,

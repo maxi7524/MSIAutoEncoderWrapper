@@ -68,6 +68,34 @@ def test_build_model_assembles_registered_components() -> None:
     assert outputs["projection"].shape == (4, 3)
 
 
+def test_build_model_assembles_multiple_named_heads_for_shared_target() -> None:
+    setup = _autoencoder_setup()
+    setup["heads"] = {
+        "condition_linear": {
+            "strategy": "LinearClassificationHead",
+            "params": {"latent_dim": 4, "output_dim": 2},
+        },
+        "condition_deep": {
+            "strategy": "LinearClassificationHead",
+            "params": {"latent_dim": 4, "output_dim": 2, "hidden_dim": 3},
+        },
+    }
+
+    model = ArchitecturesManager.build_model(
+        "autoencoder",
+        setup,
+        head_specs={
+            "condition_linear": {"target_field": "condition"},
+            "condition_deep": {"target_field": "condition"},
+        },
+    )
+    outputs = model(torch.randn(5, 32))
+
+    assert outputs["head_condition_linear"].shape == (5, 2)
+    assert outputs["head_condition_deep"].shape == (5, 2)
+    assert model.head_specs["condition_linear"]["target_field"] == "condition"
+
+
 def test_build_model_accepts_ready_component_instances() -> None:
     """Ready architecture components are attached without re-instantiation."""
     encoder_setup = _autoencoder_setup()["encoder"]
