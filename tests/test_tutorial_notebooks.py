@@ -17,6 +17,7 @@ EXPECTED_TUTORIALS = [
     "04_autoencoder_and_latent_space.ipynb",
     "05_multi_image_models_todo.ipynb",
     "06_pride_dataset_explorer.ipynb",
+    "07_metaspace_dataset_explorer.ipynb",
 ]
 MARKDOWN_LINK = re.compile(r"\[[^]]+\]\(([^)]+)\)")
 
