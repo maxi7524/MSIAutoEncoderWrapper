@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .core.wrapper import MSIAutoEncoderWrapper
 
 __all__ = ["MSIAutoEncoderWrapper"]
 
 
 def __getattr__(name: str) -> Any:
-    """Load the wrapper facade only when it is explicitly requested."""
     if name == "MSIAutoEncoderWrapper":
         from .core.wrapper import MSIAutoEncoderWrapper
 
         return MSIAutoEncoderWrapper
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
