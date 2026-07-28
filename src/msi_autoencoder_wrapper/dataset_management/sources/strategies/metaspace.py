@@ -54,6 +54,26 @@ class MetaspaceDatasetSource(DatasetSource):
             }
         }
 
+    @staticmethod
+    def available_filters() -> Dict[str, Any]:
+        """Return notebook-friendly documentation for METASPACE filters."""
+        return {
+            "nameMask": {"type": "string", "description": "Dataset name search."},
+            "idMask": {"type": "string | list[string]"},
+            "submitter_id": {"type": "string"},
+            "group_id": {"type": "string"},
+            "project_id": {"type": "string"},
+            "polarity": {"type": "Positive | Negative"},
+            "ionisation_source": {"type": "string"},
+            "analyzer_type": {"type": "string"},
+            "maldi_matrix": {"type": "string"},
+            "organism": {"type": "string"},
+            "exclude_dataset_ids": {
+                "type": "list[string]",
+                "description": "Local exclusions applied after provider discovery.",
+            },
+        }
+
     @property
     def client(self) -> Any:
         """Return the injected client or lazily construct ``SMInstance``."""
