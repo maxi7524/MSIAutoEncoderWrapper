@@ -104,6 +104,10 @@ explorer.export_config("assets/configs/datasets/pride_mouse_bladder.json")
 The complete guided workflow is available in
 ``assets/notebooks/tutorials/06_pride_dataset_explorer.ipynb``.
 
+An analogous METASPACE workflow, including broad discovery followed by filter
+refinement and metadata review, is available in
+``assets/notebooks/tutorials/07_metaspace_dataset_explorer.ipynb``.
+
 ### CLI tutorial
 
 Run commands from any directory. Relative command-line paths are resolved
