@@ -185,6 +185,10 @@ _RESULT_COLUMNS = [
     "total_size_bytes",
     "download_size_bytes",
     "annotation_status",
+    "polarity",
+    "processing_status",
+    "image_size",
+    "databases",
     "excluded",
 ]
 
@@ -192,6 +196,7 @@ _RESULT_COLUMNS = [
 def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
     metadata = dict(record.get("metadata", {}))
     project = dict(metadata.get("project", {}))
+    sample_information = _mapping(metadata.get("Sample_Information"))
     return {
         "dataset_id": str(record["dataset_id"]),
         "name": str(record.get("name", record["dataset_id"])),
@@ -201,7 +206,10 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
         "organisms": _names(
             project.get(
                 "organisms",
-                metadata.get("organisms", metadata.get("organism")),
+                metadata.get(
+                    "organisms",
+                    metadata.get("organism", sample_information.get("Organism")),
+                ),
             )
         ),
         "organism_parts": _names(
@@ -209,7 +217,12 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
                 "organismParts",
                 metadata.get(
                     "organism_parts",
-                    metadata.get("organismPart", metadata.get("tissue")),
+                    metadata.get(
+                        "organismPart",
+                        metadata.get(
+                            "tissue", sample_information.get("Organism_Part")
+                        ),
+                    ),
                 ),
             )
         ),
@@ -220,8 +233,37 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
         "total_size_bytes": metadata.get("total_size_bytes"),
         "download_size_bytes": metadata.get("download_size_bytes"),
         "annotation_status": metadata.get("annotation_status"),
+        "polarity": metadata.get("polarity"),
+        "processing_status": metadata.get("status"),
+        "image_size": _display_mapping(metadata.get("image_size")),
+        "databases": _database_names(metadata.get("databases")),
         "excluded": excluded,
     }
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _display_mapping(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    return ", ".join(f"{key}={item}" for key, item in value.items())
+
+
+def _database_names(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    return ", ".join(
+        " ".join(
+            str(part)
+            for part in (item.get("name"), item.get("version"))
+            if part
+        )
+        if isinstance(item, Mapping)
+        else str(item)
+        for item in value
+    )
 
 
 def _names(value: Any) -> str:
