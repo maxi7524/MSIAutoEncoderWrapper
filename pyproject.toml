@@ -9,6 +9,60 @@ version = "0.0.1"
 description = "MIMUW love forever - Autoencoder wrapper for MSI data"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "ipywidgets",
+    "m2aia",
+    "matplotlib",
+    "metaspace2020==2.0.9",
+    "numpy",
+    "pandas",
+    "polars",
+    "pyimzml",
+    "requests",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "statsmodels",
+    "tabulate",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "torch==2.7.1",
+]
+cu118 = [
+    "torch==2.7.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel",
+    "pytest",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu118" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu118", extra = "cu118" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
 
 [tool.setuptools]
 package-dir = {"" = "src"}

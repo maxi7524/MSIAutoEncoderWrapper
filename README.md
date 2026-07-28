@@ -25,34 +25,111 @@ The original implementation was refactored to use `m2aia` for improved data hand
 
 ## Installation
 
-### 1. Environment Setup
-We recommend using [Mamba](https://mamba.readthedocs.io/en/latest/) or [Conda](https://docs.conda.io/en/latest/) to manage dependencies. A pre-configured `environment.yml` file is provided.
+Here we provide commands to set up an environment with one of the following
+configurations:
+
+* `cpu` — installs the CPU-only PyTorch build.
+* `cu118` — installs the PyTorch build for CUDA 11.8.
+
+### System packages
+
+To use the imzML readers, install the system libraries required by `m2aia` and
+OpenSlide. The following command supports Debian and Ubuntu systems:
 
 
 ```bash
-# To use `m2aia` you need to install system libraries:
 sudo apt-get update
 sudo apt-get install -y libglu1-mesa-dev libgomp1 libopenslide-dev
 ```
 
+<!-- TODO: Add a tested cross-platform system dependency installation script. -->
+
+### Environment
+
+Run the commands from the project root. Choose exactly one environment manager
+and one configuration.
+
+#### uv manager (suggested)
+
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then
+create and synchronize the project environment:
+
 ```bash
-# Create the environment
-conda env create -f scripts/environment/msi_env.yml
-
-# Activate the environment
-conda activate msi_env
-
-# Install torch (~3 GB) (adding it to .yml drastically slows process)
-# Select the CUDA toolkit version compatible with the installed NVIDIA driver.
-micromamba install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+# CPU
+uv sync --extra cpu
 ```
 
-### 2. Library Installation
-Currently, the library is in development mode. Install it in editable mode:
+or:
 
 ```bash
-# From the project root directory
-pip install -e .
+# CUDA 11.8
+uv sync --extra cu118
+```
+
+The environment is stored in `.venv`. Pass the selected configuration to
+`uv run` to keep the environment synchronized while executing commands:
+
+```bash
+# CPU
+uv run --extra cpu pytest
+uv run --extra cpu python
+
+# CUDA 11.8
+uv run --extra cu118 pytest
+uv run --extra cu118 python
+```
+
+#### Conda managers
+
+The same setup works with Conda, Mamba, or Micromamba. The examples below use
+`conda`; replace it consistently with `mamba` or `micromamba` when needed.
+
+```bash
+# Create and activate the environment
+conda create --name msi_env python=3.12 pip -y
+conda activate msi_env
+
+# CPU
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[cpu]"
+```
+
+For CUDA 11.8, replace the two installation commands with:
+
+```bash
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+python -m pip install -e ".[cu118]"
+```
+
+#### venv manager
+
+Create a standard Python virtual environment:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+
+# CPU
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[cpu]"
+```
+
+For CUDA 11.8, replace the two installation commands with:
+
+```bash
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+python -m pip install -e ".[cu118]"
+```
+
+Verify the selected PyTorch build:
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
 ```
 
 ## Tutorials
