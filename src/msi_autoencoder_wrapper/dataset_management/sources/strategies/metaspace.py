@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
+import requests
 
-from ...utils.exceptions import raise_project_config_error
-from ...utils.logger import get_custom_logger
-from ..base_source import DatasetSource
+from ....utils.exceptions import (
+    raise_download_limit_error,
+    raise_external_service_error,
+    raise_project_config_error,
+)
+from ....utils.logger import get_custom_logger
+from .metaspace_authentication import metaspace_client_options
+from ..base import DatasetSource
 from ..source_manager import DatasetSourceManager
 
 
@@ -40,7 +47,12 @@ class MetaspaceDatasetSource(DatasetSource):
     ) -> None:
         self._client_options = dict(client_options or {})
         self._client = client
-        self._config = {"client_options": self._client_options}
+        self._config = {
+            "client_options": {
+                key: "***" if key in {"api_key", "password"} else value
+                for key, value in self._client_options.items()
+            }
+        }
 
     @property
     def client(self) -> Any:
@@ -59,7 +71,7 @@ class MetaspaceDatasetSource(DatasetSource):
                             "Install the official client or inject an SMInstance."
                         ),
                     )
-            self._client = SMInstance(**self._client_options)
+            self._client = SMInstance(**metaspace_client_options(self._client_options))
         return self._client
 
     def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
@@ -130,7 +142,35 @@ class MetaspaceDatasetSource(DatasetSource):
         target = Path(destination)
         target.mkdir(parents=True, exist_ok=True)
         dataset = self.client.dataset(id=dataset_id)
-        dataset.download_to_dir(target, base_name=dataset_id)
+        if hasattr(dataset, "download_links"):
+            download = dataset.download_links()
+            files = list((download or {}).get("files", []))
+            if not files:
+                message = (download or {}).get(
+                    "message", "METASPACE returned no downloadable files."
+                )
+                raise_external_service_error(
+                    context_name="METASPACE",
+                    message=f"Cannot download dataset '{dataset_id}': {message}",
+                )
+            _validate_download_files(files, dataset_id)
+            try:
+                with ThreadPoolExecutor(max_workers=min(2, len(files))) as executor:
+                    list(
+                        executor.map(
+                            lambda file_record: _download_file(
+                                file_record, target, dataset_id
+                            ),
+                            files,
+                        )
+                    )
+            except (requests.RequestException, ValueError) as error:
+                raise_external_service_error(
+                    context_name="METASPACE",
+                    message=f"Download failed for dataset '{dataset_id}': {error}",
+                )
+        else:
+            dataset.download_to_dir(target, base_name=dataset_id)
         expected = target / f"{dataset_id}.imzML"
         if not expected.is_file() or not expected.with_suffix(".ibd").is_file():
             raise_project_config_error(
@@ -199,6 +239,104 @@ def _database_parts(database: Any) -> tuple[Optional[str], Optional[str]]:
     if isinstance(database, (tuple, list)) and len(database) >= 2:
         return str(database[0]), str(database[1])
     return str(database), None
+
+
+def _download_file(
+    file_record: Mapping[str, Any],
+    destination: Path,
+    dataset_id: str,
+) -> Path:
+    """Download one signed METASPACE file safely and atomically.
+
+    :param file_record: METASPACE file record containing ``filename`` and
+        signed ``link`` fields.
+    :type file_record: Mapping[str, Any]
+    :param destination: Dataset output directory.
+    :type destination: pathlib.Path
+    :param dataset_id: Stable dataset ID used as the local file stem.
+    :type dataset_id: str
+    :return: Completed local path.
+    :rtype: pathlib.Path
+    :raises ValueError: If the record is malformed or has an unsupported file
+        extension.
+    :raises requests.RequestException: If the HTTP request fails.
+    """
+    filename = str(file_record.get("filename", ""))
+    link = file_record.get("link")
+    suffix = Path(filename).suffix
+    if suffix.lower() not in {".imzml", ".ibd"}:
+        raise ValueError(f"Unsupported METASPACE download file: '{filename}'.")
+    if not isinstance(link, str) or not link:
+        raise ValueError(f"METASPACE returned no link for '{filename}'.")
+    canonical_suffix = ".imzML" if suffix.lower() == ".imzml" else ".ibd"
+    output = destination / f"{dataset_id}{canonical_suffix}"
+    partial = output.with_name(f"{output.name}.part")
+    if output.is_file() and output.stat().st_size > 0:
+        logger.info("METASPACE file already exists: %s", output)
+        return output
+
+    logger.info("Downloading METASPACE file %s", filename)
+    partial.unlink(missing_ok=True)
+    try:
+        with requests.get(link, stream=True, timeout=(15, 120)) as response:
+            response.raise_for_status()
+            with partial.open("wb") as stream:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        stream.write(chunk)
+        if partial.stat().st_size == 0:
+            raise ValueError(f"METASPACE returned an empty file for '{filename}'.")
+        partial.replace(output)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+    logger.info("Downloaded METASPACE file to %s", output)
+    return output
+
+
+def _validate_download_files(
+    files: List[Mapping[str, Any]],
+    dataset_id: str,
+) -> None:
+    """Validate a complete METASPACE imzML download response before transfer.
+
+    :param files: File records returned by ``SMDataset.download_links()``.
+    :type files: List[Mapping[str, Any]]
+    :param dataset_id: Dataset being materialized.
+    :type dataset_id: str
+    :raises DownloadLimitError: If METASPACE returns its quota sentinel file.
+    :raises ExternalServiceError: If the response is not a complete imzML/ibd
+        pair.
+    """
+    filenames = [str(file_record.get("filename", "")) for file_record in files]
+    if any(filename.casefold() == "download_limit_reached.txt" for filename in filenames):
+        raise_download_limit_error(
+            "METASPACE",
+            (
+                f"METASPACE refused dataset '{dataset_id}' because the account or "
+                "service download quota has been reached. Retry after the quota "
+                "resets or contact METASPACE support. No data files were downloaded."
+            ),
+        )
+    suffixes = {Path(filename).suffix.lower() for filename in filenames}
+    unsupported = [
+        filename
+        for filename in filenames
+        if Path(filename).suffix.lower() not in {".imzml", ".ibd"}
+    ]
+    if unsupported:
+        raise_external_service_error(
+            "METASPACE",
+            (
+                f"Dataset '{dataset_id}' returned unsupported download files: "
+                f"{', '.join(unsupported)}."
+            ),
+        )
+    if not {".imzml", ".ibd"}.issubset(suffixes):
+        raise_external_service_error(
+            "METASPACE",
+            f"Dataset '{dataset_id}' did not return a complete imzML/ibd pair.",
+        )
 
 
 def _spatial_images_by_molecule(

@@ -7,7 +7,7 @@ from pathlib import Path
 from msi_autoencoder_wrapper.annotations.annotations_manager import AnnotationReaderManager
 from msi_autoencoder_wrapper.annotations.sqlite_annotation_reader import SQLiteAnnotationReader
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
-from msi_autoencoder_wrapper.workspace.dataset_catalog import DatasetCatalog
+from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
 from tests.mocks.components import MockMSIReader
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from msi_autoencoder_wrapper.datasets.splitting import grouped_dataset_split
+from msi_autoencoder_wrapper.dataset_management.operations import grouped_dataset_split
 
 
 def test_grouped_split_never_separates_patient_datasets() -> None:

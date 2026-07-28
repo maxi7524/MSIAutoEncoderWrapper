@@ -1,4 +1,4 @@
-"""Validation of materialized canonical MSI datasets."""
+"""Validation of local canonical MSI datasets."""
 
 from __future__ import annotations
 

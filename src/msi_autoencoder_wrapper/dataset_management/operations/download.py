@@ -7,76 +7,18 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-import numpy as np
 from pyimzml.ImzMLWriter import ImzMLWriter
 
-from ..annotations.validators import validate_annotation_record
-from ..readers.strategies.pyimzml_reader import PyImzMLReader
-from ..utils.exceptions import raise_validation_error, raise_workspace_error
-from ..utils.logger import get_custom_logger
-from ..workspace.dataset_catalog import DatasetCatalog
-from .base_source import DatasetSource
-from .validators import validate_imzml_pair, validate_selection, validate_source_record
+from ...readers.strategies.pyimzml_reader import PyImzMLReader
+from ...utils.exceptions import raise_validation_error, raise_workspace_error
+from ...utils.logger import get_custom_logger
+from ..catalog.sqlite_catalog import DatasetCatalog
+from ..normalization import normalize_spectrum_annotations
+from ..sources.base import DatasetSource
+from ..validators import validate_imzml_pair, validate_selection
 
 
 logger = get_custom_logger(__name__)
-
-
-def query_to_selection(
-    *,
-    source: DatasetSource,
-    filters: Mapping[str, Any],
-    catalog: DatasetCatalog,
-    selection_path: Path | str,
-) -> List[Dict[str, Any]]:
-    """Query dataset metadata, update SQLite, and write a reproducible selection.
-
-    :param source: External provider adapter.
-    :type source: DatasetSource
-    :param filters: Native provider-side discovery filters.
-    :type filters: Mapping[str, Any]
-    :param catalog: Workspace dataset catalog.
-    :type catalog: DatasetCatalog
-    :param selection_path: Destination JSON selection file.
-    :type selection_path: pathlib.Path | str
-    :return: Selected dataset records.
-    :rtype: List[Dict[str, Any]]
-    """
-    records = source.search_datasets(filters)
-    selection_records: List[Dict[str, Any]] = []
-    for record in records:
-        validate_source_record(record)
-        dataset_id = str(record["dataset_id"])
-        name = str(record.get("name", dataset_id))
-        metadata = dict(record.get("metadata", {}))
-        catalog.upsert_dataset(
-            source=source.source_name,
-            dataset_id=dataset_id,
-            name=name,
-            metadata=metadata,
-        )
-        selection_records.append(
-            {
-                "source": source.source_name,
-                "dataset_id": dataset_id,
-                "name": name,
-                "metadata": metadata,
-            }
-        )
-    selection = {
-        "schema_version": 1,
-        "source": source.source_name,
-        "filters": dict(filters),
-        "datasets": selection_records,
-    }
-    target = Path(selection_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(selection, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-    logger.info("Wrote query selection with %s datasets to %s", len(records), target)
-    return selection_records
 
 
 def materialize_selection(
@@ -128,7 +70,7 @@ def materialize_selection(
         metadata_record = source.get_dataset_metadata(dataset_id)
         metadata = dict(metadata_record.get("metadata", {}))
         reader = PyImzMLReader(validate_imzml_pair(destination, dataset_id))
-        annotations = _normalize_spectrum_annotations(
+        annotations = normalize_spectrum_annotations(
             source.get_annotations(dataset_id, annotation_options), reader
         )
         catalog.upsert_dataset(
@@ -238,7 +180,7 @@ def materialize_and_merge_selection(
                 metadata_record = source.get_dataset_metadata(dataset_id)
                 imzml_path = validate_imzml_pair(destination, dataset_id)
                 reader = PyImzMLReader(imzml_path)
-                annotations = _normalize_spectrum_annotations(
+                annotations = normalize_spectrum_annotations(
                     source.get_annotations(dataset_id, annotation_options), reader
                 )
                 metadata = dict(metadata_record.get("metadata", {}))
@@ -317,47 +259,3 @@ def materialize_and_merge_selection(
         output,
     )
     return output
-
-
-def _normalize_spectrum_annotations(
-    annotations: Sequence[Mapping[str, Any]],
-    reader: PyImzMLReader,
-) -> List[Dict[str, Any]]:
-    """Map provider ion-image coordinates to canonical ``spectrum_id`` links.
-
-    :param annotations: Provider records, optionally containing ``ion_image``.
-    :type annotations: Sequence[Mapping[str, Any]]
-    :param reader: Reader defining stable spectrum IDs and coordinates.
-    :type reader: PyImzMLReader
-    :return: Canonical records suitable for SQLite storage.
-    :rtype: List[Dict[str, Any]]
-
-    Positive finite ion-image values are stored sparsely. The full imzML
-    spectrum remains the source of intensity data; this relation is only the
-    spatial molecular annotation supplied by the external database.
-    """
-    normalized: List[Dict[str, Any]] = []
-    for annotation in annotations:
-        record = dict(annotation)
-        validate_annotation_record(record)
-        ion_image_value = record.pop("ion_image", None)
-        if ion_image_value is None:
-            normalized.append(record)
-            continue
-        ion_image = np.asarray(ion_image_value)
-        spectrum_ids: List[int] = []
-        spectrum_values: Dict[int, float] = {}
-        for spectrum_id in range(reader.GetNumberOfSpectra()):
-            x_position, y_position, _ = reader.GetSpectrumPosition(spectrum_id)
-            row = y_position - 1
-            column = x_position - 1
-            if row < 0 or column < 0 or row >= ion_image.shape[0] or column >= ion_image.shape[1]:
-                continue
-            intensity = float(ion_image[row, column])
-            if np.isfinite(intensity) and intensity > 0:
-                spectrum_ids.append(spectrum_id)
-                spectrum_values[spectrum_id] = intensity
-        record["spectrum_ids"] = spectrum_ids
-        record["spectrum_values"] = spectrum_values
-        normalized.append(record)
-    return normalized
