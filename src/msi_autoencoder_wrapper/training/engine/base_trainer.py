@@ -185,6 +185,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     )
                     
                     #### Execute model forward computation step
+                    #### REMARK: Here we push only spectra, as this is the model input 
                     model_outputs = model(spectra_tensor)
                     self._ensure_finite_tensors(
                         model_outputs,
@@ -195,6 +196,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     )
                     
                     #### Evaluate composite objective loss sum vector matrix calculations scores
+                    #### REMARK: Here we push whole batch (idx(img positions), spectra, targets)
                     loss, loss_logs = composite_loss(model_outputs=model_outputs, batch_data=batch)
                     if not bool(torch.isfinite(loss).all()):
                         raise_validation_error(
