@@ -34,6 +34,15 @@ METASPACE implementation and will contain future database strategies. Each
 strategy retrieves complete source metadata and molecular annotations and
 normalizes them before they are stored locally.
 
+The bundled PRIDE strategy treats every complete ``.imzML``/``.ibd`` pair as
+one image dataset, even when one PRIDE project contains several acquisitions.
+It accepts only an explicitly associated ``<image>_annotations.csv`` or
+``<image>_annotations.tsv`` table containing a molecule identity and
+``spectrum_id``. It never infers molecule identities from m/z peaks. Project
+records with missing or ambiguous required biological metadata, incomplete
+pairs, unsupported annotation files, or missing required checksums are logged
+with a link to their PRIDE project and excluded from the selection.
+
 `annotations` does not contain METASPACE parsing. `SQLiteAnnotationReader`
 reads the single canonical SQLite representation produced by
 `dataset_sources`. It joins molecular annotations to the same zero-based
