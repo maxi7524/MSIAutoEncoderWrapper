@@ -218,6 +218,7 @@ class MetaspaceDatasetSource(DatasetSource):
             "name": str(getattr(dataset, "name", getattr(dataset, "id"))),
             "metadata": {
                 **metadata,
+                "project_url": f"https://metaspace2020.eu/dataset/{dataset.id}",
                 "polarity": getattr(dataset, "polarity", None),
                 "status": getattr(dataset, "status", None),
                 "image_size": _object_mapping(getattr(dataset, "image_size", {})),

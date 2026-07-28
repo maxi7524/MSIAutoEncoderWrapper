@@ -114,11 +114,18 @@ def test_explorer_supports_metaspace_filters_and_metadata() -> None:
     class Dataset:
         id = "metaspace-one"
         name = "Mouse bladder"
-        metadata = {"organism": "Mus musculus", "tissue": "Urinary bladder"}
+        metadata = {
+            "Sample_Information": {
+                "Organism": "Mouse",
+                "Organism_Part": "Urinary bladder",
+            }
+        }
         polarity = "Positive"
         status = "FINISHED"
         image_size = {"x": 2, "y": 2}
-        database_details: List[Any] = []
+        database_details = [
+            type("Database", (), {"name": "HMDB", "version": "v4", "id": 1})()
+        ]
 
     class Client:
         def __init__(self) -> None:
@@ -136,5 +143,10 @@ def test_explorer_supports_metaspace_filters_and_metadata() -> None:
     assert explorer.available_filters()["polarity"]["type"] == "Positive | Negative"
     assert client.filters == {"organism": "Mus musculus", "polarity": "Positive"}
     assert results.loc[0, "source"] == "metaspace"
-    assert results.loc[0, "organisms"] == "Mus musculus"
+    assert results.loc[0, "organisms"] == "Mouse"
     assert results.loc[0, "organism_parts"] == "Urinary bladder"
+    assert results.loc[0, "polarity"] == "Positive"
+    assert results.loc[0, "processing_status"] == "FINISHED"
+    assert results.loc[0, "image_size"] == "x=2, y=2"
+    assert results.loc[0, "databases"] == "HMDB v4"
+    assert results.loc[0, "project_url"].endswith("/metaspace-one")
