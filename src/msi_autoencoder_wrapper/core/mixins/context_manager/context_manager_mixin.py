@@ -58,7 +58,14 @@ class ContextManagerProxy:
     # Subsection: Setters - reader
     # --------------------------------------------------
 
-    def set_reader(self, reader_name_or_instance: Any, img_name_or_path: Optional[str] = None, **kwargs: Any) -> Any:
+    def set_reader(
+        self,
+        reader_name_or_instance: Any,
+        img_name_or_path: Optional[str] = None,
+        annotation_catalog_path: Optional[str] = None,
+        auto_load_annotations: bool = True,
+        **kwargs: Any,
+    ) -> Any:
         """
         Registers and configures an input data reader strategy for an image context.
 
@@ -70,17 +77,92 @@ class ContextManagerProxy:
         :type reader_name_or_instance: Any
         :param img_name_or_path: Explicit target path or standalone image name key token. Defaults to None.
         :type img_name_or_path: Optional[str]
+        :param annotation_catalog_path: Optional explicit SQLite catalog path.
+            Defaults to ``datasets/catalog.sqlite`` in the active workspace.
+        :type annotation_catalog_path: Optional[str]
+        :param auto_load_annotations: Automatically attach registered SQLite
+            annotations after the data reader is configured.
+        :type auto_load_annotations: bool
         :param kwargs: Arbitrary configuration parameters validated and passed to the constructor factory.
         :return: Fully resolved and validated data reader component instance.
         :rtype: Any
         """
         # Strategy routing block
         ## Forward execution properties directly to the unified driver registration manager
-        return self._set_component(
+        reader = self._set_component(
             component_type="reader",
             target=reader_name_or_instance,
             img_name_or_path=img_name_or_path,
             **kwargs
+        )
+        if auto_load_annotations:
+            self._load_registered_annotations(
+                img_name_or_path=img_name_or_path,
+                catalog_path=annotation_catalog_path,
+                image_path=getattr(reader, "file_path", None),
+            )
+        return reader
+
+    def _load_registered_annotations(
+        self,
+        *,
+        img_name_or_path: Optional[str],
+        catalog_path: Optional[str],
+        image_path: Optional[Path],
+    ) -> Optional[MSIBaseAnnotationReader]:
+        """Attach SQLite annotations registered for the selected image.
+
+        :param img_name_or_path: Image identifier or explicit imzML path.
+        :type img_name_or_path: str | None
+        :param catalog_path: Explicit SQLite path. When omitted, use the single
+            catalog in the workspace datasets directory.
+        :type catalog_path: str | None
+        :param image_path: Resolved path exposed by the configured data reader.
+        :type image_path: pathlib.Path | None
+        :return: Attached annotation reader, or ``None`` for an unregistered
+            image or a workspace without a catalog.
+        :rtype: MSIBaseAnnotationReader | None
+        """
+        from ....dataset_management.catalog import DatasetCatalog
+
+        workspace = self._wrapper.workspace
+        resolved_catalog_path = (
+            Path(catalog_path).expanduser().resolve()
+            if catalog_path is not None
+            else workspace.get_datasets_dir() / "catalog.sqlite"
+        )
+        if not resolved_catalog_path.is_file():
+            logger.debug(
+                "No annotation catalog found for image '%s' at %s",
+                img_name_or_path,
+                resolved_catalog_path,
+            )
+            return None
+
+        if image_path is None:
+            return None
+        resolved_image_path = Path(image_path).expanduser().resolve()
+        identity = DatasetCatalog(resolved_catalog_path).resolve_dataset_path(
+            resolved_image_path
+        )
+        if identity is None:
+            logger.debug(
+                "Image %s is not registered in the annotation catalog",
+                resolved_image_path,
+            )
+            return None
+
+        reader_options: Dict[str, Any] = {"catalog_path": str(resolved_catalog_path)}
+        if identity["kind"] == "merged":
+            reader_options["merged_dataset_id"] = identity["merged_dataset_id"]
+        else:
+            reader_options["source"] = identity["source"]
+            reader_options["dataset_id"] = identity["dataset_id"]
+        return self._set_component(
+            component_type="annotation_reader",
+            target="SQLiteAnnotationReader",
+            img_name_or_path=str(resolved_image_path),
+            **reader_options,
         )
 
     def set_annotation_reader(

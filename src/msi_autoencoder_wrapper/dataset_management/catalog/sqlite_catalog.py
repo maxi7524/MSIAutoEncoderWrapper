@@ -133,6 +133,46 @@ class DatasetCatalog:
             rows = connection.execute(query, parameters).fetchall()
         return [_decode_dataset_row(row) for row in rows]
 
+    def resolve_dataset_path(self, path: Path | str) -> Optional[Dict[str, Any]]:
+        """Resolve a local imzML path to a source or merged dataset record.
+
+        :param path: Local imzML path currently opened by a data reader.
+        :type path: pathlib.Path | str
+        :return: Dataset identity with ``kind`` set to ``source`` or ``merged``,
+            or ``None`` when the path is not registered.
+        :rtype: Dict[str, Any] | None
+
+        Path resolution does not require the registered source files to remain
+        present. Metadata and annotations are stored in SQLite during import.
+        """
+        candidate = Path(path).expanduser().resolve()
+        with self.connection() as connection:
+            merged_rows = connection.execute(
+                "SELECT merged_dataset_id, path FROM merged_datasets"
+            ).fetchall()
+            for row in merged_rows:
+                if Path(row["path"]).expanduser().resolve() == candidate:
+                    return {
+                        "kind": "merged",
+                        "merged_dataset_id": str(row["merged_dataset_id"]),
+                    }
+
+            source_rows = connection.execute(
+                """
+                SELECT source, dataset_id, local_path
+                FROM datasets WHERE local_path IS NOT NULL
+                """
+            ).fetchall()
+            for row in source_rows:
+                local_path = Path(row["local_path"]).expanduser().resolve()
+                if local_path == candidate or local_path == candidate.parent:
+                    return {
+                        "kind": "source",
+                        "source": str(row["source"]),
+                        "dataset_id": str(row["dataset_id"]),
+                    }
+        return None
+
     def replace_annotations(
         self,
         *,
