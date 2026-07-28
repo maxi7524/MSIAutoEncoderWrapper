@@ -164,8 +164,9 @@ class AutoencoderContextInterface:
 
         logger.info("Initiating sequential image feature mapping over active data stream channels.")
         with torch.no_grad():
-            for _, batch_tensor in data_loader:
-                embeddings_bucket.append(self.encode(batch_tensor))
+            # REMARK: We take batch and always second index ([1]) - it solves problem with possible third value
+            for batch in data_loader:
+                embeddings_bucket.append(self.encode(batch[1]))
 
         logger.info("Sequential structural image data translation complete.")
         return np.concatenate(embeddings_bucket, axis=0)
