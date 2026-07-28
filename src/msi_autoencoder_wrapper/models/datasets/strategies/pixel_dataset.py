@@ -137,6 +137,7 @@ class PixelDataset(MSIBaseDataset):
                 context_name="PixelDataset",
                 message=f"Binned spectrum {idx} contains non-finite values.",
             )
+        ## It returns (spectrum_id, spectrum, targets) if targets else (spectrum_id, spectrum,) 
         return self._sample(idx, torch.from_numpy(self._normalize(mapped_values)))
 
     def get_class_mappings(self) -> Dict[str, Dict[str, int]]:
