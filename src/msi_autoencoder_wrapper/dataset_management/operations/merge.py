@@ -13,6 +13,7 @@ from ...readers.strategies.pyimzml_reader import PyImzMLReader
 from ...utils.exceptions import raise_validation_error, raise_workspace_error
 from ...utils.logger import get_custom_logger
 from ..catalog.sqlite_catalog import DatasetCatalog
+from .spectrum_selection import select_merge_spectrum_ids
 
 
 logger = get_custom_logger(__name__)
@@ -28,8 +29,8 @@ class ImzMLMergeInput:
     :type dataset_id: str
     :param imzml_path: Local source imzML path.
     :type imzml_path: pathlib.Path
-    :param spectrum_ids: Optional source spectrum indices to retain. ``None``
-        retains every spectrum.
+    :param spectrum_ids: Optional explicit source spectrum indices to retain.
+        ``None`` applies annotation-aware selection.
     :type spectrum_ids: Sequence[int] | None
     """
 
@@ -52,6 +53,9 @@ class ImzMLMerger:
         output_path: Path | str,
         merged_dataset_id: str,
         row_width: Optional[int] = None,
+        unannotated_ratio: Optional[float] = None,
+        unannotated_amount: Optional[int] = None,
+        random_seed: int = 0,
     ) -> Path:
         """Write selected spectra sequentially and register index mappings.
 
@@ -64,6 +68,13 @@ class ImzMLMerger:
         :param row_width: Optional output image width. The default is the
             smallest near-square width that contains all spectra.
         :type row_width: int | None
+        :param unannotated_ratio: Optional number of unannotated spectra per
+            annotated spectrum.
+        :type unannotated_ratio: float | None
+        :param unannotated_amount: Optional absolute unannotated spectrum count.
+        :type unannotated_amount: int | None
+        :param random_seed: Reproducible unannotated sampling seed.
+        :type random_seed: int
         :return: Written imzML path.
         :rtype: pathlib.Path
         :raises ValidationError: If inputs or selected indices are invalid.
@@ -79,7 +90,12 @@ class ImzMLMerger:
             )
         output.parent.mkdir(parents=True, exist_ok=True)
 
-        prepared = self._prepare_inputs(inputs)
+        prepared = self._prepare_inputs(
+            inputs,
+            unannotated_ratio=unannotated_ratio,
+            unannotated_amount=unannotated_amount,
+            random_seed=random_seed,
+        )
         spectrum_count = sum(len(spectrum_ids) for _, spectrum_ids in prepared)
         if spectrum_count == 0:
             raise_validation_error("ImzMLMerge", "The selected inputs contain no spectra.")
@@ -140,9 +156,13 @@ class ImzMLMerger:
         )
         return output
 
-    @staticmethod
     def _prepare_inputs(
+        self,
         inputs: Sequence[ImzMLMergeInput],
+        *,
+        unannotated_ratio: Optional[float],
+        unannotated_amount: Optional[int],
+        random_seed: int,
     ) -> List[tuple[PyImzMLReader, List[int]]]:
         prepared: List[tuple[PyImzMLReader, List[int]]] = []
         for merge_input in inputs:
@@ -153,16 +173,32 @@ class ImzMLMerger:
                 )
             reader = PyImzMLReader(merge_input.imzml_path)
             count = reader.GetNumberOfSpectra()
-            spectrum_ids = (
+            explicit_selection = merge_input.spectrum_ids is not None
+            candidate_ids = (
                 list(range(count))
-                if merge_input.spectrum_ids is None
-                else [int(value) for value in merge_input.spectrum_ids]
+                if not explicit_selection
+                else [int(value) for value in merge_input.spectrum_ids or ()]
             )
-            invalid = [value for value in spectrum_ids if value < 0 or value >= count]
+            invalid = [value for value in candidate_ids if value < 0 or value >= count]
             if invalid:
                 raise_validation_error(
                     "ImzMLMerge",
                     f"Dataset '{merge_input.dataset_id}' has invalid spectrum IDs: {invalid}",
                 )
+            spectrum_ids = (
+                candidate_ids
+                if explicit_selection
+                else select_merge_spectrum_ids(
+                    candidate_ids=candidate_ids,
+                    annotated_ids=self.catalog.get_annotated_spectrum_ids(
+                        source=merge_input.source,
+                        dataset_id=merge_input.dataset_id,
+                    ),
+                    unannotated_ratio=unannotated_ratio,
+                    unannotated_amount=unannotated_amount,
+                    random_seed=random_seed,
+                    seed_namespace=f"{merge_input.source}:{merge_input.dataset_id}",
+                )
+            )
             prepared.append((reader, spectrum_ids))
         return prepared

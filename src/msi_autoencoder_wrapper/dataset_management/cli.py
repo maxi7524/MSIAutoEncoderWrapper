@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     download_merge.add_argument("--annotation-options", type=Path)
     download_merge.add_argument("--dataset-id", action="append", dest="dataset_ids")
     download_merge.add_argument("--keep-downloads", action="store_true")
+    _add_unannotated_sampling_arguments(download_merge)
 
     merge = commands.add_parser("merge", help="Merge local imzML inputs")
     _add_workspace_argument(merge)
@@ -136,6 +137,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             ),
             dataset_ids=arguments.dataset_ids,
             keep_downloads=arguments.keep_downloads,
+            unannotated_ratio=arguments.unannotated_ratio,
+            unannotated_amount=arguments.unannotated_amount,
+            random_seed=arguments.random_seed,
         )
         return
     materialize_selection(
@@ -169,6 +173,9 @@ def _run_merge(config_path: Path, catalog: DatasetCatalog) -> None:
         output_path=_resolve_config_path(config["output_path"], config_directory),
         merged_dataset_id=str(config["merged_dataset_id"]),
         row_width=config.get("row_width"),
+        unannotated_ratio=config.get("unannotated_ratio"),
+        unannotated_amount=config.get("unannotated_amount"),
+        random_seed=int(config.get("random_seed", 0)),
     )
 
 
@@ -185,6 +192,13 @@ def _add_workspace_argument(parser: argparse.ArgumentParser) -> None:
         default=Path("workspace"),
         help="Workspace path relative to the repository root (default: workspace)",
     )
+
+
+def _add_unannotated_sampling_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional merge sampling controls to a CLI parser."""
+    parser.add_argument("--unannotated-ratio", type=float)
+    parser.add_argument("--unannotated-amount", type=int)
+    parser.add_argument("--random-seed", type=int, default=0)
 
 
 def _repository_root() -> Path:

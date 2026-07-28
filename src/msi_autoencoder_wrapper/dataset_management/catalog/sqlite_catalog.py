@@ -345,6 +345,33 @@ class DatasetCatalog:
             results.append(record)
         return results
 
+    def get_annotated_spectrum_ids(
+        self,
+        *,
+        source: str,
+        dataset_id: str,
+    ) -> List[int]:
+        """Return spectrum IDs linked to at least one molecular annotation.
+
+        :param source: External source identifier.
+        :type source: str
+        :param dataset_id: Stable source dataset identifier.
+        :type dataset_id: str
+        :return: Sorted, unique zero-based spectrum IDs.
+        :rtype: List[int]
+        """
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT spectrum_id
+                FROM spectrum_annotations
+                WHERE source = ? AND dataset_id = ?
+                ORDER BY spectrum_id
+                """,
+                (source, dataset_id),
+            ).fetchall()
+        return [int(row["spectrum_id"]) for row in rows]
+
     def register_merged_dataset(self, merged_dataset_id: str, path: Path | str) -> None:
         """Register an imzML dataset produced by a merge operation."""
         with self.connection() as connection:

@@ -16,6 +16,7 @@ from ..catalog.sqlite_catalog import DatasetCatalog
 from ..normalization import normalize_spectrum_annotations
 from ..sources.base import DatasetSource
 from ..validators import validate_imzml_pair, validate_selection
+from .spectrum_selection import select_merge_spectrum_ids
 
 
 logger = get_custom_logger(__name__)
@@ -102,6 +103,9 @@ def materialize_and_merge_selection(
     annotation_options: Optional[Mapping[str, Any]] = None,
     dataset_ids: Optional[Sequence[str]] = None,
     keep_downloads: bool = False,
+    unannotated_ratio: Optional[float] = None,
+    unannotated_amount: Optional[int] = None,
+    random_seed: int = 0,
 ) -> Path:
     """Download, append, and release one dataset at a time.
 
@@ -126,6 +130,12 @@ def materialize_and_merge_selection(
     :param keep_downloads: Retain source pairs after they are appended. Defaults
         to ``False`` for bounded temporary disk usage.
     :type keep_downloads: bool
+    :param unannotated_ratio: Optional unannotated-to-annotated spectrum ratio.
+    :type unannotated_ratio: float | None
+    :param unannotated_amount: Optional absolute unannotated spectrum count.
+    :type unannotated_amount: int | None
+    :param random_seed: Reproducible unannotated sampling seed.
+    :type random_seed: int
     :return: Written merged imzML path.
     :rtype: pathlib.Path
 
@@ -199,7 +209,17 @@ def materialize_and_merge_selection(
                 )
                 selected_spectrum_ids = record.get("spectrum_ids")
                 spectrum_ids = (
-                    list(range(reader.GetNumberOfSpectra()))
+                    select_merge_spectrum_ids(
+                        candidate_ids=list(range(reader.GetNumberOfSpectra())),
+                        annotated_ids=catalog.get_annotated_spectrum_ids(
+                            source=source.source_name,
+                            dataset_id=dataset_id,
+                        ),
+                        unannotated_ratio=unannotated_ratio,
+                        unannotated_amount=unannotated_amount,
+                        random_seed=random_seed,
+                        seed_namespace=f"{source.source_name}:{dataset_id}",
+                    )
                     if selected_spectrum_ids is None
                     else [int(value) for value in selected_spectrum_ids]
                 )
