@@ -1,4 +1,4 @@
-"""Binary cross-entropy objective for multi-label molecular heads."""
+"""Masked cross-entropy objective for named single-label heads."""
 
 from __future__ import annotations
 
@@ -11,17 +11,9 @@ from ...autoencoder_base_criterions import MSIHeadCriterion
 from ...criterions_manager import CriterionsManager
 
 
-@CriterionsManager.register_criterion("autoencoder", "head", "MultiLabelBCELoss")
-class MSIMultiLabelBCELoss(MSIHeadCriterion):
-    """Compare molecular logits with a multi-hot dataset target.
-
-    :param head_id: Model head identifier used in the output mapping.
-    :type head_id: str
-    :param target_field: Dataset target dictionary key.
-    :type target_field: str
-    :param reduction: PyTorch BCE reduction mode.
-    :type reduction: str
-    """
+@CriterionsManager.register_criterion("autoencoder", "head", "MaskedCrossEntropyLoss")
+class MSIMaskedCrossEntropyLoss(MSIHeadCriterion):
+    """Evaluate a named head only where its dataset target is available."""
 
     def __init__(
         self,
@@ -30,7 +22,7 @@ class MSIMultiLabelBCELoss(MSIHeadCriterion):
         reduction: str = "mean",
     ) -> None:
         super().__init__(head_id=head_id, target_field=target_field)
-        self.loss_fn = nn.BCEWithLogitsLoss(reduction=reduction)
+        self.loss_fn = nn.CrossEntropyLoss(reduction=reduction)
         self._config = {
             "head_id": head_id,
             "target_field": target_field,
@@ -43,9 +35,9 @@ class MSIMultiLabelBCELoss(MSIHeadCriterion):
         batch_data: Tuple[torch.Tensor, ...],
         **kwargs: Any,
     ) -> torch.Tensor:
-        """Return BCE loss for the configured head and target field."""
+        """Return masked cross-entropy for the configured head."""
         del kwargs
         logits, targets, mask = self.head_batch(model_outputs, batch_data)
         if not bool(mask.any()):
             return logits.sum() * 0.0
-        return self.loss_fn(logits[mask], targets[mask].to(dtype=logits.dtype))
+        return self.loss_fn(logits[mask], targets[mask].long())

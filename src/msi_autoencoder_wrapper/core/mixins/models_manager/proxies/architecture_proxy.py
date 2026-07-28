@@ -244,6 +244,57 @@ class ArchitectureProxy(BaseModelsManagerProxy):
         }
         logger.debug("Buffered component strategy allocation: category='%s', strategy='%s'", category, name)
 
+    def set_head(
+        self,
+        head_id: str,
+        target_field: str,
+        strategy: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Configure one named latent head and its dataset target binding.
+
+        Multiple heads may bind to the same target field. Calling this method
+        again with the same identifier replaces only that head definition.
+
+        :param head_id: Unique model-local identifier without dots.
+        :type head_id: str
+        :param target_field: Dataset target dictionary key consumed by losses.
+        :type target_field: str
+        :param strategy: Registered head name, implementation type, or instance.
+        :type strategy: Any
+        :param kwargs: Constructor parameters forwarded to the head strategy.
+        :type kwargs: Any
+        :raises ValidationError: If identifiers or the strategy are invalid.
+        """
+        if not head_id or "." in head_id:
+            raise_validation_error(
+                "ModelsManager", "head_id must be non-empty and cannot contain '.'."
+            )
+        if not target_field:
+            raise_validation_error("ModelsManager", "target_field cannot be empty.")
+        if not self.active_model_type:
+            raise_validation_error("ModelsManager", "Set the active model type first.")
+        registry = ArchitecturesManager._COMPONENT_REGISTRY.get(
+            self.active_model_type, {}
+        ).get("head", {})
+        validate_component_target(
+            target=strategy,
+            registry=registry,
+            component_type=f"{self.active_model_type}.head",
+            expected_type=nn.Module,
+        )
+        self._building_buffer.setdefault("heads", {})[head_id] = {
+            "target_field": target_field,
+            "target": strategy,
+            "strategy": (
+                strategy
+                if isinstance(strategy, str)
+                else getattr(strategy, "__name__", type(strategy).__name__)
+            ),
+            "kwargs": kwargs,
+        }
+        logger.info("Configured head '%s' for target '%s'.", head_id, target_field)
+
     def set_model_preset(self, name: str, **kwargs: Any) -> None:
         """
         Dynamically configures individual subcomponent parameters inside the model buffer using a preset.
@@ -360,12 +411,25 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                 model_kwargs.update(self._building_buffer["model"].get("kwargs", {}))
             
             ### Extract structural components using correct dictionary interface mapping kwargs -> params
-            for key in ["encoder", "decoder", "head", "projector"]:
+            for key in ["encoder", "decoder", "projector"]:
                 if key in self._building_buffer:
                     components_setup[key] = {
                         "target": self._building_buffer[key].get("target", self._building_buffer[key].get("strategy")),
                         "params": self._building_buffer[key].get("kwargs", {})
                     }
+            head_specs = self._building_buffer.get("heads", {})
+            if head_specs:
+                components_setup["heads"] = {
+                    head_id: {
+                        "target": spec["target"],
+                        "params": spec.get("kwargs", {}),
+                    }
+                    for head_id, spec in head_specs.items()
+                }
+                model_kwargs["head_specs"] = {
+                    head_id: {"target_field": spec["target_field"]}
+                    for head_id, spec in head_specs.items()
+                }
 
             ## Instantiate network through classmethod builder orchestration pass
             compiled_network = ArchitecturesManager.build_model(
@@ -428,7 +492,40 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                             mock_batch = sample_tensor
 
                         ### Execute forward propagation execution pass
-                        _ = compiled_network(mock_batch)
+                        mock_outputs = compiled_network(mock_batch)
+
+                        ### Validate named heads against dataset target mappings
+                        head_specs = getattr(compiled_network, "head_specs", {})
+                        if head_specs:
+                            target_specs = getattr(compiled_dataset, "target_specs", {})
+                            class_mappings = compiled_dataset.get_class_mappings()
+                            for head_id, head_spec in head_specs.items():
+                                target_field = head_spec["target_field"]
+                                if target_field not in target_specs:
+                                    raise_validation_error(
+                                        "ModelHead",
+                                        (
+                                            f"Head '{head_id}' targets unknown dataset field "
+                                            f"'{target_field}'."
+                                        ),
+                                    )
+                                output_key = f"head_{head_id}"
+                                logits = mock_outputs.get(output_key)
+                                if logits is None:
+                                    raise_validation_error(
+                                        "ModelHead",
+                                        f"Head '{head_id}' did not produce '{output_key}'.",
+                                    )
+                                expected_classes = len(class_mappings[target_field])
+                                if logits.shape[-1] != expected_classes:
+                                    raise_validation_error(
+                                        "ModelHead",
+                                        (
+                                            f"Head '{head_id}' produces {logits.shape[-1]} "
+                                            f"classes, but target '{target_field}' has "
+                                            f"{expected_classes}."
+                                        ),
+                                    )
                 except Exception as error:
                     logger.error("Forward execution simulation rejected: Underlying components dimensions mismatch.", exc_info=True)
                     raise_model_initialization_error(

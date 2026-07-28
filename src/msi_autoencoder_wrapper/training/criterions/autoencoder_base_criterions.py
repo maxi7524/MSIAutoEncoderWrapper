@@ -52,21 +52,59 @@ class MSIHeadCriterion(MSIBaseCriterion, ABC):
 
     criterion_type = "head"
 
-    def __init__(self, head_name: str) -> None:
-        """Initialize the output key used by a downstream objective.
+    def __init__(self, head_id: str, target_field: str) -> None:
+        """Initialize the named head output and dataset target binding.
 
-        :param head_name: Name used by the model's ``head_<name>`` output.
-        :type head_name: str
+        :param head_id: Identifier used by the model's ``head_<id>`` output.
+        :type head_id: str
+        :param target_field: Dataset target and mask dictionary key.
+        :type target_field: str
         """
         super().__init__()
-        self.head_name = head_name
+        self.head_id = head_id
+        self.target_field = target_field
 
     @property
     def output_key(self) -> str:
         """Return the standardized model-output key for this head."""
-        return f"head_{self.head_name}"
+        return f"head_{self.head_id}"
 
+    def head_batch(
+        self,
+        model_outputs: Dict[str, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return logits, targets, and availability mask for this head.
 
+        :param model_outputs: Output mapping returned by the model.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Dataset batch containing target and mask mappings.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Logits, target tensor, and Boolean availability mask.
+        :rtype: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        :raises IncompatibleInterfaceError: If the configured output or target
+            binding is absent from the model and dataset interfaces.
+        """
+        if self.output_key not in model_outputs:
+            raise_incompatible_interface_error(
+                "HeadCriterion", f"Missing model output '{self.output_key}'."
+            )
+        if len(batch_data) < 4:
+            raise_incompatible_interface_error(
+                "HeadCriterion", "Head training requires target and mask dictionaries."
+            )
+        targets = batch_data[2]
+        masks = batch_data[3]
+        if self.target_field not in targets or self.target_field not in masks:
+            raise_incompatible_interface_error(
+                "HeadCriterion", f"Missing dataset target '{self.target_field}'."
+            )
+        logits = model_outputs[self.output_key]
+        return (
+            logits,
+            targets[self.target_field].to(logits.device),
+            masks[self.target_field].to(logits.device, dtype=torch.bool),
+        )
     @abstractmethod
     def forward(
         self,

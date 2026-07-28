@@ -66,10 +66,13 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
     dataset = PixelDataset(
         active_context=Context(),
         normalization="none",
-        target_fields=["condition", "molecule"],
+        target_specs={
+            "condition": {"type": "single_label"},
+            "molecule": {"type": "multi_label"},
+        },
     )
 
-    spectrum_id, spectrum, targets = dataset[0]
+    spectrum_id, spectrum, targets, masks = dataset[0]
 
     assert spectrum_id == 0
     assert torch.equal(spectrum, torch.tensor([2.0]))
@@ -79,3 +82,49 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
     }
     assert targets["condition"].item() == 0
     assert torch.equal(targets["molecule"], torch.tensor([0.0, 1.0]))
+    assert masks["condition"].item()
+    assert masks["molecule"].item()
+
+
+def test_pixel_dataset_masks_missing_metadata_targets() -> None:
+    """Missing metadata remains distinguishable from an explicit class zero."""
+    class AnnotationReader:
+        def get_dataset_metadata(self):
+            return {"metadata": {}}
+
+        def get_spectrum_metadata(self, spectrum_id):
+            return {"metadata": {}}
+
+        def get_annotations(self):
+            return []
+
+    class Context:
+        annotation_reader = AnnotationReader()
+
+    dataset = PixelDataset(
+        active_context=Context(),
+        target_specs={
+            "condition": {
+                "type": "single_label",
+                "class_mapping": {"healthy": 0, "disease": 1},
+            }
+        },
+    )
+
+    _, _, targets, masks = dataset._sample(0, torch.ones(3))
+
+    assert targets["condition"].item() == 0
+    assert not masks["condition"].item()
+
+
+def test_pixel_dataset_rejects_sparse_explicit_class_indices() -> None:
+    """Explicit mappings remain safe for direct tensor indexing."""
+    with pytest.raises(ValidationError, match="contiguous from zero"):
+        PixelDataset(
+            target_specs={
+                "condition": {
+                    "type": "single_label",
+                    "class_mapping": {"healthy": 0, "disease": 2},
+                }
+            }
+        )
