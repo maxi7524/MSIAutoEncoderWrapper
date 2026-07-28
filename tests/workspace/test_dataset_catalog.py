@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
-from msi_autoencoder_wrapper.workspace.dataset_catalog import DatasetCatalog
+from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
 
 
 def test_catalog_preserves_metadata_and_filters_annotations_at_read_time(

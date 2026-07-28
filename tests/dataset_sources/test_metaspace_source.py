@@ -7,10 +7,15 @@ from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pandas as pd
+import pytest
 
-from msi_autoencoder_wrapper.dataset_sources.strategies.metaspace_source import (
+from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace import (
     MetaspaceDatasetSource,
     _records_from_table,
+)
+from msi_autoencoder_wrapper.utils.exceptions import (
+    DownloadLimitError,
+    ExternalServiceError,
 )
 
 
@@ -88,3 +93,39 @@ def test_metaspace_dataframe_index_is_preserved_as_molecule_identity() -> None:
     assert _records_from_table(table) == [
         {"formula": "C6H12O6", "adduct": "+H", "fdr": 0.1, "intensity": 2.0}
     ]
+
+
+def test_download_reports_metaspace_access_message(tmp_path: Path) -> None:
+    """Missing signed links produce the actionable METASPACE response."""
+    class RestrictedDataset(FakeMetaspaceDataset):
+        def download_links(self) -> Dict[str, Any]:
+            return {"message": "Please Sign in to download."}
+
+    client = FakeMetaspaceClient()
+    client.value = RestrictedDataset()
+    source = MetaspaceDatasetSource(client=client)
+
+    with pytest.raises(ExternalServiceError, match="Please Sign in to download"):
+        source.download_dataset("dataset-a", tmp_path / "dataset-a")
+
+
+def test_download_limit_sentinel_has_a_dedicated_error(tmp_path: Path) -> None:
+    """METASPACE quota responses are detected before transfer threads start."""
+    class LimitedDataset(FakeMetaspaceDataset):
+        def download_links(self) -> Dict[str, Any]:
+            return {
+                "files": [
+                    {
+                        "filename": "Download_Limit_Reached.txt",
+                        "link": "https://example.invalid/quota-message",
+                    }
+                ]
+            }
+
+    client = FakeMetaspaceClient()
+    client.value = LimitedDataset()
+    source = MetaspaceDatasetSource(client=client)
+
+    with pytest.raises(DownloadLimitError, match="quota has been reached"):
+        source.download_dataset("dataset-a", tmp_path / "dataset-a")
+    assert list((tmp_path / "dataset-a").iterdir()) == []

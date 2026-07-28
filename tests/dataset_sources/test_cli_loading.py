@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from msi_autoencoder_wrapper.dataset_sources.cli import (
+from msi_autoencoder_wrapper.dataset_management.cli import (
     _repository_root,
     _resolve_cli_path,
     _resolve_config_path,
@@ -28,7 +28,7 @@ def test_dataset_cli_help_does_not_import_models_or_training() -> None:
     """Dataset management starts without importing model and training trees."""
     code = """
 import sys
-from msi_autoencoder_wrapper.dataset_sources.cli import build_parser
+from msi_autoencoder_wrapper.dataset_management.cli import build_parser
 build_parser().format_help()
 assert not any(name.startswith('msi_autoencoder_wrapper.models') for name in sys.modules)
 assert not any(name.startswith('msi_autoencoder_wrapper.training') for name in sys.modules)

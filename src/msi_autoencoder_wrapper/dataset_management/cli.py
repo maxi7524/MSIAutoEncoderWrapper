@@ -7,14 +7,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
-from ..datasets.imzml_merger import ImzMLMergeInput, ImzMLMerger
-from ..workspace.dataset_catalog import DatasetCatalog
-from .pipeline import (
+from .catalog.sqlite_catalog import DatasetCatalog
+from .operations import ImzMLMergeInput, ImzMLMerger, import_local_dataset
+from .operations.download import (
     materialize_and_merge_selection,
     materialize_selection,
-    query_to_selection,
 )
-from .source_manager import DatasetSourceManager
+from .operations.query import query_to_selection
+from .sources.source_manager import DatasetSourceManager
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     merge = commands.add_parser("merge", help="Merge local imzML inputs")
     _add_workspace_argument(merge)
     merge.add_argument("--config", type=Path, required=True)
+
+    local_import = commands.add_parser(
+        "import-local", help="Import an already downloaded imzML pair and CSV annotations"
+    )
+    _add_workspace_argument(local_import)
+    local_import.add_argument("--config", type=Path, required=True)
     return parser
 
 
@@ -71,6 +77,28 @@ def main(argv: Sequence[str] | None = None) -> None:
         config_path = _resolve_cli_path(arguments.config, repository_root)
         print(f"Merge configuration: {config_path}")
         _run_merge(config_path, catalog)
+        return
+    if arguments.command == "import-local":
+        config_path = _resolve_cli_path(arguments.config, repository_root)
+        config = _read_json(config_path)
+        result = import_local_dataset(
+            catalog=catalog,
+            source=str(config["source"]),
+            dataset_id=str(config["dataset_id"]),
+            name=str(config.get("name", config["dataset_id"])),
+            imzml_path=_resolve_config_path(config["imzml_path"], config_path.parent),
+            annotations_path=_resolve_config_path(
+                config["annotations_path"], config_path.parent
+            ),
+            pixel_intensities_path=_resolve_config_path(
+                config["pixel_intensities_path"], config_path.parent
+            ),
+            metadata=config.get("metadata", {}),
+        )
+        print(
+            "Imported {spectra} spectra, {annotations} annotations, and "
+            "{spatial_links} spatial links.".format(**result)
+        )
         return
 
     DatasetSourceManager.discover_strategies()

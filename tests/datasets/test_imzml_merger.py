@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from msi_autoencoder_wrapper.datasets.imzml_merger import ImzMLMergeInput, ImzMLMerger
+from msi_autoencoder_wrapper.dataset_management.operations import ImzMLMergeInput, ImzMLMerger
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
-from msi_autoencoder_wrapper.workspace.dataset_catalog import DatasetCatalog
+from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
 
 
 def test_merger_writes_rectangular_coordinates_and_index_mapping(

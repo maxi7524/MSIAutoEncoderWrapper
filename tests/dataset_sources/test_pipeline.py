@@ -6,14 +6,14 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from msi_autoencoder_wrapper.dataset_sources.base_source import DatasetSource
-from msi_autoencoder_wrapper.dataset_sources.pipeline import (
+from msi_autoencoder_wrapper.dataset_management.sources.base import DatasetSource
+from msi_autoencoder_wrapper.dataset_management.operations import (
     materialize_and_merge_selection,
     materialize_selection,
     query_to_selection,
 )
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
-from msi_autoencoder_wrapper.workspace.dataset_catalog import DatasetCatalog
+from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
 
 
 class FakeDatasetSource(DatasetSource):

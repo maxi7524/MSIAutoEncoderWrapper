@@ -9,10 +9,10 @@ from typing import Dict, List, Optional, Sequence
 
 from pyimzml.ImzMLWriter import ImzMLWriter
 
-from ..readers.strategies.pyimzml_reader import PyImzMLReader
-from ..utils.exceptions import raise_validation_error, raise_workspace_error
-from ..utils.logger import get_custom_logger
-from ..workspace.dataset_catalog import DatasetCatalog
+from ...readers.strategies.pyimzml_reader import PyImzMLReader
+from ...utils.exceptions import raise_validation_error, raise_workspace_error
+from ...utils.logger import get_custom_logger
+from ..catalog.sqlite_catalog import DatasetCatalog
 
 
 logger = get_custom_logger(__name__)

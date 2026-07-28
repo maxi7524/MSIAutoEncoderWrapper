@@ -1,4 +1,4 @@
-"""SQLite catalog for external MSI datasets, annotations, and merge provenance."""
+"""SQLite catalog for managed MSI datasets, annotations, and merge provenance."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
-from ..utils.logger import get_custom_logger
+from ...utils.logger import get_custom_logger
 
 
 logger = get_custom_logger(__name__)

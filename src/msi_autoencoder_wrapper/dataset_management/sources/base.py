@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from ..utils.configuration import ConfigurableComponent
+from ...utils.configuration import ConfigurableComponent
 
 
 class DatasetSource(ConfigurableComponent, ABC):

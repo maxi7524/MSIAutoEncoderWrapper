@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Type
 
-from ..utils.module_search import discover_modules
-from ..utils.validators import resolve_component, validate_subclass
-from .base_source import DatasetSource
+from ...utils.module_search import discover_modules
+from ...utils.validators import resolve_component, validate_subclass
+from .base import DatasetSource
 
 
 class DatasetSourceManager:

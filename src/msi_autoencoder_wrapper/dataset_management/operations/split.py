@@ -6,7 +6,7 @@ import random
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
-from ..utils.exceptions import raise_validation_error
+from ...utils.exceptions import raise_validation_error
 
 
 def grouped_dataset_split(

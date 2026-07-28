@@ -28,6 +28,18 @@ class ProjectConfigError(MSILibException):
     pass
 
 
+class ExternalServiceError(MSILibException):
+    """Raised when an external service rejects or cannot complete an operation."""
+
+    pass
+
+
+class DownloadLimitError(ExternalServiceError):
+    """Raised when an external service reports an exhausted download quota."""
+
+    pass
+
+
 class ModelNotInitializedError(MSILibException):
     """
     Raised when executing operations on a model that has not been initialized or built.
@@ -76,6 +88,34 @@ def raise_project_config_error(context_name: str, message: str) -> NoReturn:
     formatted_msg = f"[{context_name.upper()} CONFIG ERROR] - {message}"
     logger.error("Project configuration invalid for %s: %s", context_name, message)
     raise ProjectConfigError(formatted_msg)
+
+
+def raise_external_service_error(context_name: str, message: str) -> NoReturn:
+    """Raise a contextualized external-service failure.
+
+    :param context_name: External service or operation name.
+    :type context_name: str
+    :param message: Actionable failure description.
+    :type message: str
+    :raises ExternalServiceError: Always.
+    """
+    formatted_msg = f"[{context_name.upper()} SERVICE ERROR] - {message}"
+    logger.error("External service failure for %s: %s", context_name, message)
+    raise ExternalServiceError(formatted_msg)
+
+
+def raise_download_limit_error(context_name: str, message: str) -> NoReturn:
+    """Raise a contextualized external download-quota failure.
+
+    :param context_name: External service name.
+    :type context_name: str
+    :param message: Actionable quota description.
+    :type message: str
+    :raises DownloadLimitError: Always.
+    """
+    formatted_msg = f"[{context_name.upper()} DOWNLOAD LIMIT] - {message}"
+    logger.error("Download limit reached for %s: %s", context_name, message)
+    raise DownloadLimitError(formatted_msg)
 
 
 def raise_incompatible_interface_error(context_name: str, message: str) -> NoReturn:
@@ -144,4 +184,3 @@ def raise_model_initialization_error(model_name: str, message: str) -> NoReturn:
     logger.error("Model initialisation aborted for %s: %s", model_name, message)
     
     raise ModelNotInitializedError(formatted_msg)
-
