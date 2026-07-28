@@ -17,6 +17,7 @@ dependencies = [
     "numpy",
     "pandas",
     "polars",
+    "pridepy==0.0.16",
     "pyimzml",
     "requests",
     "scikit-learn",
