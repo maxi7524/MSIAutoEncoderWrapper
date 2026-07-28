@@ -2,6 +2,9 @@
   "merged_dataset_id": "metaspace-pilot",
   "output_path": "../../../workspace/datasets/merged/metaspace-pilot/dataset.imzML",
   "row_width": 128,
+  "unannotated_ratio": null,
+  "unannotated_amount": null,
+  "random_seed": 0,
   "inputs": [
     {
       "source": "metaspace",
