@@ -72,6 +72,29 @@ annotation database.
 
 ## Usage
 
+### Notebook exploration
+
+``DatasetExplorer`` wraps any registered ``DatasetSource`` for metadata-only
+review in notebooks. It exposes provider filter help, returns accepted records
+as a pandas table, displays provider rejection diagnostics and project links,
+and supports manual dataset exclusions. ``export_config()`` writes the exact
+JSON mapping accepted by ``manage_datasets.py query --filters``; the selection
+created by that query is subsequently passed to ``download``.
+
+```python
+from msi_autoencoder_wrapper.dataset_management.exploration import DatasetExplorer
+
+explorer = DatasetExplorer("pride")
+explorer.set_filters({"keyword": "imzML bladder"})
+accepted = explorer.search()
+rejected = explorer.rejected()
+explorer.exclude("PXD000000__reviewed-image")
+explorer.export_config("assets/configs/datasets/pride_mouse_bladder.json")
+```
+
+The complete guided workflow is available in
+``assets/notebooks/tutorials/06_pride_dataset_explorer.ipynb``.
+
 ### CLI tutorial
 
 Run commands from any directory. Relative command-line paths are resolved
