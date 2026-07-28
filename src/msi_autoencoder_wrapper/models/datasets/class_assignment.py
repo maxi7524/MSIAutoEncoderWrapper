@@ -48,7 +48,9 @@ def metadata_values(metadata: Mapping[str, Any], field: str) -> Sequence[str]:
             continue
         source_metadata = record.get("metadata", record)
         value = source_metadata.get(field)
-        if value is not None:
+        if isinstance(value, (list, tuple, set)):
+            values.extend(str(item) for item in value if item is not None)
+        elif value is not None:
             values.append(str(value))
     return values
 

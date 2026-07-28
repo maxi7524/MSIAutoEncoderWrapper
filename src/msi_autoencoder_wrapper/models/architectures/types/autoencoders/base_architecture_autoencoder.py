@@ -40,12 +40,11 @@ class MSIBaseAutoencoderArchitecture(MSIBaseMasterArchitecture):
         
         ### Assign fallback empty structural container if multi-task heads are omitted from configuration blueprints
         heads_dict = resolved_components.get("heads", {})
-        if not heads_dict and resolved_components.get("head") is not None:
-            heads_dict = {"molecule": resolved_components["head"]}
         if isinstance(heads_dict, dict):
             self.heads = nn.ModuleDict(heads_dict)
         else:
             self.heads = nn.ModuleDict()
+        self.head_specs = dict(kwargs.get("head_specs", {}))
             
         logger.info("MSIBaseAutoencoderArchitecture master network graph successfully assembled.")
 

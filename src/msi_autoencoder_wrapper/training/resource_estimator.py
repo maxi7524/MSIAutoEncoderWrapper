@@ -343,7 +343,10 @@ class TrainingResourceEstimator:
         criterions = phase.get("criterions", {})
         entries = []
         for category_or_name, setup in criterions.items():
-            if category_or_name in {"reconstruction", "contrastive", "head"}:
+            if category_or_name == "heads":
+                for head_setup in setup.values():
+                    entries.extend(head_setup.items())
+            elif category_or_name in {"reconstruction", "contrastive", "head"}:
                 entries.extend(setup.items())
             else:
                 entries.append((category_or_name, setup))

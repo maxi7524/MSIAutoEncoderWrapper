@@ -167,7 +167,8 @@ class ArchitecturesManager:
                         continue
 
                     logger.info("Instantiating nested sub-module: Collection='%s', Key='%s' using Strategy='%s'.", category, sub_key, sub_strategy)
-                    component_registry = cls._COMPONENT_REGISTRY.get(model_type, {}).get(category, {})
+                    registry_category = "head" if category == "heads" else category
+                    component_registry = cls._COMPONENT_REGISTRY.get(model_type, {}).get(registry_category, {})
                     resolved_sub_collection[sub_key] = resolve_component(
                         target=sub_strategy,
                         registry=component_registry,
