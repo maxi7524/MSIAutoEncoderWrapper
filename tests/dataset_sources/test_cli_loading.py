@@ -7,10 +7,40 @@ import sys
 from pathlib import Path
 
 from msi_autoencoder_wrapper.dataset_management.cli import (
+    build_parser,
     _repository_root,
     _resolve_cli_path,
     _resolve_config_path,
 )
+
+
+def test_download_merge_accepts_annotation_aware_sampling_limits() -> None:
+    """CLI exposes reproducible unannotated spectrum sampling controls."""
+    arguments = build_parser().parse_args(
+        [
+            "download-merge",
+            "--source",
+            "metaspace",
+            "--selection",
+            "selection.json",
+            "--output",
+            "merged.imzML",
+            "--merged-dataset-id",
+            "merged",
+            "--row-width",
+            "10",
+            "--unannotated-ratio",
+            "3.0",
+            "--unannotated-amount",
+            "200",
+            "--random-seed",
+            "42",
+        ]
+    )
+
+    assert arguments.unannotated_ratio == 3.0
+    assert arguments.unannotated_amount == 200
+    assert arguments.random_seed == 42
 
 
 def test_cli_and_config_paths_have_distinct_stable_roots(tmp_path: Path) -> None:
