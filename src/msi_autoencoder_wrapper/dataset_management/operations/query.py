@@ -20,7 +20,15 @@ def query_to_selection(
     selection_path: Path | str,
 ) -> List[Dict[str, Any]]:
     """Query metadata, update SQLite, and write a reproducible selection."""
-    records = source.search_datasets(filters)
+    provider_filters = dict(filters)
+    excluded_ids = {
+        str(value) for value in provider_filters.pop("exclude_dataset_ids", ())
+    }
+    records = [
+        record
+        for record in source.search_datasets(provider_filters)
+        if str(record.get("dataset_id")) not in excluded_ids
+    ]
     selected: List[Dict[str, Any]] = []
     for record in records:
         validate_source_record(record)

@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from msi_autoencoder_wrapper.dataset_management.exploration import DatasetExplorer
 from msi_autoencoder_wrapper.dataset_management.sources.base import DatasetSource
+from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace import (
+    MetaspaceDatasetSource,
+)
 
 
 class FakeExplorationSource(DatasetSource):
@@ -84,7 +87,7 @@ def test_explorer_search_exclude_and_export_use_query_configuration(
     explorer.exclude("two")
     output = explorer.export_config(tmp_path / "filters.json")
 
-    assert source.seen_filters == filters
+    assert source.seen_filters == {"organisms": ["Mus musculus"]}
     assert results.loc[0, "organisms"] == "Mus musculus"
     assert results.loc[0, "organism_parts"] == "Urinary bladder"
     assert explorer.results()["dataset_id"].tolist() == ["one"]
@@ -103,3 +106,35 @@ def test_explorer_exposes_filter_help_and_rejection_links() -> None:
     assert explorer.available_filters() == {"organisms": {"type": "list"}}
     assert explorer.rejected().loc[0, "reason"] == "unsupported annotation format"
     assert explorer.rejected().loc[0, "project_url"].endswith("PXD000002")
+
+
+def test_explorer_supports_metaspace_filters_and_metadata() -> None:
+    """The same explorer reports and searches native METASPACE fields."""
+
+    class Dataset:
+        id = "metaspace-one"
+        name = "Mouse bladder"
+        metadata = {"organism": "Mus musculus", "tissue": "Urinary bladder"}
+        polarity = "Positive"
+        status = "FINISHED"
+        image_size = {"x": 2, "y": 2}
+        database_details: List[Any] = []
+
+    class Client:
+        def __init__(self) -> None:
+            self.filters: Dict[str, Any] = {}
+
+        def datasets(self, **filters: Any) -> List[Dataset]:
+            self.filters = filters
+            return [Dataset()]
+
+    client = Client()
+    explorer = DatasetExplorer(MetaspaceDatasetSource(client=client))
+
+    results = explorer.search({"organism": "Mus musculus", "polarity": "Positive"})
+
+    assert explorer.available_filters()["polarity"]["type"] == "Positive | Negative"
+    assert client.filters == {"organism": "Mus musculus", "polarity": "Positive"}
+    assert results.loc[0, "source"] == "metaspace"
+    assert results.loc[0, "organisms"] == "Mus musculus"
+    assert results.loc[0, "organism_parts"] == "Urinary bladder"

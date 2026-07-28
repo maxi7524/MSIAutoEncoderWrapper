@@ -23,9 +23,11 @@ class FakeDatasetSource(DatasetSource):
 
     def __init__(self, fixture_path: Path) -> None:
         self.fixture_path = fixture_path
+        self.seen_filters: Dict[str, Any] = {}
         self._config = {}
 
     def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+        self.seen_filters = dict(filters)
         return [{"dataset_id": "one", "name": "One", "metadata": dict(filters)}]
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
@@ -81,6 +83,25 @@ def test_discovery_and_download_are_separate_stages(
     assert materialized == [datasets_dir / "sources" / "fake" / "one"]
     assert (materialized[0] / "one.imzML").is_file()
     assert len(catalog.get_annotations(source="fake", dataset_id="one")) == 1
+
+
+def test_query_applies_generic_dataset_exclusions_outside_provider(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Local exclusion IDs are not forwarded as native provider filters."""
+    source = FakeDatasetSource(msi_fixture_path)
+    catalog = DatasetCatalog(tmp_path / "datasets" / "catalog.sqlite")
+
+    selected = query_to_selection(
+        source=source,
+        filters={"organism": "mouse", "exclude_dataset_ids": ["one"]},
+        catalog=catalog,
+        selection_path=tmp_path / "selection.json",
+    )
+
+    assert selected == []
+    assert source.seen_filters == {"organism": "mouse"}
 
 
 def test_low_disk_mode_downloads_merges_and_releases_staging_data(
