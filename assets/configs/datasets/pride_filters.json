@@ -1,0 +1,14 @@
+{
+  "keyword": "imzML",
+  "organisms": ["Mus musculus (mouse)"],
+  "organism_parts": ["Urinary bladder"],
+  "experiment_types": ["mass spectrometry imaging"],
+  "required_metadata_fields": ["organisms", "organismParts"],
+  "single_value_metadata_fields": ["organisms", "organismParts", "diseases"],
+  "require_annotation_source": true,
+  "require_checksum": true,
+  "page_size": 100,
+  "max_projects": 500,
+  "max_pair_size_bytes": null,
+  "exclude_dataset_ids": []
+}
