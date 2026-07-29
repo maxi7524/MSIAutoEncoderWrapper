@@ -129,6 +129,7 @@ class AutoencoderAnalysis:
             or getattr(self.wrapper.models_manager, "batch_size", 256),
             "shuffle": False,
             "num_workers": 0,
+            "pin_memory": False,
         }
         if loader_options:
             options.update(loader_options)
@@ -157,7 +158,11 @@ class AutoencoderAnalysis:
         with torch.no_grad():
             for batch in DataLoader(self.dataset, **options):
                 batch_ids, spectra = batch[0], batch[1]
-                outputs = self.model(spectra.float().to(self._device()))
+                device_spectra = spectra.to(
+                    device=self._device(),
+                    dtype=torch.float32,
+                )
+                outputs = self.model(device_spectra)
                 reconstruction = outputs.get("reconstruction")
                 if reconstruction is None:
                     raise_validation_error(
@@ -208,6 +213,7 @@ class AutoencoderAnalysis:
                         target_buckets[field].append(value.detach().cpu().numpy())
                     for field, value in batch[3].items():
                         mask_buckets[field].append(value.detach().cpu().numpy())
+                del reconstruction, outputs, device_spectra
 
         spectrum_ids = np.concatenate(ids)
         flat_metrics = {
