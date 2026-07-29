@@ -1,5 +1,17 @@
 """Model analysis interfaces."""
 
-from .autoencoder import AutoencoderAnalysis, PreparationEstimate, PreparedAnalysis
+from .autoencoder import (
+    AutoencoderAnalysis,
+    AutoencoderMultiAnalysis,
+    MultiPreparedAnalysis,
+    PreparationEstimate,
+    PreparedAnalysis,
+)
 
-__all__ = ["AutoencoderAnalysis", "PreparationEstimate", "PreparedAnalysis"]
+__all__ = [
+    "AutoencoderAnalysis",
+    "AutoencoderMultiAnalysis",
+    "MultiPreparedAnalysis",
+    "PreparationEstimate",
+    "PreparedAnalysis",
+]

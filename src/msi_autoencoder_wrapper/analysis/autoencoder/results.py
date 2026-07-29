@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Mapping
 
 import numpy as np
 
@@ -84,3 +84,37 @@ class PreparedAnalysis:
             [self.pixel_metrics[int(index)][metric] for index in self.spectrum_ids],
             dtype=np.float64,
         )
+
+
+@dataclass
+class MultiPreparedAnalysis:
+    """Prepared caches for models evaluated against one shared dataset.
+
+    Input arrays, targets, and target masks are stored once and referenced by
+    every per-model cache, preventing linear duplication of immutable data.
+
+    :param models: Per-model prepared results.
+    :type models: Mapping[str, PreparedAnalysis]
+    :param shared_inputs: Optional shared binned input matrix.
+    :type shared_inputs: numpy.ndarray | None
+    :param shared_targets: Shared targets grouped by field.
+    :type shared_targets: Dict[str, numpy.ndarray]
+    :param shared_target_masks: Shared availability masks grouped by field.
+    :type shared_target_masks: Dict[str, numpy.ndarray]
+    """
+
+    models: Mapping[str, PreparedAnalysis]
+    shared_inputs: np.ndarray | None = None
+    shared_targets: Dict[str, np.ndarray] = field(default_factory=dict)
+    shared_target_masks: Dict[str, np.ndarray] = field(default_factory=dict)
+
+    def for_model(self, model_name: str) -> PreparedAnalysis:
+        """Return one model's prepared cache.
+
+        :param model_name: Analyzed model identifier.
+        :type model_name: str
+        :return: Prepared model result.
+        :rtype: PreparedAnalysis
+        :raises KeyError: If the model is not part of this analysis.
+        """
+        return self.models[model_name]

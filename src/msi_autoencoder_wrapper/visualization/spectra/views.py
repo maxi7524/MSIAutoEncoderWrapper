@@ -1,0 +1,121 @@
+"""Model-independent spectrum comparison rendering."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+
+from ..theme import VisualizationTheme, resolve_theme
+
+
+def plot_spectrum_comparison(
+    mass_axis: np.ndarray,
+    original: np.ndarray,
+    reconstructions: Mapping[str, np.ndarray] | np.ndarray,
+    axes: Optional[tuple[Axes, Axes]] = None,
+    clip_reconstruction: bool = True,
+    theme: VisualizationTheme | str | None = None,
+) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Plot input/reconstructions above signed residuals on aligned axes.
+
+    Negative decoder outputs can be clipped for physical display while signed
+    residuals remain unmodified, preserving over- and under-estimation.
+
+    :param mass_axis: Shared binner m/z axis.
+    :type mass_axis: numpy.ndarray
+    :param original: Input spectrum.
+    :type original: numpy.ndarray
+    :param reconstructions: Named model reconstructions or one unnamed array.
+    :type reconstructions: Mapping[str, numpy.ndarray] | numpy.ndarray
+    :param axes: Optional aligned signal and residual axes.
+    :type axes: tuple[matplotlib.axes.Axes, matplotlib.axes.Axes] | None
+    :param clip_reconstruction: Clip displayed reconstructions to zero.
+    :type clip_reconstruction: bool
+    :param theme: Global graphical strategy.
+    :type theme: VisualizationTheme | str | None
+    :return: Figure and ``(signal_axis, residual_axis)``.
+    :rtype: tuple[matplotlib.figure.Figure, tuple[matplotlib.axes.Axes, matplotlib.axes.Axes]]
+    """
+    resolved = resolve_theme(theme)
+    named = (
+        {"reconstruction": np.asarray(reconstructions)}
+        if isinstance(reconstructions, np.ndarray)
+        else dict(reconstructions)
+    )
+    if axes is None:
+        figure, created = plt.subplots(
+            2,
+            1,
+            figsize=resolved.figure_size,
+            dpi=resolved.figure_dpi,
+            sharex=True,
+            gridspec_kw={"height_ratios": (2.0, 1.0)},
+        )
+        signal_axis, residual_axis = created
+    else:
+        signal_axis, residual_axis = axes
+        figure = signal_axis.figure
+    signal_axis.plot(
+        mass_axis,
+        original,
+        color=resolved.input_color,
+        alpha=resolved.overlapping_signal_alpha,
+        linewidth=resolved.input_line_width,
+        label="input",
+        zorder=resolved.input_zorder,
+    )
+    residual_limit = 0.0
+    for index, (model_name, raw_reconstruction) in enumerate(named.items()):
+        color = resolved.color_for_model(model_name, index)
+        reconstruction = np.asarray(raw_reconstruction)
+        displayed = np.clip(reconstruction, 0.0, None) if clip_reconstruction else reconstruction
+        residual = np.asarray(original) - reconstruction
+        residual_limit = max(residual_limit, float(np.max(np.abs(residual), initial=0.0)))
+        signal_axis.plot(
+            mass_axis,
+            displayed,
+            color=color,
+            alpha=resolved.secondary_alpha,
+            linewidth=resolved.reconstruction_line_width,
+            label=model_name,
+            zorder=resolved.reconstruction_zorder,
+        )
+        residual_axis.plot(
+            mass_axis,
+            residual,
+            color=color,
+            alpha=resolved.residual_alpha,
+            linewidth=resolved.residual_line_width,
+            label=f"{model_name} residual",
+            zorder=resolved.residual_zorder,
+        )
+    residual_axis.axhline(
+        0.0,
+        color=resolved.baseline_color,
+        linewidth=resolved.reference_line_width,
+        linestyle=resolved.baseline_line_style,
+    )
+    if residual_limit > 0:
+        residual_axis.set_ylim(-residual_limit, residual_limit)
+    signal_axis.set_ylabel("Intensity", fontsize=resolved.label_font_size)
+    residual_axis.set(xlabel="m/z", ylabel="Input - reconstruction")
+    signal_axis.legend(
+        loc=resolved.legend_location,
+        frameon=resolved.legend_frame,
+        ncols=resolved.legend_columns,
+    )
+    residual_axis.legend(
+        loc=resolved.legend_location,
+        frameon=resolved.legend_frame,
+        ncols=resolved.legend_columns,
+    )
+    for axis in (signal_axis, residual_axis):
+        axis.set_facecolor(resolved.panel_color)
+        axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
+        axis.tick_params(labelsize=resolved.tick_font_size)
+    return figure, (signal_axis, residual_axis)
