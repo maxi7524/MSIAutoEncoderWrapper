@@ -10,7 +10,11 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 
-from msi_autoencoder_wrapper.analysis import AutoencoderAnalysis
+from msi_autoencoder_wrapper.analysis import (
+    AutoencoderAnalysis,
+    AutoencoderMultiAnalysis,
+)
+from msi_autoencoder_wrapper.visualization import VisualizationTheme
 from msi_autoencoder_wrapper.analysis.autoencoder.visualizations import (
     plot_metric_distribution,
     plot_projection,
@@ -52,6 +56,12 @@ class _Dataset(Dataset):
         }
         masks = {"condition": torch.tensor(True), "molecule": torch.tensor(True)}
         return index, self.values[index], targets, masks
+
+    def get_class_mappings(self):
+        return {
+            "condition": {"healthy": 0, "disease": 1},
+            "molecule": {"A": 0, "B": 1},
+        }
 
 
 class _Model(torch.nn.Module):
@@ -129,6 +139,27 @@ def _wrapper(trained: bool = True):
         models_manager=manager,
         device="cpu",
     )
+
+
+class _MultiWrapper:
+    def __init__(self) -> None:
+        source = _wrapper()
+        self.active_dataset = source.active_dataset
+        self.active_context = source.active_context
+        self.active_model = source.active_model
+        self.models_manager = source.models_manager
+        self.device = "cpu"
+
+    def load_configuration(self, model_name: str) -> None:
+        self.active_model = _Model()
+        scale = 0.5 if model_name == "baseline" else 0.75
+
+        def forward(values):
+            outputs = _Model.forward(self.active_model, values)
+            outputs["reconstruction"] = values * scale
+            return outputs
+
+        self.active_model.forward = forward
 
 
 def test_prepare_caches_metrics_arrays_and_generic_heads() -> None:
@@ -241,3 +272,39 @@ def test_visualizations_consume_precomputed_results() -> None:
     assert all(figure.axes for figure in figures)
     for figure in figures:
         plt.close(figure)
+
+
+def test_grouped_single_model_api_and_theme() -> None:
+    analysis = AutoencoderAnalysis(
+        _wrapper(),
+        theme=VisualizationTheme(model_overrides={"active_model": "#123456"}),
+    )
+    analysis.prepare()
+
+    assert analysis.reconstruction.summary("mse")["count"] == 4.0
+    assert analysis.latent.statistics()["mean"].shape == (2,)
+    assert "molecule_head" in analysis.heads.evaluate()
+    assert analysis.heads.probability_image("molecule_head", 0).values.shape == (
+        1,
+        2,
+        2,
+    )
+    assert analysis.theme.color_for_model("active_model") == "#123456"
+
+
+def test_multi_analysis_shares_inputs_and_compares_models() -> None:
+    analysis = AutoencoderMultiAnalysis(
+        _MultiWrapper(), ["baseline", "candidate"]
+    )
+    prepared = analysis.prepare()
+
+    assert prepared.models["baseline"].arrays["inputs"] is prepared.models[
+        "candidate"
+    ].arrays["inputs"]
+    ranking = analysis.reconstruction.compare_metric("mse")
+    assert [row["model"] for row in ranking] == ["candidate", "baseline"]
+    assert set(analysis.reconstruction.metric_image()) == {"baseline", "candidate"}
+    assert set(analysis.heads.probability_image("molecule_head", 0)) == {
+        "baseline",
+        "candidate",
+    }
