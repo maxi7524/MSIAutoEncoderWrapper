@@ -26,6 +26,7 @@ logger = get_custom_logger(__name__)
 # Section: ReadersManagerProxy Infrastructure
 # --------------------------------------------------
 
+
 class ContextManagerProxy:
     """
     Proxy class managing configuration matrices, driver parameters, and temporary session objects across multiple images.
@@ -45,14 +46,16 @@ class ContextManagerProxy:
         # --------------------------------------------------
         # Subsection: Automatic Registration Enforcement
         # --------------------------------------------------
-        logger.info("Enforcing automatic module discovery for reader and binner registries.")
+        logger.info(
+            "Enforcing automatic module discovery for reader and binner registries."
+        )
         ReaderManager.discover_strategies()
         AnnotationReaderManager.load_builtin_reader()
         BinnerManager.discover_strategies()
 
-# --------------------------------------------------
-# Section: Public Strategy Setters
-# --------------------------------------------------
+    # --------------------------------------------------
+    # Section: Public Strategy Setters
+    # --------------------------------------------------
 
     # --------------------------------------------------
     # Subsection: Setters - reader
@@ -93,7 +96,7 @@ class ContextManagerProxy:
             component_type="reader",
             target=reader_name_or_instance,
             img_name_or_path=img_name_or_path,
-            **kwargs
+            **kwargs,
         )
         if auto_load_annotations:
             self._load_registered_annotations(
@@ -187,12 +190,17 @@ class ContextManagerProxy:
             img_name_or_path=img_name_or_path,
             **kwargs,
         )
-    
+
     # --------------------------------------------------
     # Subsection: Setters - binners
     # --------------------------------------------------
 
-    def set_binner(self, binner_name_or_instance: Any, img_name_or_path: Optional[str] = None, **kwargs: Any) -> Any:
+    def set_binner(
+        self,
+        binner_name_or_instance: Any,
+        img_name_or_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Any:
         """
         Registers a forward spectral binning compression configuration into the project ledger.
 
@@ -210,10 +218,15 @@ class ContextManagerProxy:
             component_type="binner",
             target=binner_name_or_instance,
             img_name_or_path=img_name_or_path,
-            **kwargs
+            **kwargs,
         )
 
-    def set_inverse_binner(self, inverse_binner_name_or_instance: Any, img_name_or_path: Optional[str] = None, **kwargs: Any) -> Any:
+    def set_inverse_binner(
+        self,
+        inverse_binner_name_or_instance: Any,
+        img_name_or_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Any:
         """
         Registers a reverse reconstruction spatial binner configuration into the project ledger.
 
@@ -231,19 +244,20 @@ class ContextManagerProxy:
             component_type="inverse_binner",
             target=inverse_binner_name_or_instance,
             img_name_or_path=img_name_or_path,
-            **kwargs
+            **kwargs,
         )
 
-
-# --------------------------------------------------
-# Section: Public Strategy Getters
-# --------------------------------------------------
-
     # --------------------------------------------------
-    # Subsection: Getters - readers 
+    # Section: Public Strategy Getters
     # --------------------------------------------------
 
-    def get_available_readers(self, print_return: bool = True, return_value: bool=False) -> Dict[str, Dict[str, Any]]:
+    # --------------------------------------------------
+    # Subsection: Getters - readers
+    # --------------------------------------------------
+
+    def get_available_readers(
+        self, print_return: bool = True, return_value: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Extracts documentation strings across all registered data streaming readers.
 
@@ -261,14 +275,16 @@ class ContextManagerProxy:
             title="REGISTERED MSI READERS & PARAMETERS",
             key_label="Reader Key",
             print_return=print_return,
-            return_value=return_value
+            return_value=return_value,
         )
-        
+
     # --------------------------------------------------
-    # Subsection: Getters - binners 
+    # Subsection: Getters - binners
     # --------------------------------------------------
 
-    def get_available_binners(self, print_return: bool = True, return_value: bool=False) -> Dict[str, Dict[str, Any]]:
+    def get_available_binners(
+        self, print_return: bool = True, return_value: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Extracts documentation strings across all registered forward compression binners.
 
@@ -286,10 +302,12 @@ class ContextManagerProxy:
             title="REGISTERED MSI FORWARD BINNERS & PARAMETERS",
             key_label="Binner Key",
             print_return=print_return,
-            return_value=return_value
+            return_value=return_value,
         )
 
-    def get_available_inverse_binners(self, print_return: bool = True, return_value: bool=False) -> Dict[str, Dict[str, Any]]:
+    def get_available_inverse_binners(
+        self, print_return: bool = True, return_value: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Extracts documentation strings across all registered reverse spatial binners.
 
@@ -307,12 +325,12 @@ class ContextManagerProxy:
             title="REGISTERED MSI INVERSE BINNERS & PARAMETERS",
             key_label="Inverse Binner Key",
             print_return=print_return,
-            return_value=return_value
+            return_value=return_value,
         )
-    
-# --------------------------------------------------
-# Section: Helpers
-# --------------------------------------------------
+
+    # --------------------------------------------------
+    # Section: Helpers
+    # --------------------------------------------------
 
     def _ensure_image_bucket(self, img_name: str) -> None:
         """
@@ -330,7 +348,7 @@ class ContextManagerProxy:
                 "binner": {"instance_name": "", "instance_params": {}},
                 "inverse_binner": {"instance_name": "", "instance_params": {}},
                 "model_functionality": None,
-                "tmp": {}
+                "tmp": {},
             }
 
     # --------------------------------------------------
@@ -339,11 +357,11 @@ class ContextManagerProxy:
 
     @manage_image_context
     def _set_component(
-        self, 
-        component_type: str, 
-        target: Any, 
-        img_name_or_path: Optional[str] = None, 
-        **kwargs: Any
+        self,
+        component_type: str,
+        target: Any,
+        img_name_or_path: Optional[str] = None,
+        **kwargs: Any,
     ) -> Any:
         """
         Resolves, provisions layout directories, and registers an operational component for an image context.
@@ -369,7 +387,7 @@ class ContextManagerProxy:
             "reader": ReaderManager.REGISTRY,
             "annotation_reader": AnnotationReaderManager.REGISTRY,
             "binner": BinnerManager.BINNER_REGISTRY,
-            "inverse_binner": BinnerManager.INVERSE_REGISTRY
+            "inverse_binner": BinnerManager.INVERSE_REGISTRY,
         }
         expected_types = {
             "reader": MSIBaseReader,
@@ -396,7 +414,10 @@ class ContextManagerProxy:
             resolved_file_path = workspace.get_active_image_file_path()
             if resolved_file_path:
                 kwargs["file_path"] = resolved_file_path
-                logger.debug("Dependency injection active: Set 'file_path' to target: %s", resolved_file_path)
+                logger.debug(
+                    "Dependency injection active: Set 'file_path' to target: %s",
+                    resolved_file_path,
+                )
 
         if component_type == "reader" and not isinstance(target, MSIBaseReader):
             reader_path = kwargs.get("file_path")
@@ -416,22 +437,33 @@ class ContextManagerProxy:
             active_forward_binner = self.config_ledger[active_img].get("binner")
             if active_forward_binner:
                 kwargs["binner"] = active_forward_binner
-                logger.debug("Dependency injection active: Injected matching forward binner instance into constructor parameters.")
+                logger.debug(
+                    "Dependency injection active: Injected matching forward binner instance into constructor parameters."
+                )
 
         ## Pass the active context proxy automatically if the component can accept it
         if "active_context" not in kwargs:
             kwargs["active_context"] = self._wrapper.active_context
-            logger.debug("Unified Context injection active for component: %s", component_type)
+            logger.debug(
+                "Unified Context injection active for component: %s", component_type
+            )
 
         # Workspace structure validation
         ## Trigger directory structural updates to prepare dedicated configuration layout folders
         if hasattr(workspace, "create_required_directories"):
-            logger.debug("Ensuring physical layout directories exist for image context: %s", active_img)
+            logger.debug(
+                "Ensuring physical layout directories exist for image context: %s",
+                active_img,
+            )
             workspace.create_required_directories()
 
         # Strategy compilation block
         ## Delegate strategy selection to the unified validation framework factory
-        logger.info("Resolving system component '%s' under image context '%s'", component_type, active_img)
+        logger.info(
+            "Resolving system component '%s' under image context '%s'",
+            component_type,
+            active_img,
+        )
         resolved_instance = resolve_component(
             target=target,
             registry=registries[component_type],
@@ -446,7 +478,11 @@ class ContextManagerProxy:
         ## Map the initialized component instance into the memory state database container
         self._ensure_image_bucket(active_img)
         self.config_ledger[active_img][component_type] = resolved_instance
-        logger.info("Successfully registered component '%s' into ledger for image '%s'", component_type, active_img)
+        logger.info(
+            "Successfully registered component '%s' into ledger for image '%s'",
+            component_type,
+            active_img,
+        )
 
         return resolved_instance
 
@@ -505,10 +541,7 @@ class ContextManagerProxy:
         is_instantiated_context = (
             getattr(active_context, "_instantiated_image_key", None) == image_key
         )
-        if (
-            is_instantiated_context
-            and active_context.latent_reader is not None
-        ):
+        if is_instantiated_context and active_context.latent_reader is not None:
             component_configs["latent_reader"] = get_component_config(
                 active_context.latent_reader
             )
@@ -518,13 +551,116 @@ class ContextManagerProxy:
             "scope": "local_image",
             "image_key": image_key,
             "coordinate_order": self._wrapper.coordinate_order,
-            "data_source": active_context.data_source if is_instantiated_context else "image",
+            "data_source": (
+                active_context.data_source if is_instantiated_context else "image"
+            ),
             "components": component_configs,
         }
+
+    def load_context_config(
+        self,
+        config: Dict[str, Any],
+        img_name_or_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Restore the reader and binner pipeline owned by an image context.
+
+        Saved reader paths are intentionally ignored. The workspace resolves
+        the selected image through ``img_name_or_path`` or its default image.
+
+        :param config: Portable local image-context configuration.
+        :type config: Dict[str, Any]
+        :param img_name_or_path: Optional image override. Uses the workspace
+            default image when omitted.
+        :type img_name_or_path: str | None
+        :return: Restored component instances keyed by component role.
+        :rtype: Dict[str, Any]
+        :raises ValidationError: If required configuration sections are invalid.
+        """
+        if config.get("schema_version") != 1:
+            raise_validation_error(
+                "ContextConfiguration",
+                f"Unsupported schema version '{config.get('schema_version')}'.",
+            )
+        components = config.get("components")
+        if not isinstance(components, dict):
+            raise_validation_error(
+                "ContextConfiguration", "components must be a dictionary."
+            )
+        for required_name in ("reader", "binner"):
+            if not isinstance(components.get(required_name), dict):
+                raise_validation_error(
+                    "ContextConfiguration",
+                    f"A '{required_name}' component configuration is required.",
+                )
+
+        restored: Dict[str, Any] = {}
+        reader_config = components["reader"]
+        reader_parameters = self._loadable_parameters(
+            reader_config,
+            excluded={"file_path", "active_context"},
+        )
+        restored["reader"] = self.set_reader(
+            reader_config["type"],
+            img_name_or_path=img_name_or_path,
+            **reader_parameters,
+        )
+
+        binner_config = components["binner"]
+        restored["binner"] = self.set_binner(
+            binner_config["type"],
+            img_name_or_path=img_name_or_path,
+            **self._loadable_parameters(
+                binner_config,
+                excluded={"active_context"},
+            ),
+        )
+
+        inverse_config = components.get("inverse_binner")
+        if isinstance(inverse_config, dict):
+            restored["inverse_binner"] = self.set_inverse_binner(
+                inverse_config["type"],
+                img_name_or_path=img_name_or_path,
+                **self._loadable_parameters(
+                    inverse_config,
+                    excluded={"active_context", "binner"},
+                ),
+            )
+        self._wrapper.set_coordinate_order(config.get("coordinate_order", "xy"))
+        return restored
+
+    @staticmethod
+    def _loadable_parameters(
+        component_config: Dict[str, Any],
+        excluded: set[str],
+    ) -> Dict[str, Any]:
+        """Return constructor parameters safe for runtime restoration.
+
+        :param component_config: Portable component descriptor.
+        :type component_config: Dict[str, Any]
+        :param excluded: Runtime-injected parameter names to remove.
+        :type excluded: set[str]
+        :return: Independent constructor parameter dictionary.
+        :rtype: Dict[str, Any]
+        :raises ValidationError: If the descriptor is incomplete.
+        """
+        if not component_config.get("type"):
+            raise_validation_error(
+                "ContextConfiguration", "Every component requires a type."
+            )
+        parameters = component_config.get("parameters", {})
+        if not isinstance(parameters, dict):
+            raise_validation_error(
+                "ContextConfiguration", "Component parameters must be a dictionary."
+            )
+        return {
+            name: value for name, value in parameters.items() if name not in excluded
+        }
+
 
 # --------------------------------------------------
 # Section: ReadersManagerMixin Injection Hook
 # --------------------------------------------------
+
 
 class ContextManagerMixin:
     """
