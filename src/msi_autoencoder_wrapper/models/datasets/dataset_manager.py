@@ -7,6 +7,7 @@ from ...utils.logger import get_custom_logger
 from .base_dataset import MSIBaseDataset
 from ...utils.module_search import discover_modules
 from ...utils.validators import resolve_component, validate_subclass
+from ...utils.exceptions import raise_validation_error
 
 # Synchronized telemetry logger initialization
 logger = get_custom_logger(__name__)
@@ -15,7 +16,7 @@ logger = get_custom_logger(__name__)
 class DatasetManager:
     """
     Central manager coordinating alternative sampling strategies and dynamic instantiation parameters validation.
-    
+
     Maintains global isolated registries for mapping dataset strategies, allowing
     for automatic resolution of sampling components from dynamic configurations.
     """
@@ -33,11 +34,16 @@ class DatasetManager:
         :return: Inner decorator closure wrapping the targeted subclass.
         :rtype: Callable
         """
+
         def decorator(subclass: Type[MSIBaseDataset]) -> Type[MSIBaseDataset]:
             validate_subclass(subclass, MSIBaseDataset, "DatasetRegistry")
             cls._REGISTRY[name] = subclass
-            logger.debug("Successfully appended dataset blueprint token '%s' into manager registry.", name)
+            logger.debug(
+                "Successfully appended dataset blueprint token '%s' into manager registry.",
+                name,
+            )
             return subclass
+
         return decorator
 
     @classmethod
@@ -53,13 +59,48 @@ class DatasetManager:
         :raises ProjectConfigError: If the dataset is unknown or required
             constructor parameters are missing.
         """
-        logger.info("Resolving and instantiating dataset strategy '%s' from global registry.", name)
+        logger.info(
+            "Resolving and instantiating dataset strategy '%s' from global registry.",
+            name,
+        )
         return resolve_component(
             target=name,
             registry=cls._REGISTRY,
             component_type="Dataset",
             expected_type=MSIBaseDataset,
             **kwargs,
+        )
+
+    @classmethod
+    def load_config(
+        cls,
+        config: Dict[str, Any],
+        active_context: Any,
+    ) -> MSIBaseDataset:
+        """Restore a dataset from its module-owned portable configuration.
+
+        :param config: Portable dataset component descriptor.
+        :type config: Dict[str, Any]
+        :param active_context: Active image context injected at runtime.
+        :type active_context: Any
+        :return: Restored dataset instance.
+        :rtype: MSIBaseDataset
+        :raises ValidationError: If the dataset descriptor is invalid.
+        """
+        if not isinstance(config, dict) or not config.get("type"):
+            raise_validation_error(
+                "DatasetConfiguration", "A dataset type is required."
+            )
+        parameters = config.get("parameters", {})
+        if not isinstance(parameters, dict):
+            raise_validation_error(
+                "DatasetConfiguration", "Dataset parameters must be a dictionary."
+            )
+        cls.discover_strategies()
+        return cls.get_dataset(
+            name=config["type"],
+            active_context=active_context,
+            **parameters,
         )
 
     # --------------------------------------------------
