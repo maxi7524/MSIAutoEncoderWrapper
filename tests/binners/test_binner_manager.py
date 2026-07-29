@@ -68,6 +68,19 @@ def test_top_peaks_inverse_binner_preserves_peak_neighborhood() -> None:
     assert selected_intensities.max() == pytest.approx(10.0)
 
 
+def test_binner_selects_inclusive_mass_ranges() -> None:
+    """Mass-window lookup belongs to the configured binner grid."""
+    binner = BinnerManager.get_binner(
+        "LinearBinning", bin_step=1.0, x_min=100.0, x_max=110.0
+    )
+
+    np.testing.assert_array_equal(binner.GetBinIndices(102.5, 1.0), [1, 2, 3])
+    np.testing.assert_array_equal(binner.GetMzRangeIndices(104.5, 106.5), [4, 5, 6])
+
+    with pytest.raises(ValidationError, match="tolerance cannot be negative"):
+        binner.GetBinIndices(102.5, -0.1)
+
+
 def test_missing_binner_context_uses_global_validation_error() -> None:
     """Missing boundary and inverse dependencies use standardized validation errors."""
     with pytest.raises(ValidationError, match=r"\[LINEARBINNING ERROR\]"):

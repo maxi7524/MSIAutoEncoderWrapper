@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 import numpy as np
+from collections.abc import Iterator
 from typing import Any, Optional, Dict, Tuple, Union
 
 from ..utils.configuration import ConfigurableComponent
 from ..utils.exceptions import raise_validation_error
+from .spatial import Aggregation, SpatialImage, aggregate_window
 
 
 class MSIBaseReader(ConfigurableComponent, ABC):
@@ -114,6 +116,100 @@ class MSIBaseReader(ConfigurableComponent, ABC):
                 return self.get_region(*selectors)
             return self.get_spectrum_at(target)
         return self.GetSpectrum(target)
+
+    def IterSpectra(
+        self,
+    ) -> Iterator[tuple[int, Tuple[int, int, int], np.ndarray, np.ndarray]]:
+        """Yield every spectrum with its stable index and native coordinates.
+
+        :return: Iterator of ``(spectrum_id, coordinates, mz, intensities)``.
+        :rtype: Iterator[tuple[int, tuple[int, int, int], numpy.ndarray, numpy.ndarray]]
+        """
+        for spectrum_id in range(self.GetNumberOfSpectra()):
+            mz_axis, intensities = self.GetSpectrum(spectrum_id)
+            yield (
+                spectrum_id,
+                self.GetSpectrumPosition(spectrum_id),
+                mz_axis,
+                intensities,
+            )
+
+    def GetIonImage(
+        self,
+        mz: float,
+        tolerance: float,
+        aggregation: Aggregation = "mean",
+        fill_value: float = np.nan,
+    ) -> SpatialImage:
+        """Return a raw ion image on the reader's native spatial grid.
+
+        :param mz: Center of the selected mass window.
+        :type mz: float
+        :param tolerance: Non-negative absolute window around ``mz``.
+        :type tolerance: float
+        :param aggregation: Window aggregation strategy.
+        :type aggregation: str | Callable[[numpy.ndarray], float]
+        :param fill_value: Value assigned to positions without spectra.
+        :type fill_value: float
+        :return: Ion intensities and the native spatial mask.
+        :rtype: SpatialImage
+        :raises ValidationError: If the mass window is invalid.
+        """
+        if tolerance < 0:
+            raise_validation_error("IonImage", "tolerance cannot be negative.")
+        values = np.zeros(self.GetNumberOfSpectra(), dtype=np.float32)
+        for spectrum_id, _, mz_axis, intensities in self.IterSpectra():
+            selected = np.abs(mz_axis - float(mz)) <= float(tolerance)
+            if np.any(selected):
+                values[spectrum_id] = aggregate_window(intensities[selected], aggregation)
+        return self.MapSpectrumValuesToImage(values, fill_value=fill_value)
+
+    def MapSpectrumValuesToImage(
+        self,
+        values: np.ndarray,
+        fill_value: float = np.nan,
+    ) -> SpatialImage:
+        """Map one scalar per spectrum to the reader's native coordinate grid.
+
+        :param values: One-dimensional values ordered by ``spectrum_id``.
+        :type values: numpy.ndarray
+        :param fill_value: Value assigned to positions without spectra.
+        :type fill_value: float
+        :return: Values arranged as ``(z, y, x)`` with a validity mask.
+        :rtype: SpatialImage
+        :raises ValidationError: If the value count differs from the spectrum count.
+        """
+        array = np.asarray(values)
+        count = self.GetNumberOfSpectra()
+        if array.ndim != 1 or len(array) != count:
+            raise_validation_error(
+                "SpatialReader",
+                f"Expected one value for each of {count} spectra, got shape {array.shape}.",
+            )
+        coordinates = [self.GetSpectrumPosition(index) for index in range(count)]
+        if not coordinates:
+            raise_validation_error("SpatialReader", "Cannot map an empty MSI dataset.")
+        xs, ys, zs = zip(*coordinates)
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        min_z, max_z = min(zs), max(zs)
+        shape = (max_z - min_z + 1, max_y - min_y + 1, max_x - min_x + 1)
+        grid_dtype = (
+            array.dtype
+            if np.issubdtype(array.dtype, np.floating)
+            else np.result_type(array.dtype, np.asarray(fill_value).dtype)
+        )
+        grid = np.full(shape, fill_value, dtype=grid_dtype)
+        valid_mask = np.zeros(shape, dtype=bool)
+        for spectrum_id, (x_position, y_position, z_position) in enumerate(coordinates):
+            target = (z_position - min_z, y_position - min_y, x_position - min_x)
+            grid[target] = array[spectrum_id]
+            valid_mask[target] = True
+        return SpatialImage(
+            values=grid,
+            valid_mask=valid_mask,
+            extent=(min_x, max_x, min_y, max_y, min_z, max_z),
+        )
 
     def _coordinate_order(self) -> str:
         """Resolve the wrapper-wide coordinate order with an XY fallback."""
