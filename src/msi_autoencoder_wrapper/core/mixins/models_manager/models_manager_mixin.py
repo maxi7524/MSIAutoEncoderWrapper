@@ -92,14 +92,34 @@ class ModelsManagerProxy(ArchitectureProxy, DatasetProxy, TrainingProxy, ModelRu
         """
         model_buffer = self._building_buffer.get("model", {})
         component_configs: Dict[str, Any] = {}
+        head_specs: Dict[str, Dict[str, str]] = {}
         for category, component_buffer in self._building_buffer.items():
             if category in {"model", "dataset"}:
+                continue
+            # REMARK Named autoencoder heads use a nested component schema.
+            if category == "heads":
+                component_configs[category] = {}
+                for head_id, head_buffer in component_buffer.items():
+                    target = head_buffer.get(
+                        "target", head_buffer.get("strategy")
+                    )
+                    component_configs[category][head_id] = describe_component_target(
+                        target=target,
+                        parameters=head_buffer.get("kwargs", {}),
+                    )
+                    head_specs[head_id] = {
+                        "target_field": head_buffer["target_field"],
+                    }
                 continue
             target = component_buffer.get("target", component_buffer.get("strategy"))
             component_configs[category] = describe_component_target(
                 target=target,
                 parameters=component_buffer.get("kwargs", {}),
             )
+
+        model_parameters = dict(model_buffer.get("kwargs", {}))
+        if head_specs:
+            model_parameters["head_specs"] = head_specs
 
         dataset_config = None
         active_dataset = getattr(self._wrapper, "active_dataset", None)
@@ -124,7 +144,7 @@ class ModelsManagerProxy(ArchitectureProxy, DatasetProxy, TrainingProxy, ModelRu
                 "name": self._active_model_name,
                 "type": self.active_model_type,
                 "preset": getattr(self, "_preset_name_used", None),
-                "parameters": make_json_compatible(model_buffer.get("kwargs", {})),
+                "parameters": make_json_compatible(model_parameters),
                 "components": component_configs,
                 "runtime": runtime_model_config,
             },

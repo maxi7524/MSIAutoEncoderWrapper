@@ -10,6 +10,10 @@ import torch
 
 from msi_autoencoder_wrapper.binners.binners_manager import BinnerManager
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
+from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
+    ArchitecturesManager,
+)
+from msi_autoencoder_wrapper.models.model_loader import ModelLoader
 from msi_autoencoder_wrapper.utils.exceptions import WorkspaceConfigError
 from msi_autoencoder_wrapper.workspace.model_store import ModelStore
 from tests.mocks.components import MockMSIReader, build_small_autoencoder
@@ -108,6 +112,73 @@ def test_workspace_save_model_keeps_image_and_loaded_model_contexts_separate(
     assert config["local_image_context"]["image_key"] == msi_fixture_path.stem
     assert config["loaded_model_context"]["model"]["name"] == "portable-ae"
     assert (model_dir / "config" / "weights.pt").is_file()
+
+
+def test_named_heads_are_serialized_and_reconstructed_separately(
+    tmp_path: Path,
+) -> None:
+    """Named head modules and target bindings survive configuration round trips."""
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path))
+    manager = wrapper.models_manager
+    manager.active_model_type = "autoencoder"
+    manager._active_model_name = "multi-head-ae"
+    manager._building_buffer = {
+        "encoder": {
+            "target": "CNNEncoder",
+            "kwargs": {
+                "input_dim": 32,
+                "latent_dim": 4,
+                "channels": [1, 2],
+                "kernels": [3],
+                "strides": [2],
+                "spatial_dims": [32, 15],
+            },
+        },
+        "decoder": {
+            "target": "CNNDecoder",
+            "kwargs": {
+                "latent_dim": 4,
+                "channels": [1, 2],
+                "kernels": [3],
+                "strides": [2],
+                "spatial_dims": [32, 15],
+            },
+        },
+        "heads": {
+            "condition_primary": {
+                "target": "LinearClassificationHead",
+                "target_field": "condition",
+                "kwargs": {"latent_dim": 4, "output_dim": 2},
+            },
+            "condition_secondary": {
+                "target": "LinearClassificationHead",
+                "target_field": "condition",
+                "kwargs": {
+                    "latent_dim": 4,
+                    "output_dim": 2,
+                    "hidden_dim": 3,
+                },
+            },
+        },
+    }
+    ArchitecturesManager.discover_architectures()
+
+    config = manager.get_model_config()
+    reconstructed, model_type, model_name = ModelLoader.build(config)
+    outputs = reconstructed(torch.randn(2, 32))
+
+    assert set(config["model"]["components"]["heads"]) == {
+        "condition_primary",
+        "condition_secondary",
+    }
+    assert config["model"]["parameters"]["head_specs"] == {
+        "condition_primary": {"target_field": "condition"},
+        "condition_secondary": {"target_field": "condition"},
+    }
+    assert model_type == "autoencoder"
+    assert model_name == "multi-head-ae"
+    assert outputs["head_condition_primary"].shape == (2, 2)
+    assert outputs["head_condition_secondary"].shape == (2, 2)
 
 
 def test_partial_custom_layout_inherits_default_keys(tmp_path: Path) -> None:
