@@ -3,6 +3,7 @@ import numpy as np
 from typing import Any, Optional
 
 from ..utils.configuration import ConfigurableComponent
+from ..utils.exceptions import raise_validation_error
 
 
 class MSIBaseBinner(ConfigurableComponent, ABC):
@@ -53,3 +54,34 @@ class MSIBaseBinner(ConfigurableComponent, ABC):
     def GetXAxisDepth(self) -> int:
         """Computes total absolute feature dimension channels length available within binned spaces."""
         pass
+
+    def GetMzRangeIndices(self, mz_min: float, mz_max: float) -> np.ndarray:
+        """Return grid indices whose centers lie in an inclusive m/z range.
+
+        :param mz_min: Inclusive lower mass bound.
+        :type mz_min: float
+        :param mz_max: Inclusive upper mass bound.
+        :type mz_max: float
+        :return: One-dimensional integer grid indices.
+        :rtype: numpy.ndarray
+        :raises ValidationError: If the range is reversed.
+        """
+        if mz_min > mz_max:
+            raise_validation_error("Binner", "mz_min cannot be greater than mz_max.")
+        axis = np.asarray(self.GetXAxis())
+        return np.flatnonzero((axis >= float(mz_min)) & (axis <= float(mz_max)))
+
+    def GetBinIndices(self, mz: float, tolerance: float = 0.0) -> np.ndarray:
+        """Return grid indices in an absolute tolerance around one m/z value.
+
+        :param mz: Center mass value.
+        :type mz: float
+        :param tolerance: Non-negative absolute tolerance.
+        :type tolerance: float
+        :return: One-dimensional integer grid indices.
+        :rtype: numpy.ndarray
+        :raises ValidationError: If tolerance is negative.
+        """
+        if tolerance < 0:
+            raise_validation_error("Binner", "tolerance cannot be negative.")
+        return self.GetMzRangeIndices(float(mz) - tolerance, float(mz) + tolerance)
