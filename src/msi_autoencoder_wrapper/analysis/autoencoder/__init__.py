@@ -1,7 +1,8 @@
 """Single-image autoencoder analysis tools."""
 
 from .analyzer import AutoencoderAnalysis
-from .results import PreparationEstimate, PreparedAnalysis
+from .multi_analyzer import AutoencoderMultiAnalysis
+from .results import MultiPreparedAnalysis, PreparationEstimate, PreparedAnalysis
 from .visualizations import (
     plot_metric_distribution,
     plot_projection,
@@ -11,6 +12,8 @@ from .visualizations import (
 
 __all__ = [
     "AutoencoderAnalysis",
+    "AutoencoderMultiAnalysis",
+    "MultiPreparedAnalysis",
     "PreparationEstimate",
     "PreparedAnalysis",
     "plot_metric_distribution",
