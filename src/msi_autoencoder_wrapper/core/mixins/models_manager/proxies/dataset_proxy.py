@@ -37,7 +37,9 @@ class DatasetProxy(BaseModelsManagerProxy):
     # Section: Strategy Discovery
     # --------------------------------------------------
 
-    def get_available_datasets(self, print_return: bool = True, return_value: bool = False) -> Optional[Dict[str, Dict[str, Any]]]:
+    def get_available_datasets(
+        self, print_return: bool = True, return_value: bool = False
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
         """
         Queries registered dataset components to extract baseline documentation metadata.
 
@@ -78,11 +80,35 @@ class DatasetProxy(BaseModelsManagerProxy):
 
         # State updates
         ## Cache configuration details inside active building buffer maps
-        target_name = name if isinstance(name, str) else getattr(name, "__name__", type(name).__name__)
+        target_name = (
+            name
+            if isinstance(name, str)
+            else getattr(name, "__name__", type(name).__name__)
+        )
         self._active_dataset_name = target_name
         self._building_buffer["dataset"] = {
             "target": name,
             "strategy": target_name,
             "kwargs": kwargs,
         }
-        logger.debug("Buffered active target dataset strategy: %s with parameters: %s", name, kwargs)
+        logger.debug(
+            "Buffered active target dataset strategy: %s with parameters: %s",
+            name,
+            kwargs,
+        )
+
+    def load_dataset_config(self, config: Dict[str, Any]) -> MSIBaseDataset:
+        """Restore and attach the dataset section owned by this proxy.
+
+        :param config: Portable dataset component descriptor.
+        :type config: Dict[str, Any]
+        :return: Restored dataset bound to the active image context.
+        :rtype: MSIBaseDataset
+        """
+        dataset = DatasetManager.load_config(
+            config=config,
+            active_context=self._wrapper.active_context,
+        )
+        self._wrapper.active_dataset = dataset
+        self._active_dataset_name = config["type"]
+        return dataset
