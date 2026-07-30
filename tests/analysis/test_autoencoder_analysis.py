@@ -15,6 +15,9 @@ from msi_autoencoder_wrapper.analysis import (
     AutoencoderMultiAnalysis,
 )
 from msi_autoencoder_wrapper.visualization import VisualizationTheme
+from msi_autoencoder_wrapper.analysis.autoencoder.reconstruction.metrics import (
+    masserstein_distances,
+)
 from msi_autoencoder_wrapper.analysis.autoencoder.visualizations import (
     plot_metric_distribution,
     plot_projection,
@@ -97,6 +100,9 @@ class _Reader:
         return SpatialImage(
             values, np.ones_like(values, dtype=bool), (0, 1, 0, 1, 0, 0)
         )
+
+    def GetSpectrum(self, index: int):
+        return np.asarray([100.0, 101.0, 102.0]), _Dataset().values[index].numpy()
 
 
 class _Binner:
@@ -293,14 +299,13 @@ def test_grouped_single_model_api_and_theme() -> None:
 
 
 def test_multi_analysis_shares_inputs_and_compares_models() -> None:
-    analysis = AutoencoderMultiAnalysis(
-        _MultiWrapper(), ["baseline", "candidate"]
-    )
+    analysis = AutoencoderMultiAnalysis(_MultiWrapper(), ["baseline", "candidate"])
     prepared = analysis.prepare()
 
-    assert prepared.models["baseline"].arrays["inputs"] is prepared.models[
-        "candidate"
-    ].arrays["inputs"]
+    assert (
+        prepared.models["baseline"].arrays["inputs"]
+        is prepared.models["candidate"].arrays["inputs"]
+    )
     ranking = analysis.reconstruction.compare_metric("mse")
     assert [row["model"] for row in ranking] == ["candidate", "baseline"]
     assert set(analysis.reconstruction.metric_image()) == {"baseline", "candidate"}
@@ -308,3 +313,82 @@ def test_multi_analysis_shares_inputs_and_compares_models() -> None:
         "baseline",
         "candidate",
     }
+
+
+def test_multi_comparison_builds_model_populations_and_shared_spatial_scales() -> None:
+    analysis = AutoencoderMultiAnalysis(_MultiWrapper(), ["baseline", "candidate"])
+    analysis.prepare()
+
+    records = analysis.reconstruction.compare_metrics(metrics=["mse", "mae"])
+    populations = analysis.reconstruction.plot_selected_spectra_comparison(
+        metric="mse", selection="worst", count=2
+    )
+    spatial_figure, spatial_axes = analysis.reconstruction.plot_error_images(
+        "mse", target_field="molecule"
+    )
+
+    assert len(records) == 4
+    assert set(populations) == {"baseline", "candidate"}
+    assert spatial_axes.shape == (3,)
+    for figure, axes in populations.values():
+        assert axes.shape == (4, 2)
+        plt.close(figure)
+    plt.close(spatial_figure)
+
+
+def test_ion_grid_and_multilabel_latent_views_use_prepared_results() -> None:
+    analysis = AutoencoderAnalysis(_wrapper())
+    analysis.prepare()
+
+    ion_figure, ion_axes = analysis.reconstruction.plot_ion_images(
+        101.0, target_field="molecule"
+    )
+    projection_figure, projection_axes = analysis.latent.plot_target_projection(
+        "molecule",
+        method="pca",
+        mode="panels",
+        head_name="molecule_head",
+    )
+
+    assert ion_axes.shape == (2, 3)
+    assert projection_axes.shape == (1, 2)
+    plt.close(ion_figure)
+    plt.close(projection_figure)
+
+
+def test_binning_analysis_compares_all_three_transform_paths() -> None:
+    analysis = AutoencoderAnalysis(_wrapper())
+    results = analysis.binning.spectrum_metrics(
+        spectrum_ids=[0, 1], include_masserstein=False
+    )
+    summaries = analysis.binning.metric_summaries(
+        spectrum_ids=[0, 1], include_masserstein=False
+    )
+    feature_profile = analysis.binning.feature_distribution(
+        "inverse_original", spectrum_ids=[0, 1]
+    )
+
+    assert set(results) == {
+        "forward_original",
+        "inverse_forward",
+        "inverse_original",
+    }
+    assert all(set(records) == {0, 1} for records in results.values())
+    assert len(summaries) == 15
+    assert feature_profile["mean"].shape == (3,)
+
+
+def test_masserstein_analysis_reuses_per_spectrum_training_criterion() -> None:
+    inputs = np.asarray([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    reconstructions = np.asarray([[0.0, 0.8, 0.2], [0.0, 0.1, 0.9]], dtype=np.float32)
+    values = masserstein_distances(
+        inputs,
+        reconstructions,
+        np.asarray([100.0, 101.0, 102.0]),
+        batch_size=2,
+        criterion_options={"sinkhorn_iterations": 5},
+    )
+
+    assert values.shape == (2,)
+    assert np.isfinite(values).all()
+    assert np.all(values >= 0.0)

@@ -143,6 +143,19 @@ def test_metaspace_dataframe_index_is_preserved_as_molecule_identity() -> None:
     ]
 
 
+def test_metaspace_available_values_are_derived_from_dataset_metadata() -> None:
+    """Explorer choices include values currently present in METASPACE metadata."""
+    client = FakeMetaspaceClient()
+    source = MetaspaceDatasetSource(client=client)
+
+    values = source.get_available_values("organism")
+
+    assert values == [{"value": "mouse", "label": "mouse", "count": 1}]
+    assert client.filters == {"status": "FINISHED"}
+    with pytest.raises(ValueError, match="free text or quantitative"):
+        source.get_available_values("molecule")
+
+
 def test_download_reports_metaspace_access_message(tmp_path: Path) -> None:
     """Missing signed links produce the actionable METASPACE response."""
     class RestrictedDataset(FakeMetaspaceDataset):

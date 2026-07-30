@@ -97,8 +97,16 @@ class PrideDatasetSource(DatasetSource):
             "single_value_metadata_fields": {"type": "list[string]"},
             "max_pair_size_bytes": {"type": "integer | null"},
             "exclude_dataset_ids": {"type": "list[string]"},
-            "require_annotation_source": {"type": "boolean", "required": True},
-            "require_checksum": {"type": "boolean", "required": True},
+            "require_annotation_source": {
+                "type": "boolean",
+                "required": True,
+                "choices": [True, False],
+            },
+            "require_checksum": {
+                "type": "boolean",
+                "required": True,
+                "choices": [True, False],
+            },
             "page_size": {"type": "positive integer", "default": 100},
             "max_projects": {"type": "positive integer", "default": 500},
         }
