@@ -24,11 +24,24 @@ class FakeDatasetSource(DatasetSource):
     def __init__(self, fixture_path: Path) -> None:
         self.fixture_path = fixture_path
         self.seen_filters: Dict[str, Any] = {}
+        self._accepted: List[Dict[str, Any]] = []
         self._config = {}
 
-    def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    def get_available_filters(self) -> Dict[str, Any]:
+        return {"organism": {"type": "string"}}
+
+    def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
         self.seen_filters = dict(filters)
-        return [{"dataset_id": "one", "name": "One", "metadata": dict(filters)}]
+        self._accepted = [
+            {"dataset_id": "one", "name": "One", "metadata": dict(filters)}
+        ]
+        return self.get_accepted_records()
+
+    def get_accepted_records(self) -> List[Dict[str, Any]]:
+        return [dict(record) for record in self._accepted]
+
+    def get_rejected_records(self) -> List[Dict[str, Any]]:
+        return []
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         return {"dataset_id": dataset_id, "name": "One", "metadata": {"condition": "healthy"}}

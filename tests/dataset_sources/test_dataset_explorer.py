@@ -21,13 +21,14 @@ class FakeExplorationSource(DatasetSource):
     def __init__(self) -> None:
         self.seen_filters: Dict[str, Any] = {}
         self._config = {}
+        self._accepted: List[Dict[str, Any]] = []
 
-    def available_filters(self) -> Dict[str, Any]:
+    def get_available_filters(self) -> Dict[str, Any]:
         return {"organisms": {"type": "list"}}
 
-    def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
         self.seen_filters = dict(filters)
-        return [
+        self._accepted = [
             {
                 "dataset_id": "one",
                 "name": "One",
@@ -48,8 +49,12 @@ class FakeExplorationSource(DatasetSource):
                 "metadata": {"total_size_bytes": 2000},
             },
         ]
+        return self.get_accepted_records()
 
-    def get_search_diagnostics(self) -> List[Dict[str, Any]]:
+    def get_accepted_records(self) -> List[Dict[str, Any]]:
+        return [dict(record) for record in self._accepted]
+
+    def get_rejected_records(self) -> List[Dict[str, Any]]:
         return [
             {
                 "project_accession": "PXD000002",
@@ -83,11 +88,12 @@ def test_explorer_search_exclude_and_export_use_query_configuration(
         "exclude_dataset_ids": ["already-excluded"],
     }
 
-    results = explorer.search(filters)
+    results = explorer.filter(filters)
     explorer.exclude("two")
     output = explorer.export_config(tmp_path / "filters.json")
 
     assert source.seen_filters == {"organisms": ["Mus musculus"]}
+    assert explorer.accepted()["dataset_id"].tolist() == ["one"]
     assert results.loc[0, "organisms"] == "Mus musculus"
     assert results.loc[0, "organism_parts"] == "Urinary bladder"
     assert explorer.results()["dataset_id"].tolist() == ["one"]
@@ -103,7 +109,7 @@ def test_explorer_exposes_filter_help_and_rejection_links() -> None:
     explorer = DatasetExplorer(FakeExplorationSource())
     explorer.search({})
 
-    assert explorer.available_filters() == {"organisms": {"type": "list"}}
+    assert explorer.get_available_filters() == {"organisms": {"type": "list"}}
     assert explorer.rejected().loc[0, "reason"] == "unsupported annotation format"
     assert explorer.rejected().loc[0, "project_url"].endswith("PXD000002")
 
@@ -141,7 +147,11 @@ def test_explorer_supports_metaspace_filters_and_metadata() -> None:
     results = explorer.search({"organism": "Mus musculus", "polarity": "Positive"})
 
     assert explorer.available_filters()["polarity"]["type"] == "Positive | Negative"
-    assert client.filters == {"organism": "Mus musculus", "polarity": "Positive"}
+    assert client.filters == {
+        "organism": "Mus musculus",
+        "polarity": "Positive",
+        "status": "FINISHED",
+    }
     assert results.loc[0, "source"] == "metaspace"
     assert results.loc[0, "organisms"] == "Mouse"
     assert results.loc[0, "organism_parts"] == "Urinary bladder"

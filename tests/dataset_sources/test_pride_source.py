@@ -178,7 +178,7 @@ def test_ambiguous_biological_metadata_rejects_whole_project() -> None:
 
 def test_pride_source_documents_explorer_filters() -> None:
     """The notebook explorer can display provider filter capabilities."""
-    filters = PrideDatasetSource.available_filters()
+    filters = PrideDatasetSource().get_available_filters()
 
     assert filters["organism_parts"]["api_field"] == "organismsPart"
     assert filters["require_annotation_source"]["required"] is True
