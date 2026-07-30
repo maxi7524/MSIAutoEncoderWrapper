@@ -45,19 +45,13 @@ class DatasetExplorer:
         """Return a copy of the current query filters."""
         return dict(self._filters)
 
+    def get_available_filters(self) -> Dict[str, Any]:
+        """Return the selected source's complete filter schema."""
+        return dict(self.source.get_available_filters())
+
     def available_filters(self) -> Dict[str, Any]:
-        """Return provider filter documentation when exposed by the adapter."""
-        provider_method = getattr(self.source, "available_filters", None)
-        if callable(provider_method):
-            return dict(provider_method())
-        return {
-            "native_filters": {
-                "type": "mapping",
-                "description": (
-                    f"Native filters accepted by the '{self.source.source_name}' source."
-                ),
-            }
-        }
+        """Compatibility alias for :meth:`get_available_filters`."""
+        return self.get_available_filters()
 
     def set_filters(
         self,
@@ -94,7 +88,8 @@ class DatasetExplorer:
         configured_exclusions = {
             str(value) for value in provider_filters.pop("exclude_dataset_ids", ())
         }
-        discovered = self.source.search_datasets(provider_filters)
+        self.source.filter(provider_filters)
+        discovered = self.source.get_accepted_records()
         self._records = []
         for record in discovered:
             validate_source_record(record)
@@ -109,6 +104,17 @@ class DatasetExplorer:
         )
         return self.results()
 
+    def filter(
+        self,
+        filters: Optional[Mapping[str, Any]] = None,
+    ) -> pd.DataFrame:
+        """Compatibility-friendly filtering entry point for notebooks."""
+        return self.search(filters)
+
+    def accepted(self, *, include_excluded: bool = False) -> pd.DataFrame:
+        """Return accepted records from the most recent filtering call."""
+        return self.results(include_excluded=include_excluded)
+
     def results(self, *, include_excluded: bool = False) -> pd.DataFrame:
         """Return accepted records, optionally including manually excluded IDs."""
         rows = [
@@ -120,9 +126,7 @@ class DatasetExplorer:
 
     def rejected(self) -> pd.DataFrame:
         """Return provider diagnostics for records rejected during discovery."""
-        provider_method = getattr(self.source, "get_search_diagnostics", None)
-        diagnostics = list(provider_method()) if callable(provider_method) else []
-        return pd.DataFrame(diagnostics)
+        return pd.DataFrame(self.source.get_rejected_records())
 
     def exclude(self, dataset_ids: str | Iterable[str]) -> pd.DataFrame:
         """Exclude one or more reviewed dataset IDs from exported filters.
@@ -180,15 +184,26 @@ _RESULT_COLUMNS = [
     "project_url",
     "organisms",
     "organism_parts",
+    "condition",
+    "growth_conditions",
     "diseases",
     "instruments",
+    "submitter",
+    "group",
+    "projects",
     "total_size_bytes",
     "download_size_bytes",
     "annotation_status",
     "polarity",
     "processing_status",
     "image_size",
+    "pixel_count",
+    "has_optical_image",
     "databases",
+    "annotation_count",
+    "molecule_count",
+    "unique_molecule_count",
+    "unique_molecules",
     "excluded",
 ]
 
@@ -218,25 +233,43 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
                 metadata.get(
                     "organism_parts",
                     metadata.get(
-                        "organismPart",
+                        "organism_part",
                         metadata.get(
-                            "tissue", sample_information.get("Organism_Part")
+                            "organismPart",
+                            metadata.get(
+                                "tissue", sample_information.get("Organism_Part")
+                            ),
                         ),
                     ),
                 ),
             )
         ),
+        "condition": metadata.get(
+            "condition", sample_information.get("Condition")
+        ),
+        "growth_conditions": metadata.get(
+            "growth_conditions", sample_information.get("Sample_Growth_Conditions")
+        ),
         "diseases": _names(project.get("diseases", metadata.get("diseases"))),
         "instruments": _names(
             project.get("instruments", metadata.get("instruments"))
         ),
+        "submitter": _display_identity(metadata.get("submitter")),
+        "group": _display_identity(metadata.get("group")),
+        "projects": _names(metadata.get("projects")),
         "total_size_bytes": metadata.get("total_size_bytes"),
         "download_size_bytes": metadata.get("download_size_bytes"),
         "annotation_status": metadata.get("annotation_status"),
         "polarity": metadata.get("polarity"),
         "processing_status": metadata.get("status"),
         "image_size": _display_mapping(metadata.get("image_size")),
+        "pixel_count": metadata.get("pixel_count"),
+        "has_optical_image": metadata.get("has_optical_image"),
         "databases": _database_names(metadata.get("databases")),
+        "annotation_count": metadata.get("annotation_count"),
+        "molecule_count": metadata.get("molecule_count"),
+        "unique_molecule_count": metadata.get("unique_molecule_count"),
+        "unique_molecules": ", ".join(metadata.get("unique_molecules", [])),
         "excluded": excluded,
     }
 
@@ -249,6 +282,12 @@ def _display_mapping(value: Any) -> str:
     if not isinstance(value, Mapping):
         return ""
     return ", ".join(f"{key}={item}" for key, item in value.items())
+
+
+def _display_identity(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    return str(value.get("name", value.get("id", "")))
 
 
 def _database_names(value: Any) -> str:
