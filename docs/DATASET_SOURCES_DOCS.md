@@ -226,19 +226,28 @@ only if the original source files must also remain in the workspace.
 
 ### Query filter configuration
 
-`metaspace_filters.json` is a JSON object passed directly to the official
-METASPACE `SMInstance.datasets(...)` method. Example:
+`metaspace_filters.json` combines METASPACE GraphQL filters with local aggregate
+constraints. Example:
 
 ```json
 {
-  "organism": "Homo sapiens",
-  "polarity": "Positive"
+  "organism": "Mouse",
+  "organism_part": "Liver",
+  "condition": "Wild type",
+  "polarity": "Negative",
+  "annotation_fdr": 0.1,
+  "min_annotation_count": 20,
+  "include_molecule_stats": true,
+  "min_unique_molecule_count": 5
 }
 ```
 
-These are database query filters. They decide which external dataset records
-enter the selection. Unsupported keys are allowed to fail visibly in the
-METASPACE client; the library does not silently reinterpret them.
+Provider-side fields include dataset name/ID, group, project, submitter,
+molecule, polarity, organism, organism part, condition, growth conditions,
+analyzer, ionisation source, MALDI matrix, and processing status. Local fields
+include annotation and molecule count ranges, unique-molecule count,
+optical-image presence, and explicit dataset exclusions. Annotation statistics
+are queried as metadata without downloading ion images or MSI binaries.
 
 Do not use query filters to define final training classes. During the initial
 functional test, query broadly enough to obtain three or four suitable images,

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from collections import Counter, defaultdict
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import numpy as np
 import requests
@@ -47,6 +48,8 @@ class MetaspaceDatasetSource(DatasetSource):
     ) -> None:
         self._client_options = dict(client_options or {})
         self._client = client
+        self._accepted_records: List[Dict[str, Any]] = []
+        self._rejected_records: List[Dict[str, Any]] = []
         self._config = {
             "client_options": {
                 key: "***" if key in {"api_key", "password"} else value
@@ -55,24 +58,51 @@ class MetaspaceDatasetSource(DatasetSource):
         }
 
     @staticmethod
-    def available_filters() -> Dict[str, Any]:
+    def get_available_filters() -> Dict[str, Any]:
         """Return notebook-friendly documentation for METASPACE filters."""
         return {
-            "nameMask": {"type": "string", "description": "Dataset name search."},
-            "idMask": {"type": "string | list[string]"},
-            "submitter_id": {"type": "string"},
-            "group_id": {"type": "string"},
-            "project_id": {"type": "string"},
-            "polarity": {"type": "Positive | Negative"},
-            "ionisation_source": {"type": "string"},
-            "analyzer_type": {"type": "string"},
-            "maldi_matrix": {"type": "string"},
-            "organism": {"type": "string"},
+            "name": {"type": "string", "api_field": "nameMask"},
+            "dataset_ids": {"type": "string | list[string]", "api_field": "idMask"},
+            "submitter_id": {"type": "string", "api_field": "submitter"},
+            "group_id": {"type": "string", "api_field": "group"},
+            "project_id": {"type": "string", "api_field": "project"},
+            "molecule": {
+                "type": "string",
+                "api_field": "hasAnnotationMatching.compoundQuery",
+            },
+            "polarity": {"type": "Positive | Negative", "api_field": "polarity"},
+            "organism": {"type": "string", "api_field": "organism"},
+            "organism_part": {"type": "string", "api_field": "organismPart"},
+            "condition": {"type": "string", "api_field": "condition"},
+            "growth_conditions": {"type": "string", "api_field": "growthConditions"},
+            "analyzer_type": {"type": "string", "api_field": "analyzerType"},
+            "ionisation_source": {"type": "string", "api_field": "ionisationSource"},
+            "maldi_matrix": {"type": "string", "api_field": "maldiMatrix"},
+            "has_optical_image": {
+                "type": "boolean",
+                "local": True,
+                "description": "Applied to the optical-image field returned by GraphQL.",
+            },
+            "status": {"type": "string", "default": "FINISHED"},
+            "annotation_fdr": {"type": "float", "default": 0.1},
+            "min_annotation_count": {"type": "integer | null", "local": True},
+            "max_annotation_count": {"type": "integer | null", "local": True},
+            "include_molecule_stats": {"type": "boolean", "default": False},
+            "min_molecule_count": {"type": "integer | null", "local": True},
+            "min_unique_molecule_count": {"type": "integer | null", "local": True},
             "exclude_dataset_ids": {
                 "type": "list[string]",
                 "description": "Local exclusions applied after provider discovery.",
             },
         }
+
+    def get_accepted_records(self) -> List[Dict[str, Any]]:
+        """Return records accepted by the most recent filtering call."""
+        return [dict(record) for record in self._accepted_records]
+
+    def get_rejected_records(self) -> List[Dict[str, Any]]:
+        """Return records rejected by local quantitative filters."""
+        return [dict(record) for record in self._rejected_records]
 
     @property
     def client(self) -> Any:
@@ -94,12 +124,27 @@ class MetaspaceDatasetSource(DatasetSource):
             self._client = SMInstance(**metaspace_client_options(self._client_options))
         return self._client
 
-    def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
-        """Return METASPACE datasets matching native dataset filters."""
-        datasets = self.client.datasets(**dict(filters))
+    def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+        """Filter METASPACE datasets and attach review-oriented statistics."""
+        native_filters, local_filters = _split_filters(filters)
+        datasets = self.client.datasets(**native_filters)
         records = [self._dataset_record(dataset) for dataset in datasets]
-        logger.info("METASPACE discovery returned %s datasets", len(records))
-        return records
+        fdr = float(local_filters.get("annotation_fdr", 0.1))
+        _attach_annotation_counts(self.client, records, fdr)
+        if local_filters.get("include_molecule_stats") or any(
+            local_filters.get(key) is not None
+            for key in ("min_molecule_count", "min_unique_molecule_count")
+        ):
+            _attach_molecule_statistics(self.client, records, fdr)
+        self._accepted_records, self._rejected_records = _apply_local_filters(
+            records, local_filters
+        )
+        logger.info(
+            "METASPACE discovery accepted %s datasets and rejected %s datasets",
+            len(self._accepted_records),
+            len(self._rejected_records),
+        )
+        return self.get_accepted_records()
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         """Return source metadata and stable summary fields for one dataset."""
@@ -205,6 +250,8 @@ class MetaspaceDatasetSource(DatasetSource):
     @staticmethod
     def _dataset_record(dataset: Any) -> Dict[str, Any]:
         metadata = _object_mapping(getattr(dataset, "metadata", {}))
+        provider = _object_mapping(getattr(dataset, "_info", {}))
+        sample_information = _object_mapping(metadata.get("Sample_Information"))
         database_details = [
             {
                 "name": getattr(database, "name", None),
@@ -219,9 +266,29 @@ class MetaspaceDatasetSource(DatasetSource):
             "metadata": {
                 **metadata,
                 "project_url": f"https://metaspace2020.eu/dataset/{dataset.id}",
+                "provider_metadata": provider,
+                "submitter": provider.get("submitter"),
+                "group": provider.get("group"),
+                "projects": provider.get("projects", []),
+                "upload_datetime": provider.get("uploadDT"),
                 "polarity": getattr(dataset, "polarity", None),
                 "status": getattr(dataset, "status", None),
                 "image_size": _object_mapping(getattr(dataset, "image_size", {})),
+                "pixel_count": _pixel_count(provider.get("acquisitionGeometry")),
+                "condition": provider.get("condition")
+                or metadata.get("condition")
+                or sample_information.get("Condition"),
+                "growth_conditions": provider.get("growthConditions")
+                or sample_information.get("Sample_Growth_Conditions"),
+                "organism": provider.get("organism")
+                or metadata.get("organism")
+                or sample_information.get("Organism"),
+                "organism_part": provider.get("organismPart")
+                or sample_information.get("Organism_Part"),
+                "ionisation_source": provider.get("ionisationSource"),
+                "analyzer": provider.get("analyzer"),
+                "maldi_matrix": provider.get("maldiMatrix"),
+                "has_optical_image": provider.get("opticalImage"),
                 "databases": database_details,
             },
         }
@@ -239,6 +306,215 @@ def _object_mapping(value: Any) -> Dict[str, Any]:
             if not key.startswith("_")
         }
     return {"value": value} if value is not None else {}
+
+
+_METASPACE_FILTER_ALIASES = {
+    "name": "nameMask",
+    "dataset_ids": "idMask",
+    "organism_part": "organismPart",
+    "growth_conditions": "growthConditions",
+}
+_LOCAL_FILTERS = {
+    "annotation_fdr",
+    "include_molecule_stats",
+    "min_annotation_count",
+    "max_annotation_count",
+    "min_molecule_count",
+    "min_unique_molecule_count",
+    "has_optical_image",
+}
+
+
+def _split_filters(filters: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Separate METASPACE GraphQL filters from local aggregate constraints."""
+    options = dict(filters)
+    local = {
+        key: options.pop(key)
+        for key in list(options)
+        if key in _LOCAL_FILTERS
+    }
+    fdr = float(local.get("annotation_fdr", 0.1))
+    molecule = options.pop("molecule", None)
+    native = {
+        _METASPACE_FILTER_ALIASES.get(key, key): value
+        for key, value in options.items()
+        if value is not None
+    }
+    native.setdefault("status", "FINISHED")
+    if molecule:
+        native["hasAnnotationMatching"] = {
+            "compoundQuery": str(molecule),
+            "fdrLevel": fdr,
+        }
+    local.setdefault("annotation_fdr", fdr)
+    return native, local
+
+
+def _attach_annotation_counts(
+    client: Any,
+    records: List[Dict[str, Any]],
+    fdr: float,
+) -> None:
+    """Attach aggregate annotation counts with one paginated GraphQL query."""
+    graph = getattr(client, "_gqclient", None)
+    if graph is None or not hasattr(graph, "listQuery") or not records:
+        return
+    query = """
+        query datasetStatistics(
+            $filter: DatasetFilter, $fdrLevels: [Int!]!,
+            $offset: Int, $limit: Int
+        ) {
+          allDatasets(filter: $filter, offset: $offset, limit: $limit) {
+            id
+            opticalImage
+            annotationCounts(inpFdrLvls: $fdrLevels) {
+              databaseId dbName dbVersion counts { level n } isTargeted total
+            }
+          }
+        }
+    """
+    summaries: List[Dict[str, Any]] = []
+    for batch in _batches(records, 100):
+        dataset_ids = "|".join(str(record["dataset_id"]) for record in batch)
+        summaries.extend(
+            graph.listQuery(
+                "allDatasets",
+                query,
+                {"filter": {"ids": dataset_ids}, "fdrLevels": [round(fdr * 100)]},
+            )
+        )
+    by_id = {str(summary["id"]): summary for summary in summaries}
+    for record in records:
+        metadata = record["metadata"]
+        summary = by_id.get(str(record["dataset_id"]), {})
+        database_counts = list(summary.get("annotationCounts") or [])
+        for count in database_counts:
+            values = list(count.get("counts") or [])
+            count["count_at_fdr"] = int(values[0].get("n", 0)) if values else 0
+        metadata["annotation_fdr"] = fdr
+        metadata["annotation_counts_by_database"] = database_counts
+        metadata["annotation_count"] = sum(
+            int(count["count_at_fdr"]) for count in database_counts
+        )
+        metadata["has_optical_image"] = bool(summary.get("opticalImage"))
+
+
+def _attach_molecule_statistics(
+    client: Any,
+    records: List[Dict[str, Any]],
+    fdr: float,
+) -> None:
+    """Attach per-dataset molecule counts without downloading ion images."""
+    graph = getattr(client, "_gqclient", None)
+    if graph is None or not hasattr(graph, "getAnnotations") or not records:
+        return
+    annotations: List[Dict[str, Any]] = []
+    for batch in _batches(records, 100):
+        dataset_ids = "|".join(str(record["dataset_id"]) for record in batch)
+        annotations.extend(
+            graph.getAnnotations(
+                annotationFilter={"fdrLevel": fdr},
+                datasetFilter={"ids": dataset_ids},
+            )
+        )
+    identities: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)
+    for annotation in annotations:
+        dataset = _object_mapping(annotation.get("dataset"))
+        dataset_id = str(dataset.get("id", ""))
+        formula = str(annotation.get("sumFormula", ""))
+        adduct = str(annotation.get("adduct", ""))
+        if dataset_id and formula:
+            identities[dataset_id].add((formula, adduct))
+    occurrence = Counter(
+        identity for values in identities.values() for identity in values
+    )
+    for record in records:
+        values = identities[str(record["dataset_id"])]
+        unique = sorted(identity for identity in values if occurrence[identity] == 1)
+        record["metadata"].update(
+            {
+                "molecule_count": len(values),
+                "unique_molecule_count": len(unique),
+                "unique_molecules": [f"{formula}{adduct}" for formula, adduct in unique],
+            }
+        )
+
+
+def _apply_local_filters(
+    records: List[Dict[str, Any]],
+    filters: Mapping[str, Any],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Apply quantitative constraints and retain explicit rejection reasons."""
+    constraints = (
+        ("min_annotation_count", "annotation_count", "at least", lambda a, b: a >= b),
+        ("max_annotation_count", "annotation_count", "at most", lambda a, b: a <= b),
+        ("min_molecule_count", "molecule_count", "at least", lambda a, b: a >= b),
+        (
+            "min_unique_molecule_count",
+            "unique_molecule_count",
+            "at least",
+            lambda a, b: a >= b,
+        ),
+    )
+    accepted: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for record in records:
+        reason = None
+        metadata = record["metadata"]
+        expected_optical = filters.get("has_optical_image")
+        if (
+            expected_optical is not None
+            and metadata.get("has_optical_image") != bool(expected_optical)
+        ):
+            reason = (
+                "has_optical_image must be "
+                f"{bool(expected_optical)}; observed {metadata.get('has_optical_image')}"
+            )
+        for option, field, comparison, predicate in constraints:
+            if reason is not None:
+                break
+            limit = filters.get(option)
+            if limit is None:
+                continue
+            value = metadata.get(field)
+            if value is None or not predicate(int(value), int(limit)):
+                reason = f"{field} must be {comparison} {limit}; observed {value}"
+                break
+        if reason is None:
+            accepted.append(record)
+        else:
+            rejected.append(
+                {
+                    "dataset_id": record["dataset_id"],
+                    "name": record["name"],
+                    "reason": reason,
+                    "project_url": metadata.get("project_url"),
+                }
+            )
+    return accepted, rejected
+
+
+def _batches(values: List[Dict[str, Any]], size: int) -> Iterable[List[Dict[str, Any]]]:
+    """Yield bounded record batches for METASPACE ID filters."""
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
+
+
+def _pixel_count(acquisition_geometry: Any) -> Optional[int]:
+    """Read the number of acquired pixels from METASPACE geometry JSON."""
+    if not acquisition_geometry:
+        return None
+    try:
+        import json
+
+        geometry = (
+            json.loads(acquisition_geometry)
+            if isinstance(acquisition_geometry, str)
+            else acquisition_geometry
+        )
+        return int(geometry.get("pixel_count"))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _records_from_table(value: Any) -> List[Dict[str, Any]]:

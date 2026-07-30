@@ -15,8 +15,32 @@ class DatasetSource(ConfigurableComponent, ABC):
     source_name: str
 
     @abstractmethod
+    def get_available_filters(self) -> Dict[str, Any]:
+        """Return the source's supported provider and local filter schema."""
+
+    @abstractmethod
+    def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+        """Execute filtering and return complete accepted metadata records."""
+
+    @abstractmethod
+    def get_accepted_records(self) -> List[Dict[str, Any]]:
+        """Return records accepted by the most recent filtering call."""
+
+    @abstractmethod
+    def get_rejected_records(self) -> List[Dict[str, Any]]:
+        """Return records rejected by the most recent filtering call."""
+
+    def available_filters(self) -> Dict[str, Any]:
+        """Compatibility alias for :meth:`get_available_filters`."""
+        return self.get_available_filters()
+
     def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
-        """Return complete metadata records matching provider-side filters."""
+        """Compatibility alias for :meth:`filter`."""
+        return self.filter(filters)
+
+    def get_search_diagnostics(self) -> List[Dict[str, Any]]:
+        """Compatibility alias for :meth:`get_rejected_records`."""
+        return self.get_rejected_records()
 
     @abstractmethod
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:

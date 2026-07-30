@@ -26,7 +26,7 @@ def query_to_selection(
     }
     records = [
         record
-        for record in source.search_datasets(provider_filters)
+        for record in source.filter(provider_filters)
         if str(record.get("dataset_id")) not in excluded_ids
     ]
     selected: List[Dict[str, Any]] = []

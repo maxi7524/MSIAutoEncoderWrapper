@@ -68,9 +68,10 @@ class PrideDatasetSource(DatasetSource):
         self._download_directories: Dict[str, Path] = {}
         self._config: Dict[str, Any] = {}
         self._search_diagnostics: List[Dict[str, Any]] = []
+        self._accepted_records: List[Dict[str, Any]] = []
 
     @staticmethod
-    def available_filters() -> Dict[str, Any]:
+    def get_available_filters() -> Dict[str, Any]:
         """Return notebook-friendly documentation for supported filters."""
         return {
             "keyword": {"type": "string", "default": "imzML"},
@@ -102,9 +103,13 @@ class PrideDatasetSource(DatasetSource):
             "max_projects": {"type": "positive integer", "default": 500},
         }
 
-    def get_search_diagnostics(self) -> List[Dict[str, Any]]:
+    def get_rejected_records(self) -> List[Dict[str, Any]]:
         """Return records rejected by the most recent discovery call."""
         return [dict(record) for record in self._search_diagnostics]
+
+    def get_accepted_records(self) -> List[Dict[str, Any]]:
+        """Return image pairs accepted by the most recent filtering call."""
+        return [dict(record) for record in self._accepted_records]
 
     @property
     def project_client(self) -> Any:
@@ -139,7 +144,7 @@ class PrideDatasetSource(DatasetSource):
             self._file_provider = PrideProvider()
         return self._file_provider
 
-    def search_datasets(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
         """Return complete annotated PRIDE image pairs matching all filters.
 
         :param filters: PRIDE project, file, and metadata filter configuration.
@@ -192,7 +197,8 @@ class PrideDatasetSource(DatasetSource):
             len(records),
             rejected,
         )
-        return records
+        self._accepted_records = records
+        return self.get_accepted_records()
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         """Return complete project and file metadata for one PRIDE image pair."""
