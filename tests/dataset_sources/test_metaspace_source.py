@@ -49,6 +49,7 @@ class FakeMetaspaceClient:
     def __init__(self) -> None:
         self.value = FakeMetaspaceDataset()
         self.filters: Dict[str, Any] = {}
+        self._gqclient = FakeGraphQLClient()
 
     def datasets(self, **filters: Any) -> List[FakeMetaspaceDataset]:
         self.filters = filters
@@ -59,6 +60,44 @@ class FakeMetaspaceClient:
         return self.value
 
 
+class FakeGraphQLClient:
+    """Return aggregate metadata without ion images or binary downloads."""
+
+    def listQuery(
+        self,
+        field_name: str,
+        query: str,
+        variables: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        assert field_name == "allDatasets"
+        assert variables["fdrLevels"] == [10]
+        return [
+            {
+                "id": "dataset-a",
+                "opticalImage": "optical-image-id",
+                "annotationCounts": [
+                    {
+                        "databaseId": 1,
+                        "dbName": "HMDB",
+                        "dbVersion": "v4",
+                        "counts": [{"level": 10, "n": 12}],
+                        "isTargeted": False,
+                        "total": 20,
+                    }
+                ],
+            }
+        ]
+
+    def getAnnotations(self, **kwargs: Any) -> List[Dict[str, Any]]:
+        return [
+            {
+                "dataset": {"id": "dataset-a"},
+                "sumFormula": "C6H12O6",
+                "adduct": "+H",
+            }
+        ]
+
+
 def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     tmp_path: Path,
 ) -> None:
@@ -66,15 +105,24 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     client = FakeMetaspaceClient()
     source = MetaspaceDatasetSource(client=client)
 
-    records = source.search_datasets({"organism": "Mus musculus"})
+    records = source.filter(
+        {"organism": "Mus musculus", "include_molecule_stats": True}
+    )
     annotations = source.get_annotations("dataset-a")
     destination = source.download_dataset("dataset-a", tmp_path / "dataset-a")
 
-    assert client.filters == {"organism": "Mus musculus"}
+    assert client.filters == {
+        "organism": "Mus musculus",
+        "status": "FINISHED",
+    }
     assert records[0]["metadata"]["condition"] == "healthy"
     assert records[0]["metadata"]["databases"] == [
         {"name": "HMDB", "version": "v4", "id": 1}
     ]
+    assert records[0]["metadata"]["annotation_count"] == 12
+    assert records[0]["metadata"]["molecule_count"] == 1
+    assert records[0]["metadata"]["unique_molecule_count"] == 1
+    assert records[0]["metadata"]["has_optical_image"] is True
     assert annotations[0]["database_name"] == "HMDB"
     assert annotations[0]["database_version"] == "v4"
     assert client.value.result_calls == [{"database": ("HMDB", "v4"), "fdr": 0.5}]
