@@ -53,6 +53,18 @@ class DatasetExplorer:
         """Compatibility alias for :meth:`get_available_filters`."""
         return self.get_available_filters()
 
+    def get_available_values(self, filter_key: str) -> pd.DataFrame:
+        """Return selectable values for one source filter.
+
+        :param filter_key: Key returned by :meth:`get_available_filters`.
+        :type filter_key: str
+        :return: Values, display labels, and dataset occurrence counts.
+        :rtype: pandas.DataFrame
+        :raises ValueError: If the key is unknown or is not enumerable.
+        """
+        values = self.source.get_available_values(filter_key)
+        return pd.DataFrame(values, columns=["value", "label", "count"])
+
     def set_filters(
         self,
         filters: Optional[Mapping[str, Any]] = None,

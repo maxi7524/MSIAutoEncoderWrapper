@@ -50,6 +50,7 @@ class MetaspaceDatasetSource(DatasetSource):
         self._client = client
         self._accepted_records: List[Dict[str, Any]] = []
         self._rejected_records: List[Dict[str, Any]] = []
+        self._available_values_cache: Optional[List[Dict[str, Any]]] = None
         self._config = {
             "client_options": {
                 key: "***" if key in {"api_key", "password"} else value
@@ -70,7 +71,11 @@ class MetaspaceDatasetSource(DatasetSource):
                 "type": "string",
                 "api_field": "hasAnnotationMatching.compoundQuery",
             },
-            "polarity": {"type": "Positive | Negative", "api_field": "polarity"},
+            "polarity": {
+                "type": "Positive | Negative",
+                "api_field": "polarity",
+                "choices": ["Positive", "Negative"],
+            },
             "organism": {"type": "string", "api_field": "organism"},
             "organism_part": {"type": "string", "api_field": "organismPart"},
             "condition": {"type": "string", "api_field": "condition"},
@@ -81,6 +86,7 @@ class MetaspaceDatasetSource(DatasetSource):
             "has_optical_image": {
                 "type": "boolean",
                 "local": True,
+                "choices": [True, False],
                 "description": "Applied to the optical-image field returned by GraphQL.",
             },
             "status": {"type": "string", "default": "FINISHED"},
@@ -95,6 +101,53 @@ class MetaspaceDatasetSource(DatasetSource):
                 "description": "Local exclusions applied after provider discovery.",
             },
         }
+
+    def get_available_values(self, filter_key: str) -> List[Dict[str, Any]]:
+        """Return values currently present in accessible METASPACE datasets.
+
+        :param filter_key: Enumerable key returned by
+            :meth:`get_available_filters`.
+        :type filter_key: str
+        :return: Choice records sorted by frequency and label.
+        :rtype: List[Dict[str, Any]]
+        :raises ValueError: If the filter is unknown or represents free text or
+            a quantitative constraint rather than a finite value collection.
+
+        The first call retrieves metadata for accessible finished datasets and
+        caches it on this source instance. No annotations, ion images, imzML,
+        or ibd files are downloaded.
+        """
+        schema = self.get_available_filters()
+        if filter_key not in schema:
+            raise ValueError(f"Unknown METASPACE filter '{filter_key}'.")
+        if filter_key == "has_optical_image":
+            return super().get_available_values(filter_key)
+        enumerable = {
+            "dataset_ids",
+            "submitter_id",
+            "group_id",
+            "project_id",
+            "polarity",
+            "organism",
+            "organism_part",
+            "condition",
+            "growth_conditions",
+            "analyzer_type",
+            "ionisation_source",
+            "maldi_matrix",
+            "status",
+        }
+        if filter_key not in enumerable:
+            raise ValueError(
+                f"METASPACE filter '{filter_key}' is free text or quantitative "
+                "and does not expose a finite value list."
+            )
+        if self._available_values_cache is None:
+            datasets = self.client.datasets(status="FINISHED")
+            self._available_values_cache = [
+                self._dataset_record(dataset) for dataset in datasets
+            ]
+        return _available_values(self._available_values_cache, filter_key)
 
     def get_accepted_records(self) -> List[Dict[str, Any]]:
         """Return records accepted by the most recent filtering call."""
@@ -306,6 +359,52 @@ def _object_mapping(value: Any) -> Dict[str, Any]:
             if not key.startswith("_")
         }
     return {"value": value} if value is not None else {}
+
+
+def _available_values(
+    records: List[Dict[str, Any]],
+    filter_key: str,
+) -> List[Dict[str, Any]]:
+    """Aggregate one METASPACE field into notebook-friendly choices."""
+    values: List[Tuple[Any, str]] = []
+    for record in records:
+        metadata = record["metadata"]
+        if filter_key == "dataset_ids":
+            values.append((record["dataset_id"], record["name"]))
+        elif filter_key in {"submitter_id", "group_id"}:
+            field = "submitter" if filter_key == "submitter_id" else "group"
+            identity = _object_mapping(metadata.get(field))
+            if identity.get("id"):
+                values.append(
+                    (identity["id"], str(identity.get("name", identity["id"])))
+                )
+        elif filter_key == "project_id":
+            for project in metadata.get("projects", []):
+                identity = _object_mapping(project)
+                if identity.get("id"):
+                    values.append(
+                        (
+                            identity["id"],
+                            str(identity.get("name", identity["id"])),
+                        )
+                    )
+        else:
+            field = {
+                "analyzer_type": "analyzer",
+            }.get(filter_key, filter_key)
+            value = metadata.get(field)
+            if filter_key == "analyzer_type":
+                value = _object_mapping(value).get("type")
+            if value not in {None, ""}:
+                values.append((value, str(value)))
+    counts = Counter(values)
+    return [
+        {"value": value, "label": label, "count": count}
+        for (value, label), count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0][1].casefold()),
+        )
+    ]
 
 
 _METASPACE_FILTER_ALIASES = {

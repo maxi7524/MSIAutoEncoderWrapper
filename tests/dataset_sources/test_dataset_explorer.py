@@ -24,7 +24,10 @@ class FakeExplorationSource(DatasetSource):
         self._accepted: List[Dict[str, Any]] = []
 
     def get_available_filters(self) -> Dict[str, Any]:
-        return {"organisms": {"type": "list"}}
+        return {
+            "organisms": {"type": "list"},
+            "verified": {"type": "boolean", "choices": [True, False]},
+        }
 
     def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
         self.seen_filters = dict(filters)
@@ -109,7 +112,11 @@ def test_explorer_exposes_filter_help_and_rejection_links() -> None:
     explorer = DatasetExplorer(FakeExplorationSource())
     explorer.search({})
 
-    assert explorer.get_available_filters() == {"organisms": {"type": "list"}}
+    assert explorer.get_available_filters() == {
+        "organisms": {"type": "list"},
+        "verified": {"type": "boolean", "choices": [True, False]},
+    }
+    assert explorer.get_available_values("verified")["value"].tolist() == [True, False]
     assert explorer.rejected().loc[0, "reason"] == "unsupported annotation format"
     assert explorer.rejected().loc[0, "project_url"].endswith("PXD000002")
 
