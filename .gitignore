@@ -1,9 +1,11 @@
 # local files
 notes_to_apply.md
+.tmp
 *egg-info
 
 # data
 *data
+/assets/local/datasets/
 *.tar.gz
 *.tar
 *.zip
