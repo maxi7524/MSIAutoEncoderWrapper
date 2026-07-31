@@ -1,5 +1,7 @@
 """PRIDE Archive adapter backed by the official :mod:`pridepy` client."""
 
+#TODO - implement methods wihch are already in metasapce (cache, download and coutning values) - jak już to dodajemy to zróbmy to do końca
+
 from __future__ import annotations
 
 import csv

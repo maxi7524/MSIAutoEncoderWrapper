@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+import json
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import numpy as np
@@ -24,6 +25,10 @@ from ..source_manager import DatasetSourceManager
 logger = get_custom_logger(__name__)
 
 
+_CACHE_SCHEMA_VERSION = 1
+_AVAILABLE_DATASETS_CACHE_FILE = "available-datasets.json"
+
+
 @DatasetSourceManager.register_source("metaspace")
 class MetaspaceDatasetSource(DatasetSource):
     """Discover and download METASPACE datasets through ``SMInstance``.
@@ -34,6 +39,13 @@ class MetaspaceDatasetSource(DatasetSource):
     :param client_options: Options forwarded to ``SMInstance`` when a client is
         not supplied, for example ``api_key`` or ``config_path``.
     :type client_options: Mapping[str, Any] | None
+    :param cache_dir: Optional directory, resolved relative to the current
+        working directory, for the reusable METASPACE catalogue file. ``None``
+        keeps the catalogue only in memory and does not write to disk.
+    :type cache_dir: pathlib.Path | str | None
+    :param refresh_cache: Ignore an existing catalogue file, retrieve current
+        metadata from METASPACE, and replace the file when ``cache_dir`` is set.
+    :type refresh_cache: bool
 
     The external package is imported lazily, so the base library remains usable
     without METASPACE credentials or its optional client dependency.
@@ -45,18 +57,24 @@ class MetaspaceDatasetSource(DatasetSource):
         self,
         client: Optional[Any] = None,
         client_options: Optional[Mapping[str, Any]] = None,
+        cache_dir: Optional[Path | str] = None,
+        refresh_cache: bool = False,
     ) -> None:
         self._client_options = dict(client_options or {})
         self._client = client
         self._accepted_records: List[Dict[str, Any]] = []
         self._rejected_records: List[Dict[str, Any]] = []
-        self._available_values_cache: Optional[List[Dict[str, Any]]] = None
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else None
+        self._refresh_cache = refresh_cache
         self._config = {
             "client_options": {
                 key: "***" if key in {"api_key", "password"} else value
                 for key, value in self._client_options.items()
-            }
+            },
+            "cache_dir": str(self._cache_dir) if self._cache_dir else None,
+            "refresh_cache": refresh_cache,
         }
+        self._available_values_cache = self._load_available_datasets()
 
     @staticmethod
     def get_available_filters() -> Dict[str, Any]:
@@ -142,11 +160,6 @@ class MetaspaceDatasetSource(DatasetSource):
                 f"METASPACE filter '{filter_key}' is free text or quantitative "
                 "and does not expose a finite value list."
             )
-        if self._available_values_cache is None:
-            datasets = self.client.datasets(status="FINISHED")
-            self._available_values_cache = [
-                self._dataset_record(dataset) for dataset in datasets
-            ]
         return _available_values(self._available_values_cache, filter_key)
 
     def get_accepted_records(self) -> List[Dict[str, Any]]:
@@ -184,7 +197,7 @@ class MetaspaceDatasetSource(DatasetSource):
         records = [self._dataset_record(dataset) for dataset in datasets]
         fdr = float(local_filters.get("annotation_fdr", 0.1))
         _attach_annotation_counts(self.client, records, fdr)
-        if local_filters.get("include_molecule_stats") or any(
+        if bool(local_filters.get("include_molecule_stats")) or any(
             local_filters.get(key) is not None
             for key in ("min_molecule_count", "min_unique_molecule_count")
         ):
@@ -198,6 +211,51 @@ class MetaspaceDatasetSource(DatasetSource):
             len(self._rejected_records),
         )
         return self.get_accepted_records()
+
+    def _load_available_datasets(self) -> List[Dict[str, Any]]:
+        """Load the METASPACE catalogue into memory, optionally using disk."""
+        path = (
+            self._cache_dir / _AVAILABLE_DATASETS_CACHE_FILE
+            if self._cache_dir is not None
+            else None
+        )
+        if path is not None and path.is_file() and not self._refresh_cache:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if payload.get("schema_version") == _CACHE_SCHEMA_VERSION:
+                    records = payload.get("records")
+                    if isinstance(records, list):
+                        logger.info(
+                            "Loaded %s METASPACE catalogue records from %s",
+                            len(records),
+                            path,
+                        )
+                        return [dict(record) for record in records]
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+                logger.warning("Ignoring invalid METASPACE catalogue %s: %s", path, error)
+
+        datasets = self.client.datasets(status="FINISHED")
+        records = [self._dataset_record(dataset) for dataset in datasets]
+        logger.info("Loaded %s METASPACE catalogue records from API", len(records))
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "schema_version": _CACHE_SCHEMA_VERSION,
+                        "records": records,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+            logger.info("Saved METASPACE catalogue to %s", path)
+        return records
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         """Return source metadata and stable summary fields for one dataset."""
