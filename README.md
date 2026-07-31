@@ -28,7 +28,11 @@ The original implementation was refactored to use `m2aia` for improved data hand
 Here we provide commands to set up an environment with one of the following
 configurations:
 
-* `cpu` — installs the CPU-only PyTorch build.
+* `cpu` — installs the CPU-only PyTorch build (Linux and Windows).
+* `mps` — installs the CPU-only PyTorch build (macOS, both mps and other CPUs).
+   > REMARK: 
+   > It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
+
 * `cu118` — installs the PyTorch build for CUDA 11.8.
 
 ### System packages
@@ -79,10 +83,6 @@ or:
 # MPS: macOS with Apple Metal Performance Shaders, excludes m2aia
 uv sync --extra mps
 ```
-> REMARK: 
-> It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
-
-
 
 The environment is stored in `.venv`. Pass the selected configuration to
 `uv run` to keep the environment synchronized while executing commands:
@@ -131,9 +131,6 @@ For macOS with MPS, install the standard PyPI build of PyTorch:
 python -m pip install -e ".[mps]"
 ```
 
-> REMARK: 
-> It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
-
 #### venv manager
 
 Create a standard Python virtual environment:
@@ -162,9 +159,6 @@ For macOS with MPS, install the standard PyPI build of PyTorch:
 ```bash
 python -m pip install -e ".[mps]"
 ```
-
-> REMARK: 
-> It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
 
 Verify the selected PyTorch build:
 
