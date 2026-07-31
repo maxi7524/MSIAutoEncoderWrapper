@@ -54,17 +54,35 @@ and one configuration.
 Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then
 create and synchronize the project environment:
 
+To install all basic packages run:
+
 ```bash
-# CPU
+uv sync 
+```
+
+To install / change TORCH version run: 
+
+```bash
+# CPU: Linux or Windows, includes m2aia package and loader
 uv sync --extra cpu
 ```
 
 or:
 
 ```bash
-# CUDA 11.8
+# CUDA 11.8: Linux or Windows with CUDA 11.8; includes m2aia
 uv sync --extra cu118
 ```
+
+or:
+```bash
+# MPS: macOS with Apple Metal Performance Shaders, excludes m2aia
+uv sync --extra mps
+```
+> REMARK: 
+> It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
+
+
 
 The environment is stored in `.venv`. Pass the selected configuration to
 `uv run` to keep the environment synchronized while executing commands:
@@ -77,6 +95,10 @@ uv run --extra cpu python
 # CUDA 11.8
 uv run --extra cu118 pytest
 uv run --extra cu118 python
+
+# MPS 
+uv run --extra mps pytest
+uv run --extra mps python
 ```
 
 #### Conda managers
@@ -103,6 +125,15 @@ python -m pip install torch==2.7.1 \
 python -m pip install -e ".[cu118]"
 ```
 
+For macOS with MPS, install the standard PyPI build of PyTorch:
+
+```bash
+python -m pip install -e ".[mps]"
+```
+
+> REMARK: 
+> It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
+
 #### venv manager
 
 Create a standard Python virtual environment:
@@ -125,6 +156,15 @@ python -m pip install torch==2.7.1 \
     --index-url https://download.pytorch.org/whl/cu118
 python -m pip install -e ".[cu118]"
 ```
+
+For macOS with MPS, install the standard PyPI build of PyTorch:
+
+```bash
+python -m pip install -e ".[mps]"
+```
+
+> REMARK: 
+> It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
 
 Verify the selected PyTorch build:
 
