@@ -112,6 +112,11 @@ class MetaspaceDatasetSource(DatasetSource):
             "min_annotation_count": {"type": "integer | null", "local": True},
             "max_annotation_count": {"type": "integer | null", "local": True},
             "include_molecule_stats": {"type": "boolean", "default": False},
+            "include_spatial_annotation_stats": {
+                "type": "boolean",
+                "default": False,
+                "local": True,
+            },
             "min_molecule_count": {"type": "integer | null", "local": True},
             "min_unique_molecule_count": {"type": "integer | null", "local": True},
             "exclude_dataset_ids": {
@@ -197,6 +202,8 @@ class MetaspaceDatasetSource(DatasetSource):
         records = [self._dataset_record(dataset) for dataset in datasets]
         fdr = float(local_filters.get("annotation_fdr", 0.1))
         _attach_annotation_counts(self.client, records, fdr)
+        if bool(local_filters.get("include_spatial_annotation_stats")):
+            _attach_spatial_annotation_statistics(self.client, records, fdr)
         if bool(local_filters.get("include_molecule_stats")) or any(
             local_filters.get(key) is not None
             for key in ("min_molecule_count", "min_unique_molecule_count")
@@ -474,6 +481,7 @@ _METASPACE_FILTER_ALIASES = {
 _LOCAL_FILTERS = {
     "annotation_fdr",
     "include_molecule_stats",
+    "include_spatial_annotation_stats",
     "min_annotation_count",
     "max_annotation_count",
     "min_molecule_count",
@@ -597,6 +605,105 @@ def _attach_molecule_statistics(
         )
 
 
+def _attach_spatial_annotation_statistics(
+    client: Any,
+    records: List[Dict[str, Any]],
+    fdr: float,
+) -> None:
+    """Attach unique annotated-pixel counts from METASPACE ion images.
+
+    :param client: Initialized official METASPACE client.
+    :type client: Any
+    :param records: Dataset records to enrich in place.
+    :type records: List[Dict[str, Any]]
+    :param fdr: Maximum FDR used to select source annotations.
+    :type fdr: float
+    :raises ValueError: If ion images within a dataset have inconsistent
+        shapes or their union exceeds the reported acquired-pixel count.
+
+    Intensity magnitudes are not interpreted. A spatial position is counted
+    once when at least one annotation selected by ``fdr`` has non-zero signal.
+    """
+    for record in records:
+        dataset_id = str(record["dataset_id"])
+        dataset = client.dataset(id=dataset_id)
+        annotated_mask: Optional[np.ndarray] = None
+        spatial_annotation_count = 0
+        database_count = 0
+
+        for database in getattr(dataset, "database_details", []):
+            annotation_images = dataset.all_annotation_images(
+                database=(database.name, database.version),
+                fdr=fdr,
+                only_first_isotope=True,
+                scale_intensity=False,
+            )
+            database_has_images = False
+            for images_for_annotation in annotation_images:
+                if (
+                    len(images_for_annotation) == 0
+                    or images_for_annotation[0] is None
+                ):
+                    continue
+                image = np.asarray(images_for_annotation[0])
+                signal_mask = np.isfinite(image) & (image != 0)
+                if annotated_mask is None:
+                    annotated_mask = signal_mask.copy()
+                elif annotated_mask.shape != signal_mask.shape:
+                    raise ValueError(
+                        "METASPACE ion-image shape mismatch for dataset "
+                        f"'{dataset_id}': {annotated_mask.shape} != {signal_mask.shape}."
+                    )
+                else:
+                    annotated_mask |= signal_mask
+                spatial_annotation_count += 1
+                database_has_images = True
+            database_count += int(database_has_images)
+
+        annotated_pixel_count = (
+            int(np.count_nonzero(annotated_mask))
+            if annotated_mask is not None
+            else 0
+        )
+        metadata = record["metadata"]
+        acquired_pixel_count = metadata.get("pixel_count")
+        metadata.update(
+            {
+                "annotated_pixel_count": annotated_pixel_count,
+                "spatial_annotation_fdr": fdr,
+                "spatial_annotation_count": spatial_annotation_count,
+                "spatial_annotation_database_count": database_count,
+            }
+        )
+        if acquired_pixel_count is None:
+            metadata.update(
+                {
+                    "unannotated_pixel_count": None,
+                    "annotated_pixel_fraction": None,
+                    "spatial_stats_status": "missing_acquired_pixel_count",
+                }
+            )
+            continue
+        acquired_pixel_count = int(acquired_pixel_count)
+        if annotated_pixel_count > acquired_pixel_count:
+            raise ValueError(
+                "METASPACE annotated-pixel count exceeds acquisition geometry "
+                f"for dataset '{dataset_id}': {annotated_pixel_count} > "
+                f"{acquired_pixel_count}."
+            )
+        metadata.update(
+            {
+                "unannotated_pixel_count": (
+                    acquired_pixel_count - annotated_pixel_count
+                ),
+                "annotated_pixel_fraction": (
+                    annotated_pixel_count / acquired_pixel_count
+                    if acquired_pixel_count > 0
+                    else None
+                ),
+                "spatial_stats_status": "complete",
+            }
+        )
 def _apply_local_filters(
     records: List[Dict[str, Any]],
     filters: Mapping[str, Any],
