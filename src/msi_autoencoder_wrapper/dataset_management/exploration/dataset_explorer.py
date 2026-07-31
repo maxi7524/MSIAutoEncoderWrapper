@@ -29,6 +29,7 @@ class DatasetExplorer:
     directly to the existing ``query --filters`` command; the resulting
     selection is then consumed by ``download``.
     """
+    # TODO - czy dało by się zrobić tak, ze wyświetlamy tutaj dostępen klucze które można wpisać ?? - to samo w innych miejscach
 
     def __init__(self, source: str | DatasetSource, **source_options: Any) -> None:
         if isinstance(source, str):
