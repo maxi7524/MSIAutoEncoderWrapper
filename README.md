@@ -1,5 +1,5 @@
 
-## MSIAutoEncoderWrapper
+# MSIAutoEncoderWrapper
 
 ## Introduction
 
@@ -20,9 +20,6 @@ This library reimplements and extends the work from:
 The original implementation was refactored to use `m2aia` for improved data handling and performance.
 
 
-
-# Usage
-
 ## Installation
 
 Here we provide commands to set up an environment with one of the following
@@ -33,7 +30,7 @@ configurations:
 
 ### System packages
 
-To use the imzML readers, install the system libraries required by `m2aia` and
+To use the `m2aia` imzML readers, install the system libraries and
 OpenSlide. The following command supports Debian and Ubuntu systems:
 
 
@@ -42,7 +39,8 @@ sudo apt-get update
 sudo apt-get install -y libglu1-mesa-dev libgomp1 libopenslide-dev
 ```
 
-<!-- TODO: Add a tested cross-platform system dependency installation script. -->
+> REMARK:
+> We also implemented `PyImzMLReader` for compatibility. 
 
 ### Environment
 
@@ -157,19 +155,26 @@ by the previous one:
    — searches public annotated MSI datasets, inspects biological and acquisition
    metadata, reviews individual dataset pages, and exports reusable query filters.
 
-## Creating Custom Models
+## Documentation 
+
+<!-- #TODO - tutaj trzeba to odpowiednio rozpiasć i wszystki linki pozbierac  -->
+We provide full documentation. It consists of (te zcęści któe tłumaczyliści i tyutaj powina byc ogólnei cała rozpiska tego, oraz podziały własnei z tym howt to itd.) 
+
+
+
+<!-- ### Creating Custom Models
 Users can implement their own architectures and loss functions (criterions) by subclassing the base modules. For detailed instructions on how to integrate your own PyTorch models into the wrapper, please refer to:
 * **[Development Guide: Custom Models](docs/CUSTOM_MODELS.md)**
 * **[Training Criteria](docs/CRITERIONS.md)** — criterion categories, lifecycle
   hooks, configuration, and the Masserstein reconstruction objective.
 * **[External Dataset Pipeline](docs/DATASET_PIPELINE.md)** — METASPACE
   discovery, catalog-only and download modes, annotation readers, and imzML
-  merge provenance.
+  merge provenance. -->
 
 ## Feedback & Support
 If you have questions, suggestions, or find any bugs, please feel free to open an issue or [contact me directly by mail](mailto:mb.strozyk@student.uw.edu.pl).
 
-<!-- Later mayebe :): contact the maintainers at [your-email@domain.com]. -->
+<!-- Later mayebe :) contact the maintainers at [your-email@domain.com]. -->
 
 
 ## Bibliography
