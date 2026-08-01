@@ -1,9 +1,9 @@
+from __future__ import annotations
+
 from pathlib import Path
 import numpy as np
-import m2aia as m2
 from typing import Optional, Any, Dict, Tuple, Union
 from collections.abc import Iterator
-import SimpleITK as sitk
 from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
@@ -14,9 +14,54 @@ from ...utils.exceptions import (
 )
 from ..spatial import Aggregation, SpatialImage
 
+# MPS Conflicts solution
+try:
+    import m2aia as m2
+except ModuleNotFoundError as error:
+    if error.name != "m2aia":
+        raise
+    m2: Any = None
+
+try:
+    import SimpleITK as sitk
+except ModuleNotFoundError as error:
+    if error.name != "SimpleITK":
+        raise
+    sitk: Any = None
+
 # Logger initialization
 logger = get_custom_logger(__name__)
 
+# --------------------------------------------------
+# Section: Helpers 
+# --------------------------------------------------
+
+# TODO - przenieśc to do rjestru 
+def _require_m2aia() -> None:
+    """Validate availability of the optional M2aia backend.
+
+    :raises ImportError: If ``m2aia`` or ``SimpleITK`` is unavailable.
+    """
+    missing_dependencies = []
+
+    if m2 is None:
+        missing_dependencies.append("m2aia")
+
+    if sitk is None:
+        missing_dependencies.append("SimpleITK")
+
+    if missing_dependencies:
+        missing = ", ".join(missing_dependencies)
+        raise ImportError(
+            "The M2aia reader backend is unavailable because the following "
+            f"optional dependencies are missing: {missing}. "
+            "Select the PyImzML reader on macOS or install an environment "
+            "extra containing the M2aia backend."
+        )
+
+# --------------------------------------------------
+# Section: Main code 
+# --------------------------------------------------
 
 @ReaderManager.register_loader("M2aiaReader")
 class M2aiaReader(MSIBaseReader):
@@ -34,6 +79,9 @@ class M2aiaReader(MSIBaseReader):
         :type active_context: Optional[Any]
         """
         # Anchor parent dependencies using unified structural constructor signature
+        #TODO - przenieść to do rejestru !! 
+        _require_m2aia()
+
         super().__init__(file_path, active_context=active_context)
         
         # Runtime signaling tracking telemetry

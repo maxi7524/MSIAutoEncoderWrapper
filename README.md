@@ -25,7 +25,11 @@ The original implementation was refactored to use `m2aia` for improved data hand
 Here we provide commands to set up an environment with one of the following
 configurations:
 
-* `cpu` — installs the CPU-only PyTorch build.
+* `cpu` — installs the CPU-only PyTorch build (Linux and Windows).
+* `mps` — installs the CPU-only PyTorch build (macOS, both mps and other CPUs).
+   > REMARK: 
+   > It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
+
 * `cu118` — installs the PyTorch build for CUDA 11.8.
 
 ### System packages
@@ -52,16 +56,30 @@ and one configuration.
 Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then
 create and synchronize the project environment:
 
+To install all basic packages run:
+
 ```bash
-# CPU
+uv sync 
+```
+
+To install / change TORCH version run: 
+
+```bash
+# CPU: Linux or Windows, includes m2aia package and loader
 uv sync --extra cpu
 ```
 
 or:
 
 ```bash
-# CUDA 11.8
+# CUDA 11.8: Linux or Windows with CUDA 11.8; includes m2aia
 uv sync --extra cu118
+```
+
+or:
+```bash
+# MPS: macOS with Apple Metal Performance Shaders, excludes m2aia
+uv sync --extra mps
 ```
 
 The environment is stored in `.venv`. Pass the selected configuration to
@@ -75,6 +93,10 @@ uv run --extra cpu python
 # CUDA 11.8
 uv run --extra cu118 pytest
 uv run --extra cu118 python
+
+# MPS 
+uv run --extra mps pytest
+uv run --extra mps python
 ```
 
 #### Conda managers
@@ -101,6 +123,12 @@ python -m pip install torch==2.7.1 \
 python -m pip install -e ".[cu118]"
 ```
 
+For macOS with MPS, install the standard PyPI build of PyTorch:
+
+```bash
+python -m pip install -e ".[mps]"
+```
+
 #### venv manager
 
 Create a standard Python virtual environment:
@@ -122,6 +150,12 @@ For CUDA 11.8, replace the two installation commands with:
 python -m pip install torch==2.7.1 \
     --index-url https://download.pytorch.org/whl/cu118
 python -m pip install -e ".[cu118]"
+```
+
+For macOS with MPS, install the standard PyPI build of PyTorch:
+
+```bash
+python -m pip install -e ".[mps]"
 ```
 
 Verify the selected PyTorch build:

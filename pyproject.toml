@@ -11,7 +11,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "ipywidgets",
-    "m2aia",
     "matplotlib",
     "metaspace2020==2.0.9",
     "numpy",
@@ -29,9 +28,16 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
+    "m2aia",
     "torch==2.7.1",
+    "SimpleITK"
 ]
 cu118 = [
+    "m2aia",
+    "torch==2.7.1",
+    "SimpleITK"
+]
+mps = [
     "torch==2.7.1",
 ]
 
@@ -46,6 +52,7 @@ conflicts = [
     [
         { extra = "cpu" },
         { extra = "cu118" },
+        { extra = "mps" },
     ],
 ]
 
