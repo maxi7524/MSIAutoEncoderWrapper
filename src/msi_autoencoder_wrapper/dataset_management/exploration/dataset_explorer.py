@@ -217,7 +217,7 @@ _RESULT_COLUMNS = [
     "annotated_pixel_count",
     "unannotated_pixel_count",
     "annotated_pixel_fraction",
-    "spatial_annotation_fdr",
+    "annotation_fdr",
     "spatial_annotation_count",
     "spatial_annotation_database_count",
     "spatial_stats_status",
@@ -290,7 +290,7 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
         "annotated_pixel_count": metadata.get("annotated_pixel_count"),
         "unannotated_pixel_count": metadata.get("unannotated_pixel_count"),
         "annotated_pixel_fraction": metadata.get("annotated_pixel_fraction"),
-        "spatial_annotation_fdr": metadata.get("spatial_annotation_fdr"),
+        "annotation_fdr": metadata.get("annotation_fdr"),
         "spatial_annotation_count": metadata.get("spatial_annotation_count"),
         "spatial_annotation_database_count": metadata.get(
             "spatial_annotation_database_count"
