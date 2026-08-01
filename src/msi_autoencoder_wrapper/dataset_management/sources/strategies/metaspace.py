@@ -275,10 +275,10 @@ class MetaspaceDatasetSource(DatasetSource):
     ) -> List[Dict[str, Any]]:
         """Retrieve all annotations exposed by requested database/FDR options.
 
-        ``options`` may contain ``databases`` and ``fdr``. When databases are
-        omitted, every database listed on the dataset is queried. The default
-        FDR of ``0.5`` requests the broadest standard METASPACE result level;
-        lower experimental thresholds are applied later by annotation readers.
+        ``options`` may contain ``databases``, ``annotation_fdr``, and
+        ``include_spatial``. When databases are omitted, every database listed
+        on the dataset is queried. ``annotation_fdr`` is the same threshold
+        used by discovery statistics and spatial annotation retrieval.
         """
         options = dict(options or {})
         dataset = self.client.dataset(id=dataset_id)
@@ -286,21 +286,25 @@ class MetaspaceDatasetSource(DatasetSource):
             (database.name, database.version)
             for database in getattr(dataset, "database_details", [])
         ]
-        fdr = float(options.get("fdr", 0.5))
+        annotation_fdr = float(options.get("annotation_fdr", 0.1))
+        include_spatial = bool(options.get("include_spatial", True))
         records: List[Dict[str, Any]] = []
         for database in databases:
-            results = dataset.results(database=database, fdr=fdr)
+            results = dataset.results(database=database, fdr=annotation_fdr)
             database_name, database_version = _database_parts(database)
             database_records = _records_from_table(results)
             spatial_images = _spatial_images_by_molecule(
                 dataset,
                 database,
-                fdr,
-                enabled=bool(options.get("include_spatial", True)),
+                annotation_fdr,
+                enabled=include_spatial,
             )
+            missing_spatial_annotations: List[Tuple[str, str]] = []
             for row in database_records:
                 formula = row.get("formula", row.get("sumFormula"))
                 key = (str(formula or ""), str(row.get("adduct") or ""))
+                if include_spatial and key not in spatial_images:
+                    missing_spatial_annotations.append(key)
                 records.append(
                     {
                         **row,
@@ -313,6 +317,22 @@ class MetaspaceDatasetSource(DatasetSource):
                         ),
                     }
                 )
+            if missing_spatial_annotations:
+                preview = ", ".join(
+                    f"{formula}{adduct}"
+                    for formula, adduct in missing_spatial_annotations[:5]
+                )
+                raise_external_service_error(
+                    context_name="METASPACE",
+                    message=(
+                        f"Dataset '{dataset_id}' returned "
+                        f"{len(missing_spatial_annotations)} molecular annotations "
+                        f"without matching ion images for database "
+                        f"'{database_name} {database_version}' at annotation_fdr="
+                        f"{annotation_fdr}. Missing examples: {preview}. Spatial "
+                        "pixel annotations cannot be constructed completely."
+                    ),
+                )
         logger.info(
             "Retrieved %s METASPACE annotations for dataset %s",
             len(records),
@@ -324,6 +344,20 @@ class MetaspaceDatasetSource(DatasetSource):
         """Download a dataset's source imzML/ibd pair into a local directory."""
         target = Path(destination)
         target.mkdir(parents=True, exist_ok=True)
+        expected = target / f"{dataset_id}.imzML"
+        expected_ibd = expected.with_suffix(".ibd")
+        if (
+            expected.is_file()
+            and expected.stat().st_size > 0
+            and expected_ibd.is_file()
+            and expected_ibd.stat().st_size > 0
+        ):
+            logger.info(
+                "METASPACE dataset %s already contains a complete local pair at %s",
+                dataset_id,
+                target,
+            )
+            return target
         dataset = self.client.dataset(id=dataset_id)
         if hasattr(dataset, "download_links"):
             download = dataset.download_links()
@@ -354,7 +388,6 @@ class MetaspaceDatasetSource(DatasetSource):
                 )
         else:
             dataset.download_to_dir(target, base_name=dataset_id)
-        expected = target / f"{dataset_id}.imzML"
         if not expected.is_file() or not expected.with_suffix(".ibd").is_file():
             raise_project_config_error(
                 context_name="MetaspaceSource",
@@ -670,7 +703,7 @@ def _attach_spatial_annotation_statistics(
         metadata.update(
             {
                 "annotated_pixel_count": annotated_pixel_count,
-                "spatial_annotation_fdr": fdr,
+                "annotation_fdr": fdr,
                 "spatial_annotation_count": spatial_annotation_count,
                 "spatial_annotation_database_count": database_count,
             }

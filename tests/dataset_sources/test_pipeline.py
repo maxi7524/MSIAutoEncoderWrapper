@@ -6,6 +6,9 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+import pytest
+
+from msi_autoencoder_wrapper.annotations import SQLiteAnnotationReader
 from msi_autoencoder_wrapper.dataset_management.sources.base import DatasetSource
 from msi_autoencoder_wrapper.dataset_management.operations import (
     materialize_and_merge_selection,
@@ -14,6 +17,7 @@ from msi_autoencoder_wrapper.dataset_management.operations import (
 )
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
 from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
+from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 
 
 class FakeDatasetSource(DatasetSource):
@@ -25,6 +29,7 @@ class FakeDatasetSource(DatasetSource):
         self.fixture_path = fixture_path
         self.seen_filters: Dict[str, Any] = {}
         self._accepted: List[Dict[str, Any]] = []
+        self.annotation_options: Optional[Mapping[str, Any]] = None
         self._config = {}
 
     def get_available_filters(self) -> Dict[str, Any]:
@@ -51,6 +56,7 @@ class FakeDatasetSource(DatasetSource):
         dataset_id: str,
         options: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        self.annotation_options = options
         return [
             {
                 "id": "annotation-1",
@@ -80,7 +86,7 @@ def test_discovery_and_download_are_separate_stages(
 
     query_to_selection(
         source=source,
-        filters={"organism": "mouse"},
+        filters={"organism": "mouse", "annotation_fdr": 0.1},
         catalog=catalog,
         selection_path=selection,
     )
@@ -96,6 +102,7 @@ def test_discovery_and_download_are_separate_stages(
     assert materialized == [datasets_dir / "sources" / "fake" / "one"]
     assert (materialized[0] / "one.imzML").is_file()
     assert len(catalog.get_annotations(source="fake", dataset_id="one")) == 1
+    assert source.annotation_options == {"annotation_fdr": 0.1}
 
 
 def test_query_applies_generic_dataset_exclusions_outside_provider(
@@ -115,6 +122,32 @@ def test_query_applies_generic_dataset_exclusions_outside_provider(
 
     assert selected == []
     assert source.seen_filters == {"organism": "mouse"}
+
+
+def test_download_rejects_annotation_fdr_different_from_selection(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Discovery and materialization cannot use different annotation thresholds."""
+    source = FakeDatasetSource(msi_fixture_path)
+    datasets_dir = tmp_path / "datasets"
+    catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
+    selection = datasets_dir / "selections" / "candidate.json"
+    query_to_selection(
+        source=source,
+        filters={"annotation_fdr": 0.1},
+        catalog=catalog,
+        selection_path=selection,
+    )
+
+    with pytest.raises(ValidationError, match="must match"):
+        materialize_selection(
+            source=source,
+            selection_path=selection,
+            datasets_dir=datasets_dir,
+            catalog=catalog,
+            annotation_options={"annotation_fdr": 0.2},
+        )
 
 
 def test_low_disk_mode_downloads_merges_and_releases_staging_data(
@@ -155,3 +188,10 @@ def test_low_disk_mode_downloads_merges_and_releases_staging_data(
         "source_dataset_id": "one",
         "source_spectrum_id": 5,
     }
+    annotation_reader = SQLiteAnnotationReader(
+        catalog.path,
+        merged_dataset_id="pilot",
+    )
+    merged_annotations = annotation_reader.get_spectrum_annotations(5)
+    assert merged_annotations[0]["sumFormula"] == "C6H12O6"
+    assert merged_annotations[0]["source_spectrum_id"] == 5

@@ -25,6 +25,13 @@ class FakeAuthenticatedClient:
         return True
 
 
+class FakeCatalogClient:
+    """Minimal source client returning an empty accessible catalogue."""
+
+    def datasets(self, **filters: object) -> list[object]:
+        return []
+
+
 def test_session_key_is_injected_without_modifying_explicit_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -56,7 +63,7 @@ def test_session_validation_requires_and_verifies_api_key(
 def test_source_configuration_redacts_explicit_secrets() -> None:
     """Serializable component configuration never exposes credentials."""
     source = MetaspaceDatasetSource(
-        client=object(),
+        client=FakeCatalogClient(),
         client_options={"api_key": "secret", "password": "secret", "host": "example"},
     )
 

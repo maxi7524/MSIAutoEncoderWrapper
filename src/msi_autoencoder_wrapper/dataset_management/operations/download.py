@@ -57,6 +57,9 @@ def materialize_selection(
             f"Selection source '{selection.get('source')}' does not match "
             f"adapter '{source.source_name}'."
         )
+    resolved_annotation_options = _resolve_annotation_options(
+        selection, annotation_options
+    )
     selected_ids = set(dataset_ids or [])
     output_root = Path(datasets_dir) / "sources" / source.source_name
     materialized: List[Path] = []
@@ -72,7 +75,7 @@ def materialize_selection(
         metadata = dict(metadata_record.get("metadata", {}))
         reader = PyImzMLReader(validate_imzml_pair(destination, dataset_id))
         annotations = normalize_spectrum_annotations(
-            source.get_annotations(dataset_id, annotation_options), reader
+            source.get_annotations(dataset_id, resolved_annotation_options), reader
         )
         catalog.upsert_dataset(
             source=source.source_name,
@@ -156,6 +159,9 @@ def materialize_and_merge_selection(
                 f"adapter '{source.source_name}'."
             ),
         )
+    resolved_annotation_options = _resolve_annotation_options(
+        selection, annotation_options
+    )
     selected_ids = set(dataset_ids or [])
     records = [
         record
@@ -191,7 +197,7 @@ def materialize_and_merge_selection(
                 imzml_path = validate_imzml_pair(destination, dataset_id)
                 reader = PyImzMLReader(imzml_path)
                 annotations = normalize_spectrum_annotations(
-                    source.get_annotations(dataset_id, annotation_options), reader
+                    source.get_annotations(dataset_id, resolved_annotation_options), reader
                 )
                 metadata = dict(metadata_record.get("metadata", {}))
                 catalog.upsert_dataset(
@@ -279,3 +285,43 @@ def materialize_and_merge_selection(
         output,
     )
     return output
+
+
+def _resolve_annotation_options(
+    selection: Mapping[str, Any],
+    annotation_options: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve one annotation FDR across discovery and materialization.
+
+    :param selection: Validated query selection payload.
+    :type selection: Mapping[str, Any]
+    :param annotation_options: Explicit provider annotation options.
+    :type annotation_options: Mapping[str, Any] | None
+    :return: Retrieval options containing the selection ``annotation_fdr``.
+    :rtype: Dict[str, Any]
+    :raises ValidationError: If a legacy key is used or discovery and download
+        request different annotation FDR thresholds.
+    """
+    resolved = dict(annotation_options or {})
+    if "fdr" in resolved:
+        raise_validation_error(
+            "AnnotationOptions",
+            "Use 'annotation_fdr' instead of the ambiguous legacy key 'fdr'.",
+        )
+    selection_filters = selection.get("filters", {})
+    selection_fdr = (
+        selection_filters.get("annotation_fdr")
+        if isinstance(selection_filters, Mapping)
+        else None
+    )
+    requested_fdr = resolved.get("annotation_fdr")
+    if selection_fdr is not None and requested_fdr is not None:
+        if float(selection_fdr) != float(requested_fdr):
+            raise_validation_error(
+                "AnnotationOptions",
+                "The annotation_fdr used for download must match the value "
+                f"stored in the selection ({selection_fdr}).",
+            )
+    if selection_fdr is not None:
+        resolved["annotation_fdr"] = float(selection_fdr)
+    return resolved

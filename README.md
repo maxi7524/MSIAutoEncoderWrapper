@@ -185,14 +185,17 @@ by the previous one:
 6. **[PRIDE dataset explorer](assets/notebooks/tutorials/06_pride_dataset_explorer.ipynb)**
    — explores annotated MSI pairs, reviews rejection diagnostics, and exports
    reusable query filters.
-7. **[METASPACE dataset explorer](assets/notebooks/tutorials/07_metaspace_dataset_explorer.ipynb)**
+7. **[METASPACE dataset explorer](assets/notebooks/tutorials/07_metaspace_dataset_explorer_reworked_concise.ipynb)**
    — searches public annotated MSI datasets, inspects biological and acquisition
    metadata, reviews individual dataset pages, and exports reusable query filters.
+8. **[METASPACE download and merge](assets/notebooks/tutorials/08_metaspace_dataset_download_and_merge.ipynb)**
+   — resolves reviewed filters to a selection, authenticates a download session,
+   retrieves spatial annotations, and produces a merged MSI dataset.
 
 ## Documentation 
 
-<!-- #TODO - tutaj trzeba to odpowiednio rozpiasć i wszystki linki pozbierac  -->
-We provide full documentation. It consists of (te zcęści któe tłumaczyliści i tyutaj powina byc ogólnei cała rozpiska tego, oraz podziały własnei z tym howt to itd.) 
+The [documentation entry page](docs/index.md) links to task-oriented guides,
+library internals, and instructions for developers.
 
 
 

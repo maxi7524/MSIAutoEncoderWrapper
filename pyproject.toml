@@ -44,6 +44,7 @@ mps = [
 [dependency-groups]
 dev = [
     "ipykernel",
+    "jupyterlab>=4.6.2",
     "pytest",
 ]
 
