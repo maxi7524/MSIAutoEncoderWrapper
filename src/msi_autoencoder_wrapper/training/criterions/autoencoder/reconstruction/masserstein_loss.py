@@ -10,6 +10,7 @@ from ...autoencoder_base_criterions import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....data import SpectrumBatch
 from .....metrics.strategies.masserstein import SpectrumMasserstein
+from .....metrics.compatibility import validate_metric_compatibility
 from .....models.datasets.base_dataset import MSIBaseDataset
 
 
@@ -62,6 +63,11 @@ class MSIMassersteinLoss(MSIReconstructionCriterion):
         """Evaluate the shared metric using typed or legacy batch inputs."""
         del kwargs
         reconstruction, original = self.reconstruction_pair(model_outputs, batch_data)
+        if isinstance(batch_data, SpectrumBatch):
+            validate_metric_compatibility(
+                self.metric.requirements,
+                batch_data.normalization_trace,
+            )
         mass_axis = (
             batch_data.space.mass_axis
             if isinstance(batch_data, SpectrumBatch)

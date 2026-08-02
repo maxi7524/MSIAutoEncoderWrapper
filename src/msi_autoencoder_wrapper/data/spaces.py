@@ -26,7 +26,7 @@ class SpectrumSpace:
 
     mass_axis: torch.Tensor
     representation: Literal["binned", "reconstruction"] = "binned"
-    normalization: Literal["none", "tic", "max", "l2"] = "none"
+    normalization: str = "none"
     axis_unit: str = "m/z"
 
     def __post_init__(self) -> None:

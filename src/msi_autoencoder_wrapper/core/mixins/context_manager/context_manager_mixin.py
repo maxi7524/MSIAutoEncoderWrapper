@@ -18,6 +18,7 @@ from ....annotations.annotations_manager import AnnotationReaderManager
 from ....binners.base_binner import MSIBaseBinner
 from ....binners.base_inverse import MSIBaseInverseBinner
 from ....binners.binners_manager import BinnerManager
+from ....normalization import NormalizationPipeline
 
 logger = get_custom_logger(__name__)
 
@@ -247,6 +248,83 @@ class ContextManagerProxy:
             **kwargs,
         )
 
+    def set_normalization(
+        self,
+        configuration: Dict[str, Any],
+        img_name_or_path: Optional[str] = None,
+    ) -> NormalizationPipeline:
+        """Replace the complete ordered normalization pipeline for one image.
+
+        :param configuration: Pipeline configuration containing ``stage``, ordered
+            ``steps``, and optional ``reconstruction`` policy.
+        :type configuration: Dict[str, Any]
+        :param img_name_or_path: Image context receiving the pipeline.
+        :type img_name_or_path: str | None
+        :return: Active normalization pipeline.
+        :rtype: NormalizationPipeline
+        """
+        image_key = self._resolve_image_key(img_name_or_path)
+        pipeline = NormalizationPipeline.from_config(configuration)
+        self._ensure_image_bucket(image_key)
+        self.config_ledger[image_key]["normalization"] = pipeline
+        self._wrapper.active_context.clear_active_context()
+        logger.info("Set normalization pipeline for image '%s'.", image_key)
+        return pipeline
+
+    def update_normalization(
+        self,
+        configuration: Dict[str, Any],
+        img_name_or_path: Optional[str] = None,
+    ) -> NormalizationPipeline:
+        """Merge settings into the current serialized pipeline and replace it."""
+        image_key = self._resolve_image_key(img_name_or_path)
+        self._ensure_image_bucket(image_key)
+        current = self.config_ledger[image_key].get("normalization")
+        merged = current.get_config() if isinstance(current, NormalizationPipeline) else {}
+        for key, value in configuration.items():
+            if key == "steps" and isinstance(value, dict):
+                merged["steps"] = {**merged.get("steps", {}), **value}
+            elif key == "reconstruction" and isinstance(value, dict):
+                merged["reconstruction"] = {
+                    **merged.get("reconstruction", {}),
+                    **value,
+                }
+            else:
+                merged[key] = value
+        return self.set_normalization(merged, image_key)
+
+    def remove_normalization(
+        self,
+        name: str,
+        img_name_or_path: Optional[str] = None,
+    ) -> NormalizationPipeline:
+        """Remove one named step while preserving the remaining order."""
+        image_key = self._resolve_image_key(img_name_or_path)
+        self._ensure_image_bucket(image_key)
+        current = self.config_ledger[image_key].get("normalization")
+        if not isinstance(current, NormalizationPipeline) or name not in current.steps:
+            raise_validation_error("Normalization", f"Unknown normalization step '{name}'.")
+        config = current.get_config()
+        del config["steps"][name]
+        return self.set_normalization(config, image_key)
+
+    def clear_normalization(
+        self, img_name_or_path: Optional[str] = None
+    ) -> None:
+        """Disable normalization for one image context."""
+        image_key = self._resolve_image_key(img_name_or_path)
+        self._ensure_image_bucket(image_key)
+        self.config_ledger[image_key]["normalization"] = None
+        self._wrapper.active_context.clear_active_context()
+
+    def _resolve_image_key(self, img_name_or_path: Optional[str]) -> str:
+        """Resolve an image key without changing workspace state."""
+        candidate = img_name_or_path or self._wrapper.workspace.active_img_name
+        if candidate is None:
+            raise_validation_error("ContextManager", "An active image is required.")
+        path = Path(candidate)
+        return path.stem if path.suffix else str(candidate)
+
     # --------------------------------------------------
     # Section: Public Strategy Getters
     # --------------------------------------------------
@@ -347,6 +425,7 @@ class ContextManagerProxy:
                 "annotation_reader": None,
                 "binner": {"instance_name": "", "instance_params": {}},
                 "inverse_binner": {"instance_name": "", "instance_params": {}},
+                "normalization": None,
                 "model_functionality": None,
                 "tmp": {},
             }
@@ -546,6 +625,8 @@ class ContextManagerProxy:
                 active_context.latent_reader
             )
 
+        normalization = bucket.get("normalization")
+
         return {
             "schema_version": 1,
             "scope": "local_image",
@@ -555,6 +636,11 @@ class ContextManagerProxy:
                 active_context.data_source if is_instantiated_context else "image"
             ),
             "components": component_configs,
+            "normalization": (
+                normalization.get_config()
+                if isinstance(normalization, NormalizationPipeline)
+                else None
+            ),
         }
 
     def load_context_config(
@@ -624,6 +710,12 @@ class ContextManagerProxy:
                     inverse_config,
                     excluded={"active_context", "binner"},
                 ),
+            )
+        normalization_config = config.get("normalization")
+        if isinstance(normalization_config, dict):
+            restored["normalization"] = self.set_normalization(
+                normalization_config,
+                img_name_or_path=img_name_or_path,
             )
         self._wrapper.set_coordinate_order(config.get("coordinate_order", "xy"))
         return restored
