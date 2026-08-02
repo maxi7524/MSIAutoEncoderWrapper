@@ -22,7 +22,12 @@ def test_variational_components_round_trip_through_recursive_model_config() -> N
             },
             "decoder": {
                 "type": "LinearSpectrumDecoder",
-                "params": {"latent_dim": 3, "output_dim": 16, "hidden_dims": [8]},
+                "params": {
+                    "latent_dim": 3,
+                    "output_dim": 16,
+                    "hidden_dims": [8],
+                    "output_activation": {"type": "softplus", "parameters": {}},
+                },
             },
         },
     )
@@ -50,4 +55,3 @@ def test_variational_components_round_trip_through_recursive_model_config() -> N
         "latent_log_variance",
         "reconstruction",
     }
-

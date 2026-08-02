@@ -143,6 +143,7 @@ def test_fit_checkpoints_and_reloads_named_heads(
                 "kernels": [3],
                 "strides": [2],
                 "spatial_dims": [32, 15],
+                "output_activation": {"type": "softplus", "parameters": {}},
             },
         },
         "heads": {

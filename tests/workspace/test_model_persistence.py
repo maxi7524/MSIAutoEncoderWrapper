@@ -142,6 +142,7 @@ def test_named_heads_are_serialized_and_reconstructed_separately(
                 "kernels": [3],
                 "strides": [2],
                 "spatial_dims": [32, 15],
+                "output_activation": {"type": "softplus", "parameters": {}},
             },
         },
         "heads": {

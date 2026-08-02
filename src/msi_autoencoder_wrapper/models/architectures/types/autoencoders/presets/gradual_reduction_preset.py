@@ -98,7 +98,8 @@ def get_gradual_reduction_preset(
             "strategy": "CNNDecoder",
             "params": {
                 "latent_dim": latent_dim, "channels": channels, "kernels": kernels,
-                "strides": strides, "spatial_dims": spatial_dims
+                "strides": strides, "spatial_dims": spatial_dims,
+                "output_activation": {"type": "softplus", "parameters": {}}
             }
         },
         "projector": {
