@@ -61,7 +61,7 @@ def main() -> None:
     parser.add_argument("--repetitions", type=int, default=50)
     args = parser.parse_args()
     batch = build_batch(args.batch_size, args.points)
-    binner = LinearBinning(bin_step=0.01, x_min=1000.0, x_max=1600.0)
+    binner = LinearBinning(bin_step=0.01, x_min=400.0, x_max=1600.0)
     devices = [torch.device("cpu")]
     if torch.cuda.is_available():
         devices.append(torch.device("cuda"))
