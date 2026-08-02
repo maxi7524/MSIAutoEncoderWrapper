@@ -8,6 +8,8 @@ import torch
 from ...autoencoder_base_criterions import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
+from .....metrics import sobolev
+from .....data import SpectrumBatch
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -48,21 +50,11 @@ class MSISobolevLoss(MSIReconstructionCriterion):
             batch_data,
         )
 
-        ## 1. Compute baseline dynamic spatial coordinate weights from average magnitudes
-        mean_intensity = torch.mean(original_spectra, dim=1, keepdim=True)
-        weights = 1.0 / (mean_intensity + self.eps)
-
-        ## 2. Evaluate standard zero-order RMSE reconstruction deviations
-        diff_zero = reconstructed_spectra - original_spectra
-        loss_zero = torch.mean(weights * (diff_zero ** 2))
-
-        ## 3. Compute discrete first-order derivative vectors via adjacent bins subtraction
-        deriv_orig = original_spectra[:, 1:] - original_spectra[:, :-1]
-        deriv_recon = reconstructed_spectra[:, 1:] - reconstructed_spectra[:, :-1]
-
-        ## 4. Evaluate first-order derivative error variations
-        diff_first = deriv_recon - deriv_orig
-        loss_first = torch.mean(weights * (diff_first ** 2))
-
-        ## 5. Compile final balanced linear loss combination score
-        return loss_zero + (self.sobolev_weight * loss_first)
+        mass_axis = batch_data.space.mass_axis if isinstance(batch_data, SpectrumBatch) else None
+        return sobolev(
+            reconstructed_spectra,
+            original_spectra,
+            mass_axis=mass_axis,
+            derivative_weight=self.sobolev_weight,
+            epsilon=self.eps,
+        ).mean()

@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Tuple
 import torch
+from ...data import SpectrumBatch
 
 from ...utils.exceptions import raise_incompatible_interface_error
 from .base_criterion import MSIBaseCriterion
@@ -38,7 +39,12 @@ class MSIReconstructionCriterion(MSIBaseCriterion, ABC):
                 message="Batch data must contain an input spectrum tensor at index 1.",
             )
         reconstruction = model_outputs["reconstruction"]
-        return reconstruction, batch_data[1].to(reconstruction.device)
+        target = (
+            batch_data.model_input()
+            if isinstance(batch_data, SpectrumBatch)
+            else batch_data[1]
+        )
+        return reconstruction, target.to(reconstruction.device)
 
 
 class MSIContrastiveCriterion(MSIBaseCriterion, ABC):
@@ -100,6 +106,8 @@ class MSIHeadCriterion(MSIBaseCriterion, ABC):
                 "HeadCriterion", f"Missing dataset target '{self.target_field}'."
             )
         logits = model_outputs[self.output_key]
+        if isinstance(batch_data, SpectrumBatch):
+            logits = logits[: batch_data.batch_size]
         return (
             logits,
             targets[self.target_field].to(logits.device),
