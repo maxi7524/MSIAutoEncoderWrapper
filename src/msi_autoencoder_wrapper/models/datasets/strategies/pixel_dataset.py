@@ -12,7 +12,14 @@ from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 from ....core.mixins.active_context.active_context_mixin import ActiveContextProxy
 from ..class_assignment import build_class_mapping, metadata_values, molecule_key
-from ....data import RawSpectrumSample, TargetSample, TargetSchema
+from ....data import (
+    RawSpectrumCollator,
+    RawSpectrumSample,
+    SharedAxisRawBatch,
+    TargetBatch,
+    TargetSample,
+    TargetSchema,
+)
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -193,39 +200,8 @@ class PixelDataset(MSIBaseDataset):
             raise_validation_error(
                 "PixelDataset", "Raw spectral preprocessing requires source='image'."
             )
-        return self.get_raw_items([idx])[0]
-
-    def get_raw_items(self, indices: list[int]) -> list[RawSpectrumSample]:
-        """Read and validate several raw spectra through the reader bulk API.
-
-        :param indices: Stable flat spectrum identifiers.
-        :type indices: list[int]
-        :return: Raw samples in the same order as ``indices``.
-        :rtype: list[RawSpectrumSample]
-        """
-        if self.source != "image":
-            raise_validation_error(
-                "PixelDataset", "Raw spectral preprocessing requires source='image'."
-            )
         reader = self.active_context.get_data_reader(self.source)
-        spectra = reader.GetSpectra(indices)
-        if len(spectra) != len(indices):
-            raise_validation_error(
-                "PixelDataset",
-                "Reader bulk output must contain one spectrum per requested index.",
-            )
-        return [
-            self._raw_sample(idx, mass_values, intensities)
-            for idx, (mass_values, intensities) in zip(indices, spectra)
-        ]
-
-    def _raw_sample(
-        self,
-        idx: int,
-        mass_values: Any,
-        intensities: Any,
-    ) -> RawSpectrumSample:
-        """Convert one reader result without changing its physical mass axis."""
+        mass_values, intensities = reader.GetSpectrum(idx)
         mass_array = np.array(mass_values, dtype=np.float64, copy=True)
         intensity_array = np.array(intensities, dtype=np.float32, copy=True)
         if (
@@ -242,6 +218,63 @@ class PixelDataset(MSIBaseDataset):
             mass_values=torch.as_tensor(mass_array, dtype=torch.float64),
             intensities=torch.as_tensor(intensity_array, dtype=torch.float32),
             targets=self._target_sample(idx),
+        )
+
+    def get_raw_batch(
+        self,
+        indices: list[int],
+    ) -> Any:
+        """Read one complete raw batch through the fastest reader capability.
+
+        :param indices: Dataset spectrum identifiers selected by the DataLoader.
+        :type indices: list[int]
+        :return: Shared-axis native batch or packed variable-length fallback.
+        :rtype: SharedAxisRawBatch | RawSpectrumBatch
+        """
+        if self.source != "image":
+            return [self[index] for index in indices]
+        reader_batch = self.active_context.get_data_reader(self.source).GetSpectrumBatch(
+            indices
+        )
+        target_samples = [self._target_sample(int(index)) for index in reader_batch.sample_ids]
+        if reader_batch.shared_mass_axis:
+            targets = self._collate_targets(target_samples)
+            return SharedAxisRawBatch(
+                sample_ids=torch.from_numpy(reader_batch.sample_ids),
+                mass_axis=torch.as_tensor(reader_batch.mass_values, dtype=torch.float64),
+                intensities=torch.as_tensor(reader_batch.intensities, dtype=torch.float32),
+                targets=targets,
+            )
+        samples = [
+            RawSpectrumSample(
+                sample_id=int(sample_id),
+                mass_values=torch.tensor(axis, dtype=torch.float64),
+                intensities=torch.tensor(values, dtype=torch.float32),
+                targets=target,
+            )
+            for sample_id, axis, values, target in zip(
+                reader_batch.sample_ids,
+                reader_batch.mass_values,
+                reader_batch.intensities,
+                target_samples,
+            )
+        ]
+        return RawSpectrumCollator(self.get_target_schemas())(samples)
+
+    def _collate_targets(self, samples: list[TargetSample]) -> TargetBatch:
+        """Stack target values and masks already resolved for native I/O."""
+        if not samples or not samples[0].values:
+            return TargetBatch.empty()
+        return TargetBatch(
+            values={
+                name: torch.stack([sample.values[name] for sample in samples])
+                for name in samples[0].values
+            },
+            masks={
+                name: torch.stack([sample.masks[name] for sample in samples])
+                for name in samples[0].masks
+            },
+            schemas=self.get_target_schemas(),
         )
 
     def get_target_schemas(self) -> Dict[str, TargetSchema]:

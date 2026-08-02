@@ -28,6 +28,7 @@ from ...data import (
     BatchPreprocessor,
     RawDatasetView,
     RawSpectrumBatch,
+    SharedAxisRawBatch,
     RawSpectrumCollator,
     SpectrumBatch,
 )
@@ -255,7 +256,7 @@ class BaseAutoencoderAnalysis:
             options["pin_memory"] = preprocessing_device.type == "cuda"
         with torch.inference_mode():
             for batch in DataLoader(loader_dataset, **options):
-                if isinstance(batch, RawSpectrumBatch):
+                if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
                     batch = batch_preprocessor(batch)
                 if isinstance(batch, SpectrumBatch):
                     batch_ids = batch.sample_ids

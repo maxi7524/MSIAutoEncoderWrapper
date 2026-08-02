@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -27,10 +27,12 @@ class IonImageViewer:
         mass_axis: Sequence[float],
         image_provider: Callable[[float], Mapping[str, np.ndarray]],
         theme: VisualizationTheme | str | None = None,
+        renderer: Optional[Callable[[float, Mapping[str, np.ndarray]], Any]] = None,
     ) -> None:
         self.mass_axis = np.asarray(mass_axis, dtype=np.float64)
         self.image_provider = image_provider
         self.theme = resolve_theme(theme)
+        self.renderer = renderer
         if self.mass_axis.ndim != 1 or self.mass_axis.size == 0:
             raise ValueError("mass_axis must contain at least one m/z value.")
 
@@ -44,6 +46,8 @@ class IonImageViewer:
         """
         mass = float(self.mass_axis[index])
         images = self.image_provider(mass)
+        if self.renderer is not None:
+            return self.renderer(mass, images)
         figure, axes = plot_image_grid(images, theme=self.theme)
         figure.suptitle(f"m/z {mass:.5f}")
         return figure, axes
