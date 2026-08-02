@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, random_split
 
 from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
@@ -77,6 +77,15 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         active_context = self._wrapper.active_context
         model = self._wrapper.active_model
         dataset = self._wrapper.active_dataset
+        dataset_partitions = self._split_dataset(
+            dataset,
+            training_config.get("dataset_split"),
+            seed,
+        )
+        normalization = getattr(active_context, "normalization", None)
+        if normalization is not None:
+            logger.info("Fitting normalization state on the training partition.")
+            normalization.fit(dataset_partitions["train"])
 
         model_type = getattr(self._wrapper.models_manager, "active_model_type", "unknown_model")
         model_name = (
@@ -162,7 +171,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             # Heading 1 (Epoch Processing Execution Loop Partition)
             ## Resolve DataLoader settings from the same configuration used by estimation
             dataloader = self._build_dataloader(
-                dataset=dataset,
+                dataset=dataset_partitions["train"],
                 phase_config=phase_config,
                 device=preprocessing_device,
             )
@@ -171,6 +180,26 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 if isinstance(dataloader.dataset, RawDatasetView)
                 else None
             )
+            validation_loader = None
+            validation_preprocessor = None
+            validation_dataset = dataset_partitions.get("validation")
+            if validation_dataset is not None and len(validation_dataset) > 0:
+                validation_phase = dict(phase_config)
+                validation_phase["dataloader"] = {
+                    **phase_config.get("dataloader", {}),
+                    "shuffle": False,
+                    "drop_last": False,
+                }
+                validation_loader = self._build_dataloader(
+                    dataset=validation_dataset,
+                    phase_config=validation_phase,
+                    device=preprocessing_device,
+                )
+                validation_preprocessor = (
+                    BatchPreprocessor(dataset, preprocessing_device, compute_device)
+                    if isinstance(validation_loader.dataset, RawDatasetView)
+                    else None
+                )
             total_batches = len(dataloader)
             if total_batches < 1:
                 raise_validation_error(
@@ -313,7 +342,24 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 for key, running_sum in accumulated_metrics.items():
                     mean_metrics[key] = running_sum / total_batches
 
-                current_epoch_loss = mean_metrics["total_loss"]
+                if validation_loader is not None:
+                    validation_metrics = self._evaluate_loader(
+                        model=model,
+                        dataloader=validation_loader,
+                        preprocessor=validation_preprocessor,
+                        composite_loss=composite_loss,
+                        compute_device=compute_device,
+                        transient_cache=transient_cache,
+                    )
+                    mean_metrics.update(
+                        {f"validation_{name}": value for name, value in validation_metrics.items()}
+                    )
+                    current_epoch_loss = validation_metrics["total_loss"]
+                    checkpoint_scope = "validation"
+                else:
+                    current_epoch_loss = mean_metrics["total_loss"]
+                    checkpoint_scope = "train"
+                mean_metrics["checkpoint_scope"] = checkpoint_scope
                 improved = (
                     current_epoch_loss
                     < self.best_loss - checkpoint_config["min_delta"]
@@ -373,6 +419,34 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     "Restored the best checkpoint after phase '%s'.",
                     phase_name,
                 )
+
+            test_dataset = dataset_partitions.get("test")
+            if current_step == len(phases_list) - 1 and test_dataset is not None and len(test_dataset) > 0:
+                test_phase = dict(phase_config)
+                test_phase["dataloader"] = {
+                    **phase_config.get("dataloader", {}),
+                    "shuffle": False,
+                    "drop_last": False,
+                }
+                test_loader = self._build_dataloader(
+                    dataset=test_dataset,
+                    phase_config=test_phase,
+                    device=preprocessing_device,
+                )
+                test_preprocessor = (
+                    BatchPreprocessor(dataset, preprocessing_device, compute_device)
+                    if isinstance(test_loader.dataset, RawDatasetView)
+                    else None
+                )
+                test_metrics = self._evaluate_loader(
+                    model=model,
+                    dataloader=test_loader,
+                    preprocessor=test_preprocessor,
+                    composite_loss=composite_loss,
+                    compute_device=compute_device,
+                    transient_cache=transient_cache,
+                )
+                global_history.append({"phase": phase_name, "split": "test", "metrics": test_metrics})
 
         logger.info("All configured sequential multi-phase training loops successfully completed.")
         return global_history
@@ -468,14 +542,15 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             loader_config.pop("prefetch_factor", None)
             loader_config["persistent_workers"] = False
         try:
-            raw_getter = callable(getattr(dataset, "get_raw_item", None))
+            source_dataset = getattr(dataset, "dataset", dataset)
+            raw_getter = callable(getattr(source_dataset, "get_raw_item", None))
             if raw_getter:
                 if "collate_fn" in loader_config:
                     raise_validation_error(
                         "Trainer",
                         "A custom collate_fn cannot replace the packed raw collator.",
                     )
-                schemas_getter = getattr(dataset, "get_target_schemas", None)
+                schemas_getter = getattr(source_dataset, "get_target_schemas", None)
                 schemas = schemas_getter() if callable(schemas_getter) else {}
                 loader_config["collate_fn"] = RawSpectrumCollator(schemas)
                 dataset = RawDatasetView(dataset)
@@ -485,6 +560,36 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 context_name="Trainer",
                 message=f"Invalid DataLoader configuration: {error}",
             )
+
+    def _evaluate_loader(
+        self,
+        *,
+        model: nn.Module,
+        dataloader: DataLoader,
+        preprocessor: BatchPreprocessor | None,
+        composite_loss: nn.Module,
+        compute_device: torch.device,
+        transient_cache: Dict[str, Any],
+    ) -> Dict[str, float]:
+        """Evaluate one dataset split without gradients or state updates."""
+        model.eval()
+        accumulated: Dict[str, float] = {}
+        with torch.inference_mode():
+            for batch in dataloader:
+                if isinstance(batch, RawSpectrumBatch):
+                    if preprocessor is None:
+                        raise_validation_error("Trainer", "Raw batches require preprocessing.")
+                    batch = preprocessor(batch)
+                elif isinstance(batch, SpectrumBatch):
+                    batch = batch.to(compute_device, non_blocking=compute_device.type == "cuda")
+                for loss_fn in composite_loss.loss_functions.values():
+                    batch = loss_fn.on_batch_start(batch_data=batch, transient_cache=transient_cache)
+                spectra = batch.model_input() if isinstance(batch, SpectrumBatch) else batch[1].to(compute_device)
+                outputs = model(spectra)
+                _, logs = composite_loss(model_outputs=outputs, batch_data=batch)
+                for name, value in logs.items():
+                    accumulated[name] = accumulated.get(name, 0.0) + value
+        return {name: value / len(dataloader) for name, value in accumulated.items()}
 
     @classmethod
     def _ensure_finite_tensors(cls, value: Any, location: str) -> None:
@@ -604,4 +709,56 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 message="Training configuration must contain a non-empty 'phases' list.",
             )
 
+        split = training_config.get("dataset_split")
+        if split is not None:
+            self._validate_dataset_split(split)
+
         logger.info("Pre-flight validation successful. Training environment maps verified.")
+
+    @staticmethod
+    def _validate_dataset_split(split: Dict[str, Any]) -> Dict[str, float]:
+        """Validate train, validation, and test proportions.
+
+        :param split: Mapping containing all three dataset proportions.
+        :type split: Dict[str, Any]
+        :return: Validated floating-point proportions.
+        :rtype: Dict[str, float]
+        :raises ValidationError: If fields are missing, invalid, or do not sum to one.
+        """
+        if not isinstance(split, dict) or set(split) != {"train", "validation", "test"}:
+            raise_validation_error(
+                "Trainer",
+                "dataset_split must contain exactly train, validation, and test.",
+            )
+        resolved: Dict[str, float] = {}
+        for name, value in split.items():
+            if isinstance(value, bool):
+                raise_validation_error("Trainer", f"dataset_split.{name} must be numeric.")
+            resolved[name] = float(value)
+            if resolved[name] < 0 or resolved[name] > 1:
+                raise_validation_error("Trainer", f"dataset_split.{name} must be in [0, 1].")
+        if abs(sum(resolved.values()) - 1.0) > 1e-9:
+            raise_validation_error("Trainer", "dataset_split proportions must sum to 1.")
+        if resolved["train"] <= 0:
+            raise_validation_error("Trainer", "dataset_split.train must be greater than zero.")
+        return resolved
+
+    @classmethod
+    def _split_dataset(
+        cls,
+        dataset: Dataset,
+        split: Dict[str, Any] | None,
+        seed: int | None,
+    ) -> Dict[str, Dataset]:
+        """Create deterministic disjoint dataset views from configured proportions."""
+        if split is None:
+            return {"train": dataset}
+        resolved = cls._validate_dataset_split(split)
+        total = len(dataset)
+        exact = [resolved[name] * total for name in ("train", "validation", "test")]
+        lengths = [int(value) for value in exact]
+        for index in sorted(range(3), key=lambda item: exact[item] - lengths[item], reverse=True)[: total - sum(lengths)]:
+            lengths[index] += 1
+        generator = torch.Generator().manual_seed(0 if seed is None else int(seed))
+        subsets = random_split(dataset, lengths, generator=generator)
+        return dict(zip(("train", "validation", "test"), subsets))

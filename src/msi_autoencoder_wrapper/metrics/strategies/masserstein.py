@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from ...utils.exceptions import raise_validation_error
 from ...utils.logger import get_custom_logger
+from ..base import MetricRequirements
 
 logger = get_custom_logger(__name__)
 
@@ -53,6 +54,12 @@ class SpectrumMasserstein(torch.nn.Module):
     the physical m/z grid through ``mass_axis``. The uniform ``axis_step`` is a
     fallback for standalone calculations that do not provide an axis.
     """
+
+    requirements = MetricRequirements(
+        requires_nonnegative=True,
+        requires_linear_intensity=True,
+        accepts_samplewise_scalar=True,
+    )
 
     def __init__(
         self,

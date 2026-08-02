@@ -8,6 +8,7 @@ from typing import Any
 import torch
 
 from .batches import RawSpectrumBatch, SpectrumBatch
+from ..normalization import NormalizationPipeline
 
 
 class BatchPreprocessor:
@@ -28,18 +29,61 @@ class BatchPreprocessor:
         """Transfer once, bin, normalize, and forward to the compute device."""
         non_blocking = self.device.type == "cuda"
         prepared = raw_batch.to(self.device, non_blocking=non_blocking)
+        normalization = getattr(self.dataset.active_context, "normalization", None)
+        raw_trace = None
+        if normalization is not None and normalization.stage == "raw":
+            raw_values, raw_trace = normalization.transform(
+                prepared.intensities,
+                sample_indices=prepared.sample_indices,
+                batch_size=prepared.batch_size,
+            )
+            prepared = replace(
+                prepared,
+                intensities=raw_values,
+                normalization_trace=raw_trace,
+            )
         dense = self.binner.transform_batch(prepared)
-        spectra = self.dataset.normalize_batch(dense.spectra)
+        trace = raw_trace
+        if normalization is not None and normalization.stage == "binned":
+            spectra, trace = normalization.transform(dense.spectra)
+            normalization_name = trace.pipeline_name
+        elif normalization is not None:
+            spectra = dense.spectra
+            normalization_name = raw_trace.pipeline_name if raw_trace else "none"
+        else:
+            legacy_name = getattr(self.dataset, "normalization", "none")
+            if legacy_name == "none":
+                spectra = dense.spectra
+                normalization_name = "none"
+            else:
+                legacy = NormalizationPipeline.from_config(
+                    {
+                        "stage": "binned",
+                        "steps": {
+                            legacy_name: {
+                                "type": legacy_name,
+                                "epsilon": getattr(
+                                    self.dataset,
+                                    "normalization_epsilon",
+                                    1e-12,
+                                ),
+                            }
+                        },
+                    }
+                )
+                spectra, trace = legacy.transform(dense.spectra)
+                normalization_name = trace.pipeline_name
         normalized = SpectrumBatch(
             sample_ids=dense.sample_ids,
             spectra=spectra,
             space=replace(
                 dense.space,
-                normalization=self.dataset.normalization,
+                normalization=normalization_name,
             ),
             targets=dense.targets,
             views=dense.views,
             metadata=dense.metadata,
+            normalization_trace=trace,
         )
         if self.compute_device == self.device:
             return normalized
