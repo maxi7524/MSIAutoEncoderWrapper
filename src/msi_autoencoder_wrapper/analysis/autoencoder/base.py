@@ -15,8 +15,22 @@ from ...readers.spatial import SpatialImage
 from ...utils.exceptions import raise_validation_error
 from ...utils.logger import get_custom_logger
 from ...visualization import VisualizationTheme, resolve_theme
-from .reconstruction.metrics import reconstruction_metrics
+from ...metrics import (
+    cosine_similarity,
+    feature_errors,
+    mae,
+    mse,
+    spectral_angle,
+    tic_error,
+)
 from .results import PreparationEstimate, PreparedAnalysis
+from ...data import (
+    BatchPreprocessor,
+    RawDatasetView,
+    RawSpectrumBatch,
+    RawSpectrumCollator,
+    SpectrumBatch,
+)
 
 logger = get_custom_logger(__name__)
 
@@ -195,6 +209,10 @@ class BaseAutoencoderAnalysis:
         }
         if loader_options:
             options.update(loader_options)
+        compute_device = torch.device(options.pop("compute_device", self._device()))
+        preprocessing_device = torch.device(
+            options.pop("preprocessing_device", compute_device)
+        )
         if options.get("shuffle"):
             raise_validation_error(
                 "AutoencoderAnalysis",
@@ -215,16 +233,37 @@ class BaseAutoencoderAnalysis:
             "feature_bias": None,
         }
         processed = 0
+        runtime.model.to(compute_device)
         runtime.model.eval()
         logger.info(
             "Preparing analysis for model '%s' over %s spectra.",
             runtime.name,
             len(runtime.dataset),
         )
-        with torch.no_grad():
-            for batch in DataLoader(runtime.dataset, **options):
-                batch_ids, spectra = batch[0], batch[1]
-                device_spectra = spectra.to(self._device(), dtype=torch.float32)
+        loader_dataset = runtime.dataset
+        batch_preprocessor = None
+        if callable(getattr(runtime.dataset, "get_raw_item", None)):
+            schemas_getter = getattr(runtime.dataset, "get_target_schemas", None)
+            schemas = schemas_getter() if callable(schemas_getter) else {}
+            options["collate_fn"] = RawSpectrumCollator(schemas)
+            loader_dataset = RawDatasetView(runtime.dataset)
+            batch_preprocessor = BatchPreprocessor(
+                runtime.dataset,
+                preprocessing_device,
+                compute_device,
+            )
+            options["pin_memory"] = preprocessing_device.type == "cuda"
+        with torch.inference_mode():
+            for batch in DataLoader(loader_dataset, **options):
+                if isinstance(batch, RawSpectrumBatch):
+                    batch = batch_preprocessor(batch)
+                if isinstance(batch, SpectrumBatch):
+                    batch_ids = batch.sample_ids
+                    spectra = batch.spectra
+                    device_spectra = spectra
+                else:
+                    batch_ids, spectra = batch[0], batch[1]
+                    device_spectra = spectra.to(compute_device, dtype=torch.float32)
                 outputs = runtime.model(device_spectra)
                 reconstruction = outputs.get("reconstruction")
                 if reconstruction is None:
@@ -232,9 +271,24 @@ class BaseAutoencoderAnalysis:
                         "AutoencoderAnalysis",
                         f"Model '{runtime.name}' has no reconstruction output.",
                     )
+                metric_tensors = {
+                    "mse": mse(reconstruction, device_spectra),
+                    "mae": mae(reconstruction, device_spectra),
+                    "cosine_similarity": cosine_similarity(
+                        reconstruction, device_spectra
+                    ),
+                    "spectral_angle": spectral_angle(reconstruction, device_spectra),
+                    "tic_input": device_spectra.sum(dim=1),
+                    "tic_reconstruction": reconstruction.sum(dim=1),
+                    "tic_error": tic_error(reconstruction, device_spectra),
+                    **feature_errors(reconstruction, device_spectra),
+                }
+                metrics = {
+                    name: value.detach().cpu().numpy()
+                    for name, value in metric_tensors.items()
+                }
                 input_array = spectra.detach().cpu().numpy()
                 reconstruction_array = reconstruction.detach().cpu().numpy()
-                metrics = reconstruction_metrics(input_array, reconstruction_array)
                 ids.append(np.asarray(batch_ids, dtype=np.int64))
                 batch_count = len(input_array)
                 processed += batch_count
