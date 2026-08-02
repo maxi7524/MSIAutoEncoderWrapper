@@ -542,6 +542,14 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         loader_config.setdefault("num_workers", int(default_workers))
         loader_config.setdefault("pin_memory", str(device).startswith("cuda"))
         loader_config.setdefault("drop_last", False)
+        seed = phase_config.get("seed", self._config.get("training", {}).get("seed"))
+        if seed is not None:
+            from ...execution.seeds import seed_worker
+
+            generator = torch.Generator()
+            generator.manual_seed(int(seed))
+            loader_config.setdefault("generator", generator)
+            loader_config.setdefault("worker_init_fn", seed_worker)
         workers = int(loader_config["num_workers"])
         if workers < 0:
             raise_validation_error(
