@@ -51,6 +51,11 @@ dev = [
     "jupyterlab>=4.6.2",
     "pytest",
 ]
+docs = [
+    "furo",
+    "myst-parser",
+    "sphinx",
+]
 
 [tool.uv]
 conflicts = [

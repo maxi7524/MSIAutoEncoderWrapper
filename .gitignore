@@ -16,6 +16,7 @@ __pycache__
 .vscode
 .to_delete
 .pym2aia_prefs.xml
+/docs/_build/
 
 # notebooks
 *.ipynb diff=jupyternotebook

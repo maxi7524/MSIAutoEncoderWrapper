@@ -1,17 +1,46 @@
-# Documentation
+# MSIAutoEncoderWrapper documentation
 
-This documentation describes how to use and extend the library.
+This documentation explains how to use, understand, reproduce results with,
+and extend MSIAutoEncoderWrapper.
 
 ## Contents
 
+### Tutorials
+
+[Tutorials](tutorials/index.md) present complete workflows in execution order.
+
 ### How-to guides
 
-- [Dataset management protocol](how-to/dataset-management.md) — query, authenticate, download, annotate, and merge external MSI datasets.
+[How-to guides](how-to/index.md) document individual operations and their
+user-facing configuration.
+
+### Reproduction guides
+
+[Reproduction guides](reproduction-guides/index.md) will contain the exact
+data, configuration, and execution requirements for reported results.
+
+### Methodology
+
+[Methodology](methodology/index.md) is reserved for the definitions and
+justification of methods implemented by the library.
 
 ### Library internals
 
-- [Dataset management internals](library-internals/dataset-management.md) — component boundaries, artifacts, and execution flow.
+[Library internals](library-internals/index.md) describe component boundaries,
+data flow, state transitions, and execution order.
 
 ### Instructions for developers
 
-- [Adding a dataset source](developer-guides/adding-a-dataset-source.md) — implement and test another external database adapter.
+[Instructions for developers](developer-guides/index.md) describe how to
+modify, extend, and test the library.
+
+```{toctree}
+:hidden:
+
+tutorials/index
+how-to/index
+reproduction-guides/index
+methodology/index
+library-internals/index
+developer-guides/index
+```
