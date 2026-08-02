@@ -3,6 +3,7 @@
 from .base import BaseMetric, ClassMetric, ClassificationMetric, MetricRequirements, SpectrumMetric
 from .compatibility import validate_metric_compatibility
 from .registry import MetricDefinition, MetricsRegistry, MetricsRunner
+from .spectral_points import SpectralPointMatch, match_spectral_points, spectral_point_metrics
 from .strategies.classification import binary_cross_entropy, cross_entropy
 from .strategies.classes import PerClassClassification
 from .strategies.embedding import info_nce
@@ -27,6 +28,7 @@ __all__ = [
     "MetricsRunner",
     "PerClassClassification",
     "SpectrumMetric",
+    "SpectralPointMatch",
     "SpectrumMasserstein",
     "binary_cross_entropy",
     "cross_entropy",
@@ -34,9 +36,11 @@ __all__ = [
     "feature_errors",
     "info_nce",
     "mae",
+    "match_spectral_points",
     "mse",
     "sobolev",
     "spectral_angle",
+    "spectral_point_metrics",
     "tic_error",
     "validate_metric_compatibility",
 ]
