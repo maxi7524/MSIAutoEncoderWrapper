@@ -10,7 +10,7 @@ from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
 from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
     ArchitecturesManager,
 )
-from msi_autoencoder_wrapper.utils.configuration import ConfigurableComponent
+from msi_autoencoder_wrapper.configuration import ConfigurableComponent
 from tests.mocks.components import MockMSIReader, build_small_autoencoder
 
 

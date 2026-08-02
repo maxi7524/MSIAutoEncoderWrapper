@@ -68,6 +68,17 @@ def test_masserstein_parameters_use_global_validation_errors() -> None:
         MSIMassersteinLoss(denoising_penalty=0.0)
 
 
+def test_masserstein_metric_rejects_negative_values_instead_of_clamping() -> None:
+    """Invalid intensities are reported instead of silently changing the data."""
+    metric = _loss().metric
+
+    with pytest.raises(ValidationError, match="non-negative"):
+        metric(
+            torch.tensor([[0.5, -0.1]]),
+            torch.tensor([[0.5, 0.1]]),
+        )
+
+
 def test_masserstein_batches_regular_high_resolution_axes(caplog) -> None:
     """A regular high-resolution grid uses the batched convolution path."""
     original = torch.rand(4, 2048)

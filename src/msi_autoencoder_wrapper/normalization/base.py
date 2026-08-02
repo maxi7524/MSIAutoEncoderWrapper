@@ -8,6 +8,8 @@ from typing import Any, Literal, Mapping
 
 import torch
 
+from ..configuration import ConfigurableComponent
+
 NormalizationStage = Literal["raw", "binned"]
 DenormalizationStage = Literal["after_decode", "after_inverse_binning"]
 OutputSpace = Literal["normalized", "source"]
@@ -62,7 +64,7 @@ class NormalizationTrace:
         )
 
 
-class BaseNormalization(ABC):
+class BaseNormalization(ConfigurableComponent, ABC):
     """Define one differentiable and optionally reversible normalization step."""
 
     capabilities: NormalizationCapabilities
@@ -71,6 +73,7 @@ class BaseNormalization(ABC):
         if epsilon <= 0:
             raise ValueError("epsilon must be greater than zero.")
         self.epsilon = float(epsilon)
+        self._config: dict[str, Any] = {"epsilon": self.epsilon}
 
     def fit(self, batches: Any) -> "BaseNormalization":
         """Fit dataset-level state; samplewise implementations need no pass."""

@@ -13,7 +13,7 @@ from .proxies.model_runtime_proxy import ModelRuntimeProxy
 
 # Centralized logging and configuration utilities
 from ....utils.logger import get_custom_logger
-from ....utils.configuration import get_component_config, make_json_compatible
+from ....configuration import get_component_config, make_json_compatible
 
 logger = get_custom_logger(__name__)
 

@@ -3,7 +3,7 @@ import numpy as np
 from .base_binner import MSIBaseBinner
 from typing import Any, Optional
 from ..utils.exceptions import raise_validation_error
-from ..utils.configuration import ConfigurableComponent
+from ..configuration import ConfigurableComponent
 
 class MSIBaseInverseBinner(ConfigurableComponent, ABC):
     """

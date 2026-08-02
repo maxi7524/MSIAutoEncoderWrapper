@@ -44,7 +44,18 @@ class MSIReconstructionCriterion(MSIBaseCriterion, ABC):
             if isinstance(batch_data, SpectrumBatch)
             else batch_data[1]
         )
-        return reconstruction, target.to(reconstruction.device)
+        target = target.to(reconstruction.device)
+        if not torch.isfinite(reconstruction).all() or not torch.isfinite(target).all():
+            raise_incompatible_interface_error(
+                "ReconstructionCriterion",
+                "Reconstructed and target spectra must contain only finite intensities.",
+            )
+        if torch.any(reconstruction < 0) or torch.any(target < 0):
+            raise_incompatible_interface_error(
+                "ReconstructionCriterion",
+                "Reconstructed and target spectra must contain non-negative intensities.",
+            )
+        return reconstruction, target
 
 
 class MSIContrastiveCriterion(MSIBaseCriterion, ABC):

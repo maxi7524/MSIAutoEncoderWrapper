@@ -4,7 +4,7 @@
 from __future__ import annotations
 from pathlib import Path
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional, List, Union
+from typing import Any, Iterator, Optional, List, Tuple, Union
 
 from .base_workspace_proxy import BaseWorkspaceProxy
 from .....utils.exceptions import raise_workspace_error
@@ -176,11 +176,7 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         ## Otherwise, build path targeting the internal default workspace structure
         logger.debug("Resolving internal workspace dataset path for: %s", img_name)
         datasets_dir = self.get_datasets_dir()
-        nested_path = datasets_dir / img_name / f"{img_name}{suffix}"
-        legacy_path = datasets_dir / f"{img_name}{suffix}"
-        if legacy_path.is_file() and not nested_path.is_file():
-            return legacy_path
-        return nested_path
+        return datasets_dir / img_name / f"{img_name}{suffix}"
     
     ## Helper 1: Resolve incoming path or identifier token
     def _resolve_incoming_path(self, img_name_or_path: Optional[Union[str, Path]]) -> Tuple[Optional[str], Optional[Path]]:
@@ -232,22 +228,16 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
         imgs_dir = self.get_datasets_dir()
         input_path = Path(img_name_or_path)
 
-        ## Rule 1: If an absolute path is provided directly, target it; otherwise, anchor it to imgs_dir
-        target_file = input_path if input_path.is_absolute() else imgs_dir / input_path
-
-        ## Rule 2: If the exact file path exists, return it immediately
-        if target_file.is_file():
-            return target_file
+        ## Rule 1: Resolve explicit absolute files directly.
+        if input_path.is_absolute() and input_path.is_file():
+            return input_path
 
         nested_file = imgs_dir / input_path.stem / input_path.name
         if nested_file.is_file():
             return nested_file
 
-        ## Rule 3: If not found, try appending default extensions (e.g., .imzML)
-        if not target_file.suffix:
-            fallback_file = target_file.with_suffix(".imzML")
-            if fallback_file.is_file():
-                return fallback_file
+        ## Rule 3: Resolve a dataset key to its canonical nested imzML file.
+        if not input_path.suffix:
             nested_fallback = (
                 imgs_dir / input_path.stem / input_path.stem
             ).with_suffix(".imzML")
@@ -312,14 +302,6 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
             target_path.mkdir(parents=True, exist_ok=True)
 
         return target_path
-
-    def get_imgs_dir(self) -> Path:
-        """Return the datasets directory through the legacy workspace API.
-
-        :return: Path returned by :meth:`get_datasets_dir`.
-        :rtype: pathlib.Path
-        """
-        return self.get_datasets_dir()
 
     def get_dataset_catalog_path(self) -> Path:
         """Return the canonical SQLite catalog path for the workspace.

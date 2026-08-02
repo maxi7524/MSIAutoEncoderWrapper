@@ -13,7 +13,7 @@ class PerClassClassification(ClassMetric):
 
     direction = "maximize"
 
-    def __init__(self, metric: str, threshold: float = 0.5) -> None:
+    def __init__(self, metric: str = "f1", threshold: float = 0.5) -> None:
         super().__init__()
         if metric not in {"precision", "recall", "f1"}:
             raise_validation_error(
@@ -25,6 +25,7 @@ class PerClassClassification(ClassMetric):
             )
         self.metric = metric
         self.threshold = float(threshold)
+        self._config = {"metric": metric, "threshold": self.threshold}
         self.register_buffer("true_positive", torch.empty(0), persistent=False)
         self.register_buffer("false_positive", torch.empty(0), persistent=False)
         self.register_buffer("false_negative", torch.empty(0), persistent=False)

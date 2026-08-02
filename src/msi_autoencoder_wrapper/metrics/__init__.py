@@ -1,7 +1,7 @@
 """Model-independent numerical metrics organized by object space."""
 
 from .base import BaseMetric, ClassMetric, ClassificationMetric, MetricRequirements, SpectrumMetric
-from .compatibility import validate_metric_compatibility
+from .compatibility import validate_metric_compatibility, validate_metric_inputs
 from .registry import MetricDefinition, MetricsRegistry, MetricsRunner
 from .spectral_points import SpectralPointMatch, match_spectral_points, spectral_point_metrics
 from .strategies.classification import binary_cross_entropy, cross_entropy
@@ -43,6 +43,7 @@ __all__ = [
     "spectral_point_metrics",
     "tic_error",
     "validate_metric_compatibility",
+    "validate_metric_inputs",
 ]
 
 for _name, _space, _implementation in (

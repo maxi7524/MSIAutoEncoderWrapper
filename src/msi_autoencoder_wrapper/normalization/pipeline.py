@@ -8,6 +8,7 @@ from typing import Any, Iterable, Mapping
 
 import torch
 
+from ..configuration import ConfigurableComponent
 from ..utils.exceptions import raise_validation_error
 from ..utils.logger import get_custom_logger
 from .base import (
@@ -31,7 +32,7 @@ class ReconstructionPolicy:
     denormalization_stage: DenormalizationStage = "after_inverse_binning"
 
 
-class NormalizationPipeline:
+class NormalizationPipeline(ConfigurableComponent):
     """Execute ordered normalization steps and retain enough state to invert them."""
 
     def __init__(

@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
 from ...utils.exceptions import raise_project_config_error, raise_validation_error
-from ...utils.configuration import ConfigurableComponent, make_json_compatible
+from ...configuration import ConfigurableComponent, make_json_compatible
 from ...data import (
     BatchPreprocessor,
     RawDatasetView,

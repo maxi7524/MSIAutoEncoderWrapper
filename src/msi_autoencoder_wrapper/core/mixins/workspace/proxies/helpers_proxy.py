@@ -86,8 +86,8 @@ class HelpersProxy(BaseWorkspaceProxy):
                 logger.info("Creating project root directory: %s", self.project_path_resolved)
                 self.project_path_resolved.mkdir(parents=True, exist_ok=True)
 
-            ## Create base subdirectories (imgs and models)
-            imgs_dir = self.get_imgs_dir()
+            ## Create base dataset and model directories.
+            self.get_datasets_dir()
             models_dir = self.project_path_resolved / self._layout["models_root"]
 
             if not models_dir.exists():

@@ -6,7 +6,7 @@ from typing import Any, Optional, Dict, Tuple, Union
 
 import numpy as np
 
-from ..utils.configuration import ConfigurableComponent
+from ..configuration import ConfigurableComponent
 from ..utils.exceptions import raise_validation_error
 from .spatial import Aggregation, SpatialImage, aggregate_window
 

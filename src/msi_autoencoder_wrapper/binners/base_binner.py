@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from typing import Any, Optional
 
-from ..utils.configuration import ConfigurableComponent
+from ..configuration import ConfigurableComponent
 from ..utils.exceptions import raise_validation_error
 
 
