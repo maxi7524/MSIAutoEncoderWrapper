@@ -11,6 +11,7 @@ from ....data import (
     BatchPreprocessor,
     RawDatasetView,
     RawSpectrumBatch,
+    SharedAxisRawBatch,
     RawSpectrumCollator,
     LatentBatch,
     SpectrumBatch,
@@ -248,7 +249,7 @@ class AutoencoderContextInterface:
         with torch.inference_mode():
             # REMARK: We take batch and always second index ([1]) - it solves problem with possible third value
             for batch in data_loader:
-                if isinstance(batch, RawSpectrumBatch):
+                if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
                     batch = preprocessor(batch)
                 spectra = batch[1].to(
                     compute_device,
