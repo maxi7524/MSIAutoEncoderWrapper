@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 # Core mixins imports targeting the new modular structures
 from .mixins.workspace.workspace_manager_mixin import WorkspaceMixin
 from .mixins.context_manager.context_manager_mixin import ContextManagerMixin
+from .mixins.cohort.cohort_mixin import CohortMixin
 from .mixins.active_context.active_context_mixin import ActiveContextMixin
 from .mixins.models_manager.models_manager_mixin import ModelsManagerMixin
 from .mixins.spatial_context_mixin import SpatialContextMixin, CoordinateOrder
@@ -26,6 +27,7 @@ class MSIAutoEncoderWrapper(
     SpatialContextMixin,  # Global XY versus matrix row-column convention
     WorkspaceMixin,  # Flat filesystem IO proxy interface
     ContextManagerMixin,  # Multi-image metadata configuration ledger database
+    CohortMixin,  # Named immutable sets of local image contexts
     ActiveContextMixin,  # Dynamic transparent routing command proxy for the active target file
     ModelsManagerMixin,  # Core PyTorch model builders, datasets, and training loop proxy
 ):
@@ -119,4 +121,12 @@ class MSIAutoEncoderWrapper(
             apply=apply,
             load_model=load_model,
             strict=strict,
+        )
+
+    def load_experiment(
+        self, path: str, load_model: bool = True, strict: bool = True
+    ) -> Dict[str, Any]:
+        """Restore a complete experiment from a model directory."""
+        return ConfigurationOrchestrator(self).load_experiment(
+            path, load_model=load_model, strict=strict
         )

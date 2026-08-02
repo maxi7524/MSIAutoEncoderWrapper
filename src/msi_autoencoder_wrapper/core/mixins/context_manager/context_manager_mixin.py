@@ -611,7 +611,12 @@ class ContextManagerProxy:
 
         bucket = self.config_ledger[image_key]
         component_configs: Dict[str, Any] = {}
-        for component_name in ("reader", "binner", "inverse_binner"):
+        for component_name in (
+            "reader",
+            "annotation_reader",
+            "binner",
+            "inverse_binner",
+        ):
             component = bucket.get(component_name)
             if component is not None and not isinstance(component, dict):
                 component_configs[component_name] = get_component_config(component)
@@ -647,6 +652,7 @@ class ContextManagerProxy:
         self,
         config: Dict[str, Any],
         img_name_or_path: Optional[str] = None,
+        base_path: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Restore the reader and binner pipeline owned by an image context.
 
@@ -681,20 +687,48 @@ class ContextManagerProxy:
 
         restored: Dict[str, Any] = {}
         reader_config = components["reader"]
+        context_target = img_name_or_path
+        configured_path = reader_config.get("parameters", {}).get("file_path")
+        if configured_path:
+            candidate = Path(configured_path)
+            if not candidate.is_absolute() and base_path is not None:
+                candidate = base_path / candidate
+            workspace_path = None
+            if img_name_or_path is not None:
+                try:
+                    workspace_path = self._wrapper.workspace._resolve_and_verify_image_file(
+                        img_name_or_path
+                    )
+                except Exception:
+                    workspace_path = None
+            if workspace_path is None and candidate.is_file():
+                context_target = str(candidate.resolve())
         reader_parameters = self._loadable_parameters(
             reader_config,
             excluded={"file_path", "active_context"},
         )
         restored["reader"] = self.set_reader(
             reader_config["type"],
-            img_name_or_path=img_name_or_path,
+            img_name_or_path=context_target,
+            auto_load_annotations=False,
             **reader_parameters,
         )
+
+        annotation_config = components.get("annotation_reader")
+        if isinstance(annotation_config, dict):
+            restored["annotation_reader"] = self.set_annotation_reader(
+                annotation_config["type"],
+                img_name_or_path=context_target,
+                **self._loadable_parameters(
+                    annotation_config,
+                    excluded={"active_context"},
+                ),
+            )
 
         binner_config = components["binner"]
         restored["binner"] = self.set_binner(
             binner_config["type"],
-            img_name_or_path=img_name_or_path,
+            img_name_or_path=context_target,
             **self._loadable_parameters(
                 binner_config,
                 excluded={"active_context"},
@@ -705,7 +739,7 @@ class ContextManagerProxy:
         if isinstance(inverse_config, dict):
             restored["inverse_binner"] = self.set_inverse_binner(
                 inverse_config["type"],
-                img_name_or_path=img_name_or_path,
+                img_name_or_path=context_target,
                 **self._loadable_parameters(
                     inverse_config,
                     excluded={"active_context", "binner"},
@@ -717,6 +751,7 @@ class ContextManagerProxy:
                 normalization_config,
                 img_name_or_path=img_name_or_path,
             )
+        self._wrapper.workspace.set_active_image(context_target)
         self._wrapper.set_coordinate_order(config.get("coordinate_order", "xy"))
         return restored
 

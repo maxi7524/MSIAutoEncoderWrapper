@@ -15,6 +15,7 @@ from msi_autoencoder_wrapper.normalization import (
     NormalizationTrace,
 )
 from msi_autoencoder_wrapper.training.engine.base_trainer import MSIPyTorchTrainer
+from msi_autoencoder_wrapper.models.datasets.splitting import DatasetSplitter, SplitConfig
 from tests.mocks.components import MockMSIReader
 
 
@@ -118,7 +119,7 @@ def test_metric_requirements_reject_nonlinear_intensity_trace() -> None:
 def test_training_split_requires_complete_valid_proportions(split: dict[str, float]) -> None:
     """Training partitions must be complete and sum to one."""
     with pytest.raises(Exception):
-        MSIPyTorchTrainer._validate_dataset_split(split)
+        SplitConfig(fractions=split)
 
 
 def test_training_split_is_deterministic_and_exhaustive() -> None:
@@ -126,13 +127,12 @@ def test_training_split_is_deterministic_and_exhaustive() -> None:
     dataset = torch.utils.data.TensorDataset(torch.arange(11))
     split = {"train": 0.6, "validation": 0.2, "test": 0.2}
 
-    first = MSIPyTorchTrainer._split_dataset(dataset, split, seed=7)
-    second = MSIPyTorchTrainer._split_dataset(dataset, split, seed=7)
+    config = {"strategy": "random", "fractions": split, "seed": 7}
+    first = DatasetSplitter.split(dataset, config)
+    second = DatasetSplitter.split(dataset, config)
 
-    assert sum(len(partition) for partition in first.values()) == len(dataset)
-    assert [partition.indices for partition in first.values()] == [
-        partition.indices for partition in second.values()
-    ]
+    assert sum(len(partition) for _, partition in first.items()) == len(dataset)
+    assert first.manifest.assignments == second.manifest.assignments
 
 
 def test_context_normalization_can_be_replaced_updated_removed_and_saved(

@@ -62,8 +62,13 @@ class MSIBaseAutoencoderArchitecture(MSIBaseMasterArchitecture):
 
         # Forward execution sequence
         ## 1. Extract bottleneck latent-space representation tensor coordinates
-        z = self.encoder(x)
-        outputs["latent_space"] = z
+        encoded = self.encoder(x)
+        if isinstance(encoded, dict):
+            outputs.update(encoded)
+            z = encoded["latent_space"]
+        else:
+            z = encoded
+            outputs["latent_space"] = z
 
         ## 2. Conditional spatial spectrum structural reconstruction pass
         if self.decoder is not None:

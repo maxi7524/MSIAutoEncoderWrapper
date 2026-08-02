@@ -77,7 +77,51 @@ class PixelDataset(MSIBaseDataset):
             "normalization": resolved_normalization,
             "normalization_epsilon": self.normalization_epsilon,
             "target_specs": self.target_specs,
+            "split": self.get_split_config(),
         }
+
+    def get_split_target(self, idx: int, target_field: str, **_: Any) -> Any:
+        """Return one available single-label target for stratified splitting."""
+        spec = self.target_specs.get(target_field)
+        if spec is None:
+            raise_validation_error(
+                "PixelDataset", f"Unknown split target field '{target_field}'."
+            )
+        if spec["type"] != "single_label":
+            # TODO: Add iterative stratification across multiple or multi-label targets.
+            raise_validation_error(
+                "PixelDataset", "Only one single-label split target is supported."
+            )
+        sample = self._target_sample(idx)
+        if not bool(sample.masks[target_field].item()):
+            return None
+        return int(sample.values[target_field].item())
+
+    def get_split_mask(self, idx: int, mask: str, **_: Any) -> Any:
+        """Return one named target-availability or annotation mask value."""
+        if mask in self.target_specs:
+            sample = self._target_sample(idx)
+            return bool(sample.masks[mask].item())
+        annotation_reader = getattr(self.active_context, "annotation_reader", None)
+        getter = getattr(annotation_reader, "get_spectrum_mask", None)
+        if callable(getter):
+            return getter(idx, mask)
+        raise_validation_error(
+            "PixelDataset", f"The active annotation reader does not expose mask '{mask}'."
+        )
+
+    def get_split_group(self, idx: int, group_fields: Any, **_: Any) -> Any:
+        """Return a metadata group key, including merged-source provenance."""
+        annotation_reader = getattr(self.active_context, "annotation_reader", None)
+        if annotation_reader is None:
+            raise_validation_error("PixelDataset", "Grouped splitting requires annotations.")
+        metadata = annotation_reader.get_spectrum_metadata(idx)
+        nested = metadata.get("metadata", {}) if isinstance(metadata, Mapping) else {}
+        fields = [group_fields] if isinstance(group_fields, str) else list(group_fields)
+        values = tuple(metadata.get(field, nested.get(field)) for field in fields)
+        if any(value is None or value == "" for value in values):
+            return ("__ungrouped__", self.get_sample_id(idx))
+        return values
 
     def __len__(self) -> int:
         """

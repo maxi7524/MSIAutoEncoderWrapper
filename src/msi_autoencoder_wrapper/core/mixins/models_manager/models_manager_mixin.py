@@ -13,11 +13,7 @@ from .proxies.model_runtime_proxy import ModelRuntimeProxy
 
 # Centralized logging and configuration utilities
 from ....utils.logger import get_custom_logger
-from ....utils.configuration import (
-    describe_component_target,
-    get_component_config,
-    make_json_compatible,
-)
+from ....utils.configuration import get_component_config, make_json_compatible
 
 logger = get_custom_logger(__name__)
 
@@ -90,65 +86,42 @@ class ModelsManagerProxy(ArchitectureProxy, DatasetProxy, TrainingProxy, ModelRu
         :return: Consolidated architecture, dataset, and training configuration.
         :rtype: Dict[str, Any]
         """
-        model_buffer = self._building_buffer.get("model", {})
-        component_configs: Dict[str, Any] = {}
-        head_specs: Dict[str, Dict[str, str]] = {}
-        for category, component_buffer in self._building_buffer.items():
-            if category in {"model", "dataset"}:
-                continue
-            # REMARK Named autoencoder heads use a nested component schema.
-            if category == "heads":
-                component_configs[category] = {}
-                for head_id, head_buffer in component_buffer.items():
-                    target = head_buffer.get(
-                        "target", head_buffer.get("strategy")
-                    )
-                    component_configs[category][head_id] = describe_component_target(
-                        target=target,
-                        parameters=head_buffer.get("kwargs", {}),
-                    )
-                    head_specs[head_id] = {
-                        "target_field": head_buffer["target_field"],
-                    }
-                continue
-            target = component_buffer.get("target", component_buffer.get("strategy"))
-            component_configs[category] = describe_component_target(
-                target=target,
-                parameters=component_buffer.get("kwargs", {}),
-            )
-
-        model_parameters = dict(model_buffer.get("kwargs", {}))
-        if head_specs:
-            model_parameters["head_specs"] = head_specs
+        active_model = getattr(self._wrapper, "active_model", None)
+        if active_model is None:
+            raise RuntimeError("A compiled or loaded model is required for serialization.")
+        runtime = get_component_config(active_model)
+        runtime_parameters = runtime.get("parameters", {})
+        model_parameters = runtime_parameters.get("parameters", {})
+        component_configs = runtime_parameters.get("components", {})
 
         dataset_config = None
         active_dataset = getattr(self._wrapper, "active_dataset", None)
         if active_dataset is not None:
             dataset_config = get_component_config(active_dataset)
-        elif "dataset" in self._building_buffer:
-            dataset_buffer = self._building_buffer["dataset"]
-            target = dataset_buffer.get("target", dataset_buffer.get("strategy"))
-            dataset_config = describe_component_target(
-                target=target,
-                parameters=dataset_buffer.get("kwargs", {}),
-            )
 
-        runtime_model_config = None
-        active_model = getattr(self._wrapper, "active_model", None)
-        if active_model is not None:
-            runtime_model_config = get_component_config(active_model)
+        split_config = None
+        if active_dataset is not None:
+            configured_split = getattr(active_dataset, "get_split_config", None)
+            partitions = getattr(active_dataset, "_partitions", None)
+            if callable(configured_split) and configured_split() is not None:
+                split_config = configured_split()
+            if partitions is not None:
+                split_config = {
+                    "config": split_config,
+                    "manifest": partitions.manifest.get_config(),
+                }
 
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "model": {
                 "name": self._active_model_name,
                 "type": self.active_model_type,
                 "preset": getattr(self, "_preset_name_used", None),
                 "parameters": make_json_compatible(model_parameters),
                 "components": component_configs,
-                "runtime": runtime_model_config,
             },
             "dataset": dataset_config,
+            "split": split_config,
             "training": {
                 "parameters": make_json_compatible(self._training_config),
             },

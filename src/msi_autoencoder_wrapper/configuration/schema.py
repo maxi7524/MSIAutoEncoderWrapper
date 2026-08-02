@@ -18,26 +18,22 @@ def validate_consolidated_configuration(config: Dict[str, Any]) -> None:
         raise_validation_error(
             "Configuration", "The saved configuration must be a dictionary."
         )
-    if config.get("schema_version") != 1:
+    if config.get("schema_version") != 2:
         raise_validation_error(
             "Configuration",
             f"Unsupported root schema version '{config.get('schema_version')}'.",
         )
-    local_context = config.get("local_image_context")
-    loaded_context = config.get("loaded_model_context")
-    if not isinstance(local_context, dict):
+    experiment = config.get("experiment")
+    data = config.get("data")
+    if not isinstance(experiment, dict):
         raise_validation_error(
-            "Configuration", "A local_image_context section is required."
+            "Configuration", "An experiment section is required."
         )
-    if not isinstance(loaded_context, dict):
+    if not isinstance(data, dict):
         raise_validation_error(
-            "Configuration", "A loaded_model_context section is required."
+            "Configuration", "A data section is required."
         )
-    if not isinstance(local_context.get("components"), dict):
+    if not isinstance(config.get("model"), dict):
         raise_validation_error(
-            "Configuration", "local_image_context.components must be a dictionary."
-        )
-    if not isinstance(loaded_context.get("model"), dict):
-        raise_validation_error(
-            "Configuration", "loaded_model_context.model must be a dictionary."
+            "Configuration", "A model section is required."
         )
