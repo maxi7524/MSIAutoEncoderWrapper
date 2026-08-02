@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 import numpy as np
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any, Optional, Dict, Tuple, Union
 
 from ..utils.configuration import ConfigurableComponent
@@ -116,6 +116,23 @@ class MSIBaseReader(ConfigurableComponent, ABC):
                 return self.get_region(*selectors)
             return self.get_spectrum_at(target)
         return self.GetSpectrum(target)
+
+    def GetSpectra(
+        self,
+        indices: Sequence[int],
+    ) -> list[Tuple[np.ndarray, np.ndarray]]:
+        """Read several spectra through one reader-level operation.
+
+        Reader strategies may override this method when their storage backend
+        exposes a native bulk API. The fallback preserves ordering and the
+        exact :meth:`GetSpectrum` contract.
+
+        :param indices: Flat spectrum indices in requested output order.
+        :type indices: Sequence[int]
+        :return: One mass-axis and intensity pair for every requested index.
+        :rtype: list[Tuple[numpy.ndarray, numpy.ndarray]]
+        """
+        return [self.GetSpectrum(int(index)) for index in indices]
 
     def IterSpectra(
         self,

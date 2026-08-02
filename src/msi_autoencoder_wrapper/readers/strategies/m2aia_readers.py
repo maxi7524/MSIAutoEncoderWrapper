@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 from typing import Optional, Any, Dict, Tuple, Union
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from ..base_reader import MSIBaseReader
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
@@ -160,6 +160,25 @@ class M2aiaReader(MSIBaseReader):
     def GetSpectrumPosition(self, idx: int) -> Tuple[int, int, int]:
         pos = self._img.GetSpectrumPosition(idx)
         return int(pos[0]), int(pos[1]), int(pos[2])
+
+    def GetSpectra(
+        self,
+        indices: Sequence[int],
+    ) -> list[Tuple[np.ndarray, np.ndarray]]:
+        """Read a batch directly through the native reader interface."""
+        spectra = []
+        for index in indices:
+            xs, ys = self._img.GetSpectrum(int(index))
+            if xs is None or ys is None:
+                spectra.append(
+                    (
+                        np.array([], dtype=np.float32),
+                        np.array([], dtype=np.float32),
+                    )
+                )
+            else:
+                spectra.append((xs.astype(np.float32), ys.astype(np.float32)))
+        return spectra
 
     def GetMetaData(self) -> Dict[str, Any]:
         # total_spectra = self.GetNumberOfSpectra()

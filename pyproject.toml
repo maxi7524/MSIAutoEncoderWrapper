@@ -18,6 +18,7 @@ dependencies = [
     "polars",
     "pridepy==0.0.16",
     "pyimzml",
+    "PyYAML",
     "requests",
     "scikit-learn",
     "scipy",
@@ -25,6 +26,9 @@ dependencies = [
     "statsmodels",
     "tabulate",
 ]
+
+[project.scripts]
+msi-wrapper = "msi_autoencoder_wrapper.execution.cli:main"
 
 [project.optional-dependencies]
 cpu = [
