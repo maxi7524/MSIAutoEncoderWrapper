@@ -10,40 +10,44 @@ from msi_autoencoder_wrapper import MSIAutoEncoderWrapper
 
 def _configuration() -> dict:
     return {
-        "schema_version": 1,
-        "storage_context": {"scope": "local_image", "key": "image-a"},
-        "local_image_context": {
-            "schema_version": 1,
-            "scope": "local_image",
-            "image_key": "image-a",
-            "coordinate_order": "xy",
-            "components": {
-                "reader": {
-                    "type": "PyImzMLReader",
-                    "parameters": {"file_path": "/non-portable/source.imzML"},
-                },
-                "binner": {
-                    "type": "LinearBinning",
-                    "parameters": {
-                        "x_min": 400.0,
-                        "x_max": 1000.0,
-                        "bin_step": 1.0,
+        "schema_version": 2,
+        "experiment": {
+            "name": "model-a",
+            "context": {"type": "image", "key": "image-a"},
+        },
+        "data": {
+            "context": {
+                "schema_version": 1,
+                "scope": "local_image",
+                "image_key": "image-a",
+                "coordinate_order": "xy",
+                "components": {
+                    "reader": {
+                        "type": "PyImzMLReader",
+                        "parameters": {"file_path": "/non-portable/source.imzML"},
+                    },
+                    "binner": {
+                        "type": "LinearBinning",
+                        "parameters": {
+                            "x_min": 400.0,
+                            "x_max": 1000.0,
+                            "bin_step": 1.0,
+                        },
+                    },
+                    "inverse_binner": {
+                        "type": "TopPeaksInverseBinner",
+                        "parameters": {"max_bins": 20, "window_size": 1},
                     },
                 },
-                "inverse_binner": {
-                    "type": "TopPeaksInverseBinner",
-                    "parameters": {"max_bins": 20, "window_size": 1},
-                },
             },
-        },
-        "loaded_model_context": {
-            "schema_version": 1,
-            "model": {"name": "model-a", "type": "autoencoder"},
             "dataset": {
                 "type": "PixelDataset",
                 "parameters": {"normalization": "tic"},
             },
+            "split": None,
         },
+        "model": {"name": "model-a", "type": "autoencoder"},
+        "training": {"parameters": None},
     }
 
 
@@ -56,7 +60,6 @@ def test_wrapper_orchestrates_module_owned_configuration_loaders(
     wrapper.workspace.set_default_image_path("image-a")
     config = _configuration()
     calls: list[tuple] = []
-    dataset = object()
 
     monkeypatch.setattr(
         wrapper.workspace,
@@ -66,14 +69,9 @@ def test_wrapper_orchestrates_module_owned_configuration_loaders(
     monkeypatch.setattr(
         wrapper.context_manager,
         "load_context_config",
-        lambda section, img_name_or_path=None: calls.append(
+        lambda section, img_name_or_path=None, base_path=None: calls.append(
             ("context", section, img_name_or_path)
         ),
-    )
-    monkeypatch.setattr(
-        wrapper.models_manager,
-        "load_dataset_config",
-        lambda section: calls.append(("dataset", section)) or dataset,
     )
     monkeypatch.setattr(
         wrapper.models_manager,
@@ -84,8 +82,8 @@ def test_wrapper_orchestrates_module_owned_configuration_loaders(
     loaded = wrapper.load_configuration(model_name="model-a")
 
     assert loaded is config
-    assert wrapper.active_dataset is dataset
-    assert [call[0] for call in calls] == ["context", "dataset", "model"]
+    assert wrapper.active_dataset.normalization == "tic"
+    assert [call[0] for call in calls] == ["context", "model"]
     assert calls[-1][1]["img_name"] == "image-a"
 
 
@@ -127,7 +125,7 @@ def test_image_context_owns_portable_component_restoration(
     wrapper.workspace.set_default_image_path("image-a")
 
     restored = wrapper.context_manager.load_context_config(
-        _configuration()["local_image_context"]
+        _configuration()["data"]["context"]
     )
 
     assert restored["reader"].file_path == target_imzml

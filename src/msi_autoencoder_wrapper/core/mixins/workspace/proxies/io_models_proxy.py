@@ -144,7 +144,13 @@ class IoModelsProxy(BaseWorkspaceProxy):
                 message="Cannot save a model because no model is currently loaded.",
             )
 
-        context_name = img_name or self.active_img_name or self.active_image_key
+        cohort_context = getattr(getattr(self._wrapper, "cohorts", None), "active_context", None)
+        context_name = (
+            img_name
+            or (cohort_context.key if self.execution_scope == "cohort" and cohort_context else None)
+            or self.active_img_name
+            or self.active_image_key
+        )
         if not context_name:
             raise_validation_error(
                 context_name="WorkspaceIO",
@@ -168,17 +174,28 @@ class IoModelsProxy(BaseWorkspaceProxy):
 
         model_config = models_manager.get_model_config()
         image_config = None
-        if context_name != GLOBAL_CONTEXT_KEY:
+        cohort_config = None
+        if cohort_context is not None and context_name == cohort_context.key:
+            cohort_config = cohort_context.get_config()
+        elif context_name != GLOBAL_CONTEXT_KEY:
             image_config = self._wrapper.context_manager.get_context_config(context_name)
         consolidated_config = {
-            "schema_version": 1,
-            "coordinate_order": self._wrapper.coordinate_order,
-            "storage_context": {
-                "scope": "global_model" if context_name == GLOBAL_CONTEXT_KEY else "local_image",
-                "key": context_name,
+            "schema_version": 2,
+            "experiment": {
+                "name": resolved_model_name,
+                "coordinate_order": self._wrapper.coordinate_order,
+                "context": {
+                    "type": "cohort" if cohort_config is not None else "image",
+                    "key": context_name,
+                },
             },
-            "loaded_model_context": model_config,
-            "local_image_context": image_config,
+            "data": {
+                "context": cohort_config or image_config,
+                "dataset": model_config.get("dataset"),
+                "split": model_config.get("split"),
+            },
+            "model": model_config["model"],
+            "training": model_config["training"],
         }
 
         if history is None:

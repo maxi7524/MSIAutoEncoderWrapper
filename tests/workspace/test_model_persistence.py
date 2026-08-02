@@ -105,12 +105,12 @@ def test_workspace_save_model_keeps_image_and_loaded_model_contexts_separate(
     config_path = model_dir / "config" / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert config["storage_context"] == {
-        "scope": "local_image",
+    assert config["experiment"]["context"] == {
+        "type": "image",
         "key": msi_fixture_path.stem,
     }
-    assert config["local_image_context"]["image_key"] == msi_fixture_path.stem
-    assert config["loaded_model_context"]["model"]["name"] == "portable-ae"
+    assert config["data"]["context"]["image_key"] == msi_fixture_path.stem
+    assert config["model"]["name"] == "portable-ae"
     assert (model_dir / "config" / "weights.pt").is_file()
 
 
@@ -162,6 +162,7 @@ def test_named_heads_are_serialized_and_reconstructed_separately(
         },
     }
     ArchitecturesManager.discover_architectures()
+    manager.compile_model(run_validation_pass=False)
 
     config = manager.get_model_config()
     reconstructed, model_type, model_name = ModelLoader.build(config)

@@ -211,7 +211,7 @@ def test_fit_checkpoints_and_reloads_named_heads(
     )
     outputs = reloaded(torch.ones(2, 32))
 
-    loaded_model = saved_config["loaded_model_context"]["model"]
+    loaded_model = saved_config["model"]
     assert len(history) == 1
     assert history[0]["metrics"]["is_best"]
     assert "molecule_primary" in loaded_model["components"]["heads"]
