@@ -29,3 +29,15 @@ class RawDatasetView(Dataset):
             return getter(index)
         source_index = self.dataset.indices[index]
         return self.dataset.dataset.get_raw_item(source_index)
+
+    def __getitems__(self, indices: list[int]) -> Any:
+        """Fetch a complete batch through the source dataset when supported."""
+        getter = getattr(self.dataset, "get_raw_batch", None)
+        if callable(getter):
+            return getter(indices)
+        source = getattr(self.dataset, "dataset", None)
+        source_getter = getattr(source, "get_raw_batch", None)
+        if callable(source_getter) and hasattr(self.dataset, "indices"):
+            source_indices = [self.dataset.indices[index] for index in indices]
+            return source_getter(source_indices)
+        return [self[index] for index in indices]

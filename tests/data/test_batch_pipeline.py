@@ -14,6 +14,7 @@ from msi_autoencoder_wrapper.data import (
     LatentBatch,
     RawSpectrumCollator,
     RawSpectrumSample,
+    SharedAxisRawBatch,
     SpectrumSpace,
     TargetSample,
 )
@@ -81,6 +82,44 @@ def test_torch_linear_batch_binning_matches_single_spectrum_scipy() -> None:
     assert torch.allclose(dense.spectra, torch.from_numpy(expected).float())
     assert torch.allclose(dense.space.mass_axis, torch.tensor([0.5, 1.5], dtype=torch.float64))
     assert dense.targets is raw.targets
+
+
+def test_shared_axis_batch_binning_matches_packed_fallback() -> None:
+    """Native shared-axis input preserves packed binning results without axis copies."""
+    binner = LinearBinning(bin_step=1.0, x_min=0.0, x_max=2.0)
+    shared = SharedAxisRawBatch(
+        sample_ids=torch.tensor([4, 9]),
+        mass_axis=torch.tensor([0.2, 0.9, 1.8], dtype=torch.float64),
+        intensities=torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+    )
+    packed = RawSpectrumCollator()(
+        [
+            RawSpectrumSample(
+                sample_id=int(sample_id),
+                mass_values=shared.mass_axis,
+                intensities=values,
+                targets=TargetSample.empty(),
+            )
+            for sample_id, values in zip(shared.sample_ids, shared.intensities)
+        ]
+    )
+
+    native_result = binner.transform_batch(shared)
+    fallback_result = binner.transform_batch(packed)
+
+    assert torch.equal(native_result.sample_ids, fallback_result.sample_ids)
+    assert torch.allclose(native_result.spectra, fallback_result.spectra)
+
+
+def test_raw_collator_passes_prebatched_reader_results_without_copy() -> None:
+    """DataLoader collation recognizes a batch returned through __getitems__."""
+    batch = SharedAxisRawBatch(
+        sample_ids=torch.tensor([1]),
+        mass_axis=torch.tensor([100.0], dtype=torch.float64),
+        intensities=torch.tensor([[2.0]]),
+    )
+
+    assert RawSpectrumCollator()(batch) is batch
 
 
 def test_batch_preprocessor_bins_and_normalizes_on_selected_device() -> None:

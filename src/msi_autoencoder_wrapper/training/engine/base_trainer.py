@@ -18,6 +18,7 @@ from ...data import (
     BatchPreprocessor,
     RawDatasetView,
     RawSpectrumBatch,
+    SharedAxisRawBatch,
     RawSpectrumCollator,
     SpectrumBatch,
 )
@@ -229,7 +230,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
                 ### Heading 3 (Batch Data Stream Execution Pass)
                 for step_idx, batch in enumerate(dataloader):
-                    if isinstance(batch, RawSpectrumBatch):
+                    if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
                         if batch_preprocessor is None:
                             raise_validation_error(
                                 "Trainer", "Raw batches require a batch preprocessor."
@@ -550,6 +551,9 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         if workers == 0:
             loader_config.pop("prefetch_factor", None)
             loader_config["persistent_workers"] = False
+        else:
+            loader_config.setdefault("prefetch_factor", 2)
+            loader_config.setdefault("persistent_workers", True)
         try:
             source_dataset = getattr(dataset, "dataset", dataset)
             raw_getter = callable(getattr(source_dataset, "get_raw_item", None))
@@ -585,7 +589,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         accumulated: Dict[str, float] = {}
         with torch.inference_mode():
             for batch in dataloader:
-                if isinstance(batch, RawSpectrumBatch):
+                if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
                     if preprocessor is None:
                         raise_validation_error("Trainer", "Raw batches require preprocessing.")
                     batch = preprocessor(batch)
