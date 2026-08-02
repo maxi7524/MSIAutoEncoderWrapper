@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 from pathlib import Path
-from typing import Any, Optional, List, Union
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional, List, Union
 
 from .base_workspace_proxy import BaseWorkspaceProxy
 from .....utils.exceptions import raise_workspace_error
@@ -73,6 +74,24 @@ class GettersAndSettersProxy(BaseWorkspaceProxy):
             self.active_img_name = img_name_or_path
             self._active_img_custom_path = None
             logger.info("Active image context mapped by index key: %s", self.active_img_name)
+        self.execution_scope = "local"
+
+    @contextmanager
+    def use_image(self, img_name_or_path: str) -> Iterator[Any]:
+        """Temporarily use one local image and restore the previous routing scope."""
+        previous_name = self.active_img_name
+        previous_path = self._active_img_custom_path
+        previous_scope = self.execution_scope
+        active_context = self._wrapper.active_context
+        active_context.clear_active_context()
+        self.set_active_image(img_name_or_path)
+        try:
+            yield active_context
+        finally:
+            active_context.clear_active_context()
+            self.active_img_name = previous_name
+            self._active_img_custom_path = previous_path
+            self.execution_scope = previous_scope
 
     def set_default_image_path(self, img_name_or_path: str) -> None:
         """

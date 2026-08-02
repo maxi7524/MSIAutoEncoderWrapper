@@ -200,7 +200,57 @@ class ActiveContextProxy(LatentContextMixin):
         functionality = bucket.get("model_functionality")
         if functionality is not None:
             self._cached_model_functionality = functionality
+            return functionality
+        functionality = self._load_cohort_autoencoder(image_key)
+        if functionality is not None:
+            bucket["model_functionality"] = functionality
+            self._cached_model_functionality = functionality
         return functionality
+
+    def _load_cohort_autoencoder(self, image_key: Optional[str]) -> Optional[Any]:
+        """Lazily attach the AE reference selected by the active cohort policy."""
+        cohort = getattr(getattr(self._wrapper, "cohorts", None), "active_context", None)
+        if cohort is None or image_key is None:
+            return None
+        member = next(
+            (item for item in cohort.members if item.image_key == image_key), None
+        )
+        if member is None:
+            return None
+        reference = (
+            cohort.common_autoencoder
+            if cohort.autoencoder_policy == "common"
+            else member.autoencoder_reference
+        )
+        if reference is None:
+            return None
+        from ....models.model_loader import ModelLoader
+
+        reference_path = reference.path
+        if reference_path is None:
+            reference_path = f"{reference.image_name}/{reference.model_name}"
+        model, config, model_dir = ModelLoader.load_artifact(
+            reference_path,
+            workspace_root=self._wrapper.workspace.project_path_resolved,
+        )
+        if (
+            reference.fingerprint is not None
+            and ModelLoader.artifact_fingerprint(model_dir) != reference.fingerprint
+        ):
+            raise_validation_error(
+                "ActiveContext", "The referenced autoencoder artifact has changed."
+            )
+        model_config = config.get("model", {})
+        if model_config.get("type") != "autoencoder":
+            raise_validation_error(
+                "ActiveContext", "The cohort model reference is not an autoencoder."
+            )
+        model.to(getattr(self._wrapper, "device", "cpu"))
+        return AutoencoderContextInterface(
+            torch_model=model,
+            active_context=self,
+            trained=True,
+        )
 
     @property
     def model_functionality(self) -> Optional[Any]:

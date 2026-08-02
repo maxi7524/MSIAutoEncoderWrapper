@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Optional
 
+import json
+import hashlib
+import torch
 import torch.nn as nn
 
 from .architectures.architectures_manager import ArchitecturesManager
@@ -26,8 +30,7 @@ class ModelLoader:
         :rtype: tuple[torch.nn.Module, str, Optional[str]]
         :raises ModelNotInitializedError: If the architecture configuration is incomplete.
         """
-        loaded_context = config.get("loaded_model_context", config)
-        model_config = loaded_context.get("model")
+        model_config = config.get("model")
         if not isinstance(model_config, dict):
             raise_model_initialization_error(
                 model_name="LoadedModel",
@@ -69,6 +72,61 @@ class ModelLoader:
             **model_parameters,
         )
         return model, model_type, model_config.get("name")
+
+    @classmethod
+    def load_artifact(
+        cls,
+        reference: Path | str,
+        *,
+        workspace_root: Optional[Path | str] = None,
+        strict: bool = True,
+    ) -> tuple[nn.Module, Dict[str, Any], Path]:
+        """Load a model folder without attaching it to wrapper runtime state."""
+        model_dir = cls.resolve_artifact_dir(reference, workspace_root=workspace_root)
+        config_path = model_dir / "config" / "config.json"
+        weights_path = model_dir / "config" / "weights.pt"
+        if not config_path.is_file() or not weights_path.is_file():
+            raise_model_initialization_error(
+                model_name=model_dir.name,
+                message="Model artifact requires config/config.json and config/weights.pt.",
+            )
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+        model, _, _ = cls.build(config)
+        state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+        model.load_state_dict(state_dict, strict=strict)
+        return model, config, model_dir
+
+    @staticmethod
+    def resolve_artifact_dir(
+        reference: Path | str, *, workspace_root: Optional[Path | str] = None
+    ) -> Path:
+        """Resolve workspace ``image/model`` first and current-directory paths second."""
+        raw = Path(reference)
+        candidates = []
+        if workspace_root is not None:
+            candidates.append(Path(workspace_root) / "models" / raw)
+        candidates.extend((raw, Path.cwd() / raw))
+        model_dir = next((path.resolve() for path in candidates if path.is_dir()), None)
+        if model_dir is None:
+            raise_model_initialization_error(
+                model_name=str(reference), message="Model artifact folder does not exist."
+            )
+        return model_dir
+
+    @staticmethod
+    def artifact_fingerprint(model_dir: Path | str) -> str:
+        """Hash the exact saved configuration and weight bytes."""
+        directory = Path(model_dir)
+        digest = hashlib.sha256()
+        for path in (
+            directory / "config" / "config.json",
+            directory / "config" / "weights.pt",
+        ):
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def _runtime_components(model_config: Dict[str, Any]) -> Dict[str, Any]:

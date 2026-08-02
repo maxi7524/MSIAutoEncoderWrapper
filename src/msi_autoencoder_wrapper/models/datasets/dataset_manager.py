@@ -75,7 +75,8 @@ class DatasetManager:
     def load_config(
         cls,
         config: Dict[str, Any],
-        active_context: Any,
+        active_context: Any = None,
+        cohort_context: Any = None,
     ) -> MSIBaseDataset:
         """Restore a dataset from its module-owned portable configuration.
 
@@ -97,11 +98,12 @@ class DatasetManager:
                 "DatasetConfiguration", "Dataset parameters must be a dictionary."
             )
         cls.discover_strategies()
-        return cls.get_dataset(
-            name=config["type"],
-            active_context=active_context,
-            **parameters,
-        )
+        dependencies = {}
+        if str(config["type"]).startswith("Cohort"):
+            dependencies["cohort_context"] = cohort_context
+        else:
+            dependencies["active_context"] = active_context
+        return cls.get_dataset(name=config["type"], **dependencies, **parameters)
 
     # --------------------------------------------------
     # Section: Automated Strategy Discovery

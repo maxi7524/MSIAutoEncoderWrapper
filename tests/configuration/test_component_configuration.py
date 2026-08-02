@@ -30,7 +30,7 @@ def test_component_config_is_portable_and_isolated() -> None:
 
     assert config["type"] == "LinearBinning"
     assert binner.get_config()["bin_step"] == 0.5
-    assert binner.GetConfig() == binner.get_config()
+    assert binner.export_config()["parameters"] == binner.get_config()
 
 
 def test_json_normalization_handles_paths_and_rejects_runtime_objects() -> None:

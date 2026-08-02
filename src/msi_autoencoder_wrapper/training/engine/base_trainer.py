@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 
 from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
@@ -77,11 +77,20 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         active_context = self._wrapper.active_context
         model = self._wrapper.active_model
         dataset = self._wrapper.active_dataset
-        dataset_partitions = self._split_dataset(
-            dataset,
-            training_config.get("dataset_split"),
-            seed,
-        )
+        create_partitions = getattr(dataset, "create_partitions", None)
+        if callable(create_partitions):
+            partitions = create_partitions()
+            dataset_partitions = {
+                "train": partitions.train,
+                "validation": partitions.validation,
+                "test": partitions.test,
+            }
+        else:
+            dataset_partitions = {
+                "train": dataset,
+                "validation": None,
+                "test": None,
+            }
         normalization = getattr(active_context, "normalization", None)
         if normalization is not None:
             logger.info("Fitting normalization state on the training partition.")
@@ -709,56 +718,4 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 message="Training configuration must contain a non-empty 'phases' list.",
             )
 
-        split = training_config.get("dataset_split")
-        if split is not None:
-            self._validate_dataset_split(split)
-
         logger.info("Pre-flight validation successful. Training environment maps verified.")
-
-    @staticmethod
-    def _validate_dataset_split(split: Dict[str, Any]) -> Dict[str, float]:
-        """Validate train, validation, and test proportions.
-
-        :param split: Mapping containing all three dataset proportions.
-        :type split: Dict[str, Any]
-        :return: Validated floating-point proportions.
-        :rtype: Dict[str, float]
-        :raises ValidationError: If fields are missing, invalid, or do not sum to one.
-        """
-        if not isinstance(split, dict) or set(split) != {"train", "validation", "test"}:
-            raise_validation_error(
-                "Trainer",
-                "dataset_split must contain exactly train, validation, and test.",
-            )
-        resolved: Dict[str, float] = {}
-        for name, value in split.items():
-            if isinstance(value, bool):
-                raise_validation_error("Trainer", f"dataset_split.{name} must be numeric.")
-            resolved[name] = float(value)
-            if resolved[name] < 0 or resolved[name] > 1:
-                raise_validation_error("Trainer", f"dataset_split.{name} must be in [0, 1].")
-        if abs(sum(resolved.values()) - 1.0) > 1e-9:
-            raise_validation_error("Trainer", "dataset_split proportions must sum to 1.")
-        if resolved["train"] <= 0:
-            raise_validation_error("Trainer", "dataset_split.train must be greater than zero.")
-        return resolved
-
-    @classmethod
-    def _split_dataset(
-        cls,
-        dataset: Dataset,
-        split: Dict[str, Any] | None,
-        seed: int | None,
-    ) -> Dict[str, Dataset]:
-        """Create deterministic disjoint dataset views from configured proportions."""
-        if split is None:
-            return {"train": dataset}
-        resolved = cls._validate_dataset_split(split)
-        total = len(dataset)
-        exact = [resolved[name] * total for name in ("train", "validation", "test")]
-        lengths = [int(value) for value in exact]
-        for index in sorted(range(3), key=lambda item: exact[item] - lengths[item], reverse=True)[: total - sum(lengths)]:
-            lengths[index] += 1
-        generator = torch.Generator().manual_seed(0 if seed is None else int(seed))
-        subsets = random_split(dataset, lengths, generator=generator)
-        return dict(zip(("train", "validation", "test"), subsets))

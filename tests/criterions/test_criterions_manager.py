@@ -67,7 +67,7 @@ def test_reconstruction_criterions_return_differentiable_scalars(criterion_name:
 
     assert loss.ndim == 0
     assert reconstruction.grad is not None
-    assert isinstance(criterion.GetConfig(), dict)
+    assert isinstance(criterion.export_config(), dict)
 
 
 def test_composite_loss_combines_registered_criterions() -> None:

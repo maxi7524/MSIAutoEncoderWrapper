@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+import torch
 
 from ..utils.exceptions import raise_validation_error
 from ..utils.logger import get_custom_logger
 from .schema import validate_consolidated_configuration
+from ..models.model_loader import ModelLoader
 
 logger = get_custom_logger(__name__)
 
@@ -48,10 +53,7 @@ class ConfigurationOrchestrator:
         workspace = self._wrapper.workspace
         resolved_image = image_name or workspace.default_img_name
         if not resolved_image:
-            raise_validation_error(
-                "Configuration",
-                "Set a default image or pass image_name before loading configuration.",
-            )
+            raise_validation_error("Configuration", "Pass an experiment path instead.")
         config = workspace.load_config_json(resolved_image, model_name)
         validate_consolidated_configuration(config)
         if not apply:
@@ -62,17 +64,7 @@ class ConfigurationOrchestrator:
             model_name,
             resolved_image,
         )
-        context_target = image_name
-        self._wrapper.context_manager.load_context_config(
-            config["local_image_context"],
-            img_name_or_path=context_target,
-        )
-        loaded_context = config["loaded_model_context"]
-        dataset_config = loaded_context.get("dataset")
-        if dataset_config is not None:
-            self._wrapper.active_dataset = (
-                self._wrapper.models_manager.load_dataset_config(dataset_config)
-            )
+        self._apply(config, load_model=load_model, strict=strict)
         if load_model:
             self._wrapper.models_manager.load_model(
                 img_name=resolved_image,
@@ -81,3 +73,68 @@ class ConfigurationOrchestrator:
             )
         logger.info("Saved configuration restoration completed.")
         return config
+
+    def load_experiment(
+        self,
+        path: Path | str,
+        *,
+        load_model: bool = True,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Load one complete schema-v2 experiment from its model directory."""
+        model_dir = Path(path)
+        if not model_dir.is_absolute():
+            workspace_candidate = self._wrapper.workspace.get_models_root() / model_dir
+            model_dir = workspace_candidate if workspace_candidate.is_dir() else Path.cwd() / model_dir
+        config_path = model_dir / "config" / "config.json"
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+        validate_consolidated_configuration(config)
+        self._apply(
+            config,
+            load_model=False,
+            strict=strict,
+            base_path=config_path.parent,
+        )
+        if load_model:
+            model, _, _ = ModelLoader.load_artifact(model_dir, strict=strict)
+            model_config = config["model"]
+            self._wrapper.models_manager.attach_model(
+                model,
+                model_type=model_config["type"],
+                model_name=model_config.get("name"),
+                trained=True,
+            )
+        return config
+
+    def _apply(
+        self,
+        config: Dict[str, Any],
+        *,
+        load_model: bool,
+        strict: bool,
+        base_path: Optional[Path] = None,
+    ) -> None:
+        data = config.get("data", {})
+        context = data.get("context")
+        context_type = config["experiment"]["context"].get("type")
+        if context_type == "cohort" and isinstance(context, dict):
+            self._wrapper.cohorts.load_config(
+                context, activate=True, base_path=base_path
+            )
+        elif isinstance(context, dict):
+            image_key = context.get("image_key")
+            self._wrapper.context_manager.load_context_config(
+                context, img_name_or_path=image_key, base_path=base_path
+            )
+        dataset_config = data.get("dataset")
+        if isinstance(dataset_config, dict):
+            parameters = dict(dataset_config.get("parameters", {}))
+            parameters.pop("cohort", None)
+            from ..models.datasets.dataset_manager import DatasetManager
+
+            self._wrapper.active_dataset = DatasetManager.load_config(
+                {**dataset_config, "parameters": parameters},
+                active_context=self._wrapper.active_context,
+                cohort_context=self._wrapper.cohorts.active_context,
+            )
