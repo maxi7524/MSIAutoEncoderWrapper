@@ -2,12 +2,14 @@
 Concrete convolutional reconstruction strategy decoding latent features back into spectral grids.
 """
 
+from collections.abc import Mapping
 from typing import List, Any
 import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
 from .base_decoder import MSIBaseDecoder
+from .output_activation import build_output_activation
 
 # Synchronized logger initialization
 from ......utils.logger import get_custom_logger
@@ -37,10 +39,24 @@ class CNNDecoder(MSIBaseDecoder):
         channels: List[int],
         kernels: List[int],
         strides: List[int],
+        output_activation: Mapping[str, Any],
         **kwargs: Any
     ) -> None:
-        """
-        Constructs symmetric transposed upsampling layer blocks.
+        """Construct symmetric transposed upsampling layer blocks.
+
+        :param latent_dim: Latent vector width.
+        :type latent_dim: int
+        :param spatial_dims: Spectrum widths before and after each convolution.
+        :type spatial_dims: List[int]
+        :param channels: Channel counts for the symmetric convolutional stages.
+        :type channels: List[int]
+        :param kernels: Kernel sizes for the transposed convolutions.
+        :type kernels: List[int]
+        :param strides: Strides for the transposed convolutions.
+        :type strides: List[int]
+        :param output_activation: Final activation configuration. Supported types
+            are declared by ``SUPPORTED_OUTPUT_ACTIVATIONS``.
+        :type output_activation: Mapping[str, Any]
         """
         super().__init__()
         
@@ -49,8 +65,11 @@ class CNNDecoder(MSIBaseDecoder):
             "spatial_dims": spatial_dims,
             "channels": channels,
             "kernels": kernels,
-            "strides": strides
+            "strides": strides,
+            "output_activation": dict(output_activation),
         }
+
+        self.output_activation = build_output_activation(output_activation)
         
         # Inversion layer dimension layout assignment
         ## Initial expanding layer targets properties setup
@@ -79,7 +98,7 @@ class CNNDecoder(MSIBaseDecoder):
                     output_padding=out_pad
                 ),
                 nn.LayerNorm(target_width) if i > 0 else nn.Identity(),
-                nn.ReLU() if i > 0 else nn.Identity()
+                nn.ReLU() if i > 0 else self.output_activation
             )
             self.deconv_blocks.append(block)
 

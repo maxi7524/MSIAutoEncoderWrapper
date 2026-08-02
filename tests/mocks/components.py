@@ -126,6 +126,7 @@ def build_small_autoencoder() -> torch.nn.Module:
                     "kernels": [3],
                     "strides": [2],
                     "spatial_dims": [32, 15],
+                    "output_activation": {"type": "softplus", "parameters": {}},
                 },
             },
         },

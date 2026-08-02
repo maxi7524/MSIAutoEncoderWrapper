@@ -36,6 +36,7 @@ def _autoencoder_setup() -> dict[str, dict[str, object]]:
                 "kernels": [3],
                 "strides": [2],
                 "spatial_dims": [32, 15],
+                "output_activation": {"type": "softplus", "parameters": {}},
             },
         },
         "projector": {
