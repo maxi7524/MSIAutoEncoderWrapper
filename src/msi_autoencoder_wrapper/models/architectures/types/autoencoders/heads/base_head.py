@@ -3,7 +3,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from ......utils.configuration import ConfigurableComponent
+from ......configuration import ConfigurableComponent
 
 class MSIBaseHead(nn.Module, ConfigurableComponent, ABC):
     """Contractual interface mapping bottleneck representations to multi-task target fields inside AE."""

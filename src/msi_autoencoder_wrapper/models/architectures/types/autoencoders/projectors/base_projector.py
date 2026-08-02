@@ -3,7 +3,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from ......utils.configuration import ConfigurableComponent
+from ......configuration import ConfigurableComponent
 
 class MSIBaseProjector(nn.Module, ConfigurableComponent, ABC):
     """Contractual interface mapping features into high-dimensional layers for contrastive tasks inside AE."""

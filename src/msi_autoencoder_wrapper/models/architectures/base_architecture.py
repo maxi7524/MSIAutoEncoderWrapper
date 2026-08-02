@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from ...utils.logger import get_custom_logger
-from ...utils.configuration import ConfigurableComponent, get_component_config
+from ...configuration import ConfigurableComponent, get_component_config
 
 # Logger initialization
 logger = get_custom_logger(__name__)

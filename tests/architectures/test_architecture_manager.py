@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import torch
+import torch.nn as nn
 
 from msi_autoencoder_wrapper.core.mixins.models_manager.proxies.architecture_proxy import (
     ArchitectureProxy,
@@ -55,6 +56,40 @@ def test_architecture_discovery_registers_autoencoder_components() -> None:
     assert "CNNEncoder" in components["encoder"]
     assert "CNNDecoder" in components["decoder"]
     assert "LinearProjector" in components["projector"]
+
+
+def test_model_family_registers_its_own_component_contracts() -> None:
+    """The shared manager does not assume autoencoder component categories."""
+
+    class DiffusionDenoiser(nn.Module):
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+            return inputs
+
+    class ExampleDenoiser(DiffusionDenoiser):
+        pass
+
+    model_type = "test_diffusion"
+    try:
+        ArchitecturesManager.register_component_category(
+            model_type,
+            "denoiser",
+            DiffusionDenoiser,
+        )
+        ArchitecturesManager.register_component(
+            model_type,
+            "denoiser",
+            "ExampleDenoiser",
+        )(ExampleDenoiser)
+
+        assert (
+            ArchitecturesManager._COMPONENT_REGISTRY[model_type]["denoiser"][
+                "ExampleDenoiser"
+            ]
+            is ExampleDenoiser
+        )
+    finally:
+        ArchitecturesManager._COMPONENT_BASES.pop(model_type, None)
+        ArchitecturesManager._COMPONENT_REGISTRY.pop(model_type, None)
 
 
 def test_build_model_assembles_registered_components() -> None:

@@ -3,7 +3,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from ......utils.configuration import ConfigurableComponent
+from ......configuration import ConfigurableComponent
 
 class MSIBaseEncoder(nn.Module, ConfigurableComponent, ABC):
     """Contractual interface for lossy compression mapping intensities into latent bottlenecks inside AE."""

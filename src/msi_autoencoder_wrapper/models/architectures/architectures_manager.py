@@ -28,6 +28,50 @@ class ArchitecturesManager:
     # Global presets configuration blueprint storage mapping [model_type][preset_name] to callable factory blueprints
     _PRESET_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
+    # Model-family-owned contracts mapping [model_type][category] to base class.
+    _COMPONENT_BASES: Dict[str, Dict[str, Type[nn.Module]]] = {}
+
+    @classmethod
+    def register_component_category(
+        cls,
+        model_type: str,
+        category: str,
+        expected_base: Type[nn.Module],
+    ) -> None:
+        """Register one component contract owned by a model family.
+
+        :param model_type: Architecture family owning the category.
+        :type model_type: str
+        :param category: Component category within the family.
+        :type category: str
+        :param expected_base: Required base class for registered implementations.
+        :type expected_base: Type[torch.nn.Module]
+        """
+        validate_subclass(expected_base, nn.Module, "ArchitectureComponentContract")
+        family_contracts = cls._COMPONENT_BASES.setdefault(model_type, {})
+        registered_base = family_contracts.get(category)
+        if registered_base is not None and registered_base is not expected_base:
+            from ...utils.exceptions import raise_validation_error
+
+            raise_validation_error(
+                "ArchitectureComponentContract",
+                f"Contract '{model_type}.{category}' is already registered.",
+            )
+        family_contracts[category] = expected_base
+
+    @classmethod
+    def _component_base(cls, model_type: str, category: str) -> Type[nn.Module]:
+        """Return the interface registered by one architecture family."""
+        expected = cls._COMPONENT_BASES.get(model_type, {}).get(category)
+        if expected is None:
+            from ...utils.exceptions import raise_validation_error
+
+            raise_validation_error(
+                "ArchitectureComponentRegistry",
+                f"No component contract is registered for '{model_type}.{category}'.",
+            )
+        return expected
+
 # --------------------------------------------------
 # Section: Registration Decorator Factories
 # --------------------------------------------------
@@ -64,7 +108,11 @@ class ArchitecturesManager:
         :rtype: Callable
         """
         def decorator(subclass: Type[nn.Module]) -> Type[nn.Module]:
-            validate_subclass(subclass, nn.Module, "ArchitectureComponentRegistry")
+            validate_subclass(
+                subclass,
+                cls._component_base(model_type, category),
+                "ArchitectureComponentRegistry",
+            )
             # Structural lookup provisioning loop
             if model_type not in cls._COMPONENT_REGISTRY:
                 cls._COMPONENT_REGISTRY[model_type] = {}
@@ -146,7 +194,7 @@ class ArchitecturesManager:
                     target=strategy,
                     registry=component_registry,
                     component_type=f"{model_type}.{category}",
-                    expected_type=nn.Module,
+                    expected_type=cls._component_base(model_type, category),
                     **params,
                 )
 
@@ -173,7 +221,10 @@ class ArchitecturesManager:
                         target=sub_strategy,
                         registry=component_registry,
                         component_type=f"{model_type}.{category}",
-                        expected_type=nn.Module,
+                        expected_type=cls._component_base(
+                            model_type,
+                            registry_category,
+                        ),
                         **sub_params,
                     )
 
