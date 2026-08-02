@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import torch
 
-from .batches import RawSpectrumBatch
+from .batches import RawSpectrumBatch, SharedAxisRawBatch
 from .samples import RawSpectrumSample
 from .targets import TargetBatch, TargetSchema
 
@@ -17,8 +17,13 @@ class RawSpectrumCollator:
     def __init__(self, schemas: dict[str, TargetSchema] | None = None) -> None:
         self.schemas = dict(schemas or {})
 
-    def __call__(self, samples: Sequence[RawSpectrumSample]) -> RawSpectrumBatch:
+    def __call__(
+        self,
+        samples: Sequence[RawSpectrumSample] | RawSpectrumBatch | SharedAxisRawBatch,
+    ) -> RawSpectrumBatch | SharedAxisRawBatch:
         """Collate raw samples into flat values, offsets, and sample indices."""
+        if isinstance(samples, (RawSpectrumBatch, SharedAxisRawBatch)):
+            return samples
         if not samples:
             raise ValueError("RawSpectrumCollator requires at least one sample.")
         lengths = torch.tensor(

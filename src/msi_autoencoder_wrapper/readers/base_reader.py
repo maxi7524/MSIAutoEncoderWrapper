@@ -1,12 +1,34 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-import numpy as np
-from collections.abc import Iterator, Sequence
 from typing import Any, Optional, Dict, Tuple, Union
+
+import numpy as np
 
 from ..utils.configuration import ConfigurableComponent
 from ..utils.exceptions import raise_validation_error
 from .spatial import Aggregation, SpatialImage, aggregate_window
+
+
+@dataclass(frozen=True)
+class ReaderCapabilities:
+    """Describe optimized spectrum access supported by a reader backend."""
+
+    native_batch_read: bool = False
+    shared_mass_axis: bool = False
+    variable_spectrum_length: bool = True
+    requires_worker_reopen: bool = False
+
+
+@dataclass(frozen=True)
+class SpectrumReadBatch:
+    """Store one CPU reader result before targets and Torch semantics are attached."""
+
+    sample_ids: np.ndarray
+    mass_values: np.ndarray | tuple[np.ndarray, ...]
+    intensities: np.ndarray | tuple[np.ndarray, ...]
+    shared_mass_axis: bool
 
 
 class MSIBaseReader(ConfigurableComponent, ABC):
@@ -30,6 +52,28 @@ class MSIBaseReader(ConfigurableComponent, ABC):
         self._config: dict[str, Any] = {"file_path": str(file_path)}
         ## Store the structural active context reference hook to ensure design uniformity
         self.active_context = active_context
+
+    @property
+    def capabilities(self) -> ReaderCapabilities:
+        """Return conservative capabilities for per-spectrum fallback access."""
+        return ReaderCapabilities()
+
+    def GetSpectrumBatch(self, indices: Any) -> SpectrumReadBatch:
+        """Read multiple spectra through the portable per-spectrum fallback.
+
+        :param indices: One-dimensional sequence of spectrum identifiers.
+        :type indices: Sequence[int]
+        :return: Reader batch preserving variable axes and lengths.
+        :rtype: SpectrumReadBatch
+        """
+        sample_ids = np.asarray(indices, dtype=np.int64)
+        spectra = [self.GetSpectrum(int(index)) for index in sample_ids]
+        return SpectrumReadBatch(
+            sample_ids=sample_ids,
+            mass_values=tuple(np.asarray(axis) for axis, _ in spectra),
+            intensities=tuple(np.asarray(values) for _, values in spectra),
+            shared_mass_axis=False,
+        )
 
     def get_spectrum_at(
         self,
@@ -116,23 +160,6 @@ class MSIBaseReader(ConfigurableComponent, ABC):
                 return self.get_region(*selectors)
             return self.get_spectrum_at(target)
         return self.GetSpectrum(target)
-
-    def GetSpectra(
-        self,
-        indices: Sequence[int],
-    ) -> list[Tuple[np.ndarray, np.ndarray]]:
-        """Read several spectra through one reader-level operation.
-
-        Reader strategies may override this method when their storage backend
-        exposes a native bulk API. The fallback preserves ordering and the
-        exact :meth:`GetSpectrum` contract.
-
-        :param indices: Flat spectrum indices in requested output order.
-        :type indices: Sequence[int]
-        :return: One mass-axis and intensity pair for every requested index.
-        :rtype: list[Tuple[numpy.ndarray, numpy.ndarray]]
-        """
-        return [self.GetSpectrum(int(index)) for index in indices]
 
     def IterSpectra(
         self,

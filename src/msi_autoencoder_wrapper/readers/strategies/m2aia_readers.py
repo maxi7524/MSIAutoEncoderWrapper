@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, Union
+
 import numpy as np
-from typing import Optional, Any, Dict, Tuple, Union
-from collections.abc import Iterator, Sequence
-from ..base_reader import MSIBaseReader
+
+from ..base_reader import MSIBaseReader, ReaderCapabilities, SpectrumReadBatch
 from ..readers_manager import ReaderManager
 from ...utils.logger import get_custom_logger
 from ...utils.exceptions import (
@@ -89,7 +92,7 @@ class M2aiaReader(MSIBaseReader):
         
         try:
             self._img = m2.ImzMLReader(str(self.file_path))
-            self._img.Load()
+            self._reader_pid = os.getpid()
         except Exception as error:
             logger.error("Critical native C++ library exception intercepted during loader initialization.", exc_info=True)
             raise_project_config_error(
@@ -99,6 +102,41 @@ class M2aiaReader(MSIBaseReader):
 
         # Lazy spatial lookup coordinates database cache
         self._spatial_lookup: Optional[Dict[Tuple[int, int, int], int]] = None
+
+    @property
+    def capabilities(self) -> ReaderCapabilities:
+        """Expose native batch access only for continuous imzML representations."""
+        continuous = "Continuous" in self._img.GetSpectrumType()
+        return ReaderCapabilities(
+            native_batch_read=continuous,
+            shared_mass_axis=continuous,
+            variable_spectrum_length=not continuous,
+            requires_worker_reopen=True,
+        )
+
+    def _ensure_process_reader(self) -> None:
+        """Reopen the native handle after a DataLoader process boundary."""
+        current_pid = os.getpid()
+        if self._reader_pid == current_pid:
+            return
+        logger.info("Reopening M2aia reader in worker process %s.", current_pid)
+        self._img = m2.ImzMLReader(str(self.file_path))
+        self._reader_pid = current_pid
+        self._spatial_lookup = None
+
+    def GetSpectrumBatch(self, indices: Any) -> SpectrumReadBatch:
+        """Use one native C++ call for a continuous-spectrum batch."""
+        self._ensure_process_reader()
+        sample_ids = np.asarray(indices, dtype=np.int64)
+        if not self.capabilities.native_batch_read:
+            return super().GetSpectrumBatch(sample_ids)
+        intensities = self._img.GetSpectra(sample_ids.astype(np.uint32, copy=False))
+        return SpectrumReadBatch(
+            sample_ids=sample_ids,
+            mass_values=np.asarray(self._img.GetXAxis()),
+            intensities=np.asarray(intensities, dtype=np.float32),
+            shared_mass_axis=True,
+        )
 
     def GetXMin(self) -> float:
         return float(self._img.GetXAxis()[0])
@@ -131,6 +169,7 @@ class M2aiaReader(MSIBaseReader):
             self._spatial_lookup[pos_key] = idx
 
     def GetSpectrum(self, target: Union[int, Tuple[int, int, int]]) -> Tuple[np.ndarray, np.ndarray]:
+        self._ensure_process_reader()
         # Handle coordinate resolution based on input argument type
         if isinstance(target, (int, np.integer)):
             flat_idx = int(target)
@@ -155,30 +194,14 @@ class M2aiaReader(MSIBaseReader):
         
         if xs is None or ys is None:
             return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
-        return xs.astype(np.float32), ys.astype(np.float32)
+        return (
+            np.asarray(xs, dtype=np.float32),
+            np.asarray(ys, dtype=np.float32),
+        )
 
     def GetSpectrumPosition(self, idx: int) -> Tuple[int, int, int]:
         pos = self._img.GetSpectrumPosition(idx)
         return int(pos[0]), int(pos[1]), int(pos[2])
-
-    def GetSpectra(
-        self,
-        indices: Sequence[int],
-    ) -> list[Tuple[np.ndarray, np.ndarray]]:
-        """Read a batch directly through the native reader interface."""
-        spectra = []
-        for index in indices:
-            xs, ys = self._img.GetSpectrum(int(index))
-            if xs is None or ys is None:
-                spectra.append(
-                    (
-                        np.array([], dtype=np.float32),
-                        np.array([], dtype=np.float32),
-                    )
-                )
-            else:
-                spectra.append((xs.astype(np.float32), ys.astype(np.float32)))
-        return spectra
 
     def GetMetaData(self) -> Dict[str, Any]:
         # total_spectra = self.GetNumberOfSpectra()

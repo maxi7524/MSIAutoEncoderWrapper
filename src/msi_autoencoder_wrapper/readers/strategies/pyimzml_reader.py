@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 from xml.etree import ElementTree
@@ -10,7 +10,7 @@ from xml.etree import ElementTree
 import numpy as np
 from pyimzml.ImzMLParser import ImzMLParser
 
-from ..base_reader import MSIBaseReader
+from ..base_reader import MSIBaseReader, ReaderCapabilities, SpectrumReadBatch
 from ..readers_manager import ReaderManager
 from ...utils.exceptions import raise_incompatible_interface_error, raise_project_config_error
 
@@ -39,6 +39,39 @@ class PyImzMLReader(MSIBaseReader):
             tuple(coordinate): index
             for index, coordinate in enumerate(self._parser.coordinates)
         }
+        self._reader_pid = os.getpid()
+
+    @property
+    def capabilities(self) -> ReaderCapabilities:
+        """Expose ordered fallback batching and worker-local parser handles."""
+        return ReaderCapabilities(requires_worker_reopen=True)
+
+    def _ensure_process_reader(self) -> None:
+        """Reopen the parser when execution moves into a DataLoader worker."""
+        current_pid = os.getpid()
+        if self._reader_pid == current_pid:
+            return
+        self._parser = ImzMLParser(str(self.file_path))
+        self._reader_pid = current_pid
+
+    def GetSpectrumBatch(self, indices: Any) -> SpectrumReadBatch:
+        """Read a batch in physical intensity-offset order and restore sampler order."""
+        self._ensure_process_reader()
+        sample_ids = np.asarray(indices, dtype=np.int64)
+        offsets = np.asarray(self._parser.intensityOffsets, dtype=np.int64)[sample_ids]
+        read_order = np.argsort(offsets, kind="stable")
+        axes: list[np.ndarray | None] = [None] * len(sample_ids)
+        values: list[np.ndarray | None] = [None] * len(sample_ids)
+        for position in read_order:
+            axis, intensities = self._parser.getspectrum(int(sample_ids[position]))
+            axes[position] = np.asarray(axis)
+            values[position] = np.asarray(intensities)
+        return SpectrumReadBatch(
+            sample_ids=sample_ids,
+            mass_values=tuple(axis for axis in axes if axis is not None),
+            intensities=tuple(value for value in values if value is not None),
+            shared_mass_axis=False,
+        )
 
     def GetXMin(self) -> float:
         axis, _ = self.GetSpectrum(0)
@@ -58,6 +91,7 @@ class PyImzMLReader(MSIBaseReader):
         self,
         target: Union[int, Tuple[int, int, int]],
     ) -> Tuple[np.ndarray, np.ndarray]:
+        self._ensure_process_reader()
         if isinstance(target, (int, np.integer)):
             spectrum_index = int(target)
         elif isinstance(target, tuple):
@@ -75,17 +109,6 @@ class PyImzMLReader(MSIBaseReader):
     def GetSpectrumPosition(self, idx: int) -> Tuple[int, int, int]:
         coordinate = self._parser.coordinates[idx]
         return int(coordinate[0]), int(coordinate[1]), int(coordinate[2])
-
-    def GetSpectra(
-        self,
-        indices: Sequence[int],
-    ) -> list[Tuple[np.ndarray, np.ndarray]]:
-        """Read an index batch without repeated public target dispatch."""
-        spectra = []
-        for index in indices:
-            axis, intensities = self._parser.getspectrum(int(index))
-            spectra.append((np.asarray(axis), np.asarray(intensities)))
-        return spectra
 
     def GetNumberOfSpectra(self) -> int:
         return len(self._parser.coordinates)
