@@ -25,10 +25,12 @@ class AnnotationReaderManager:
         return decorator
 
     @classmethod
-    def get_reader(cls, name: Any, **kwargs: Any) -> MSIBaseAnnotationReader:
+    def get_reader(cls, name: Any = None, **kwargs: Any) -> MSIBaseAnnotationReader:
         """Resolve a registered key, reader class, or ready reader instance."""
+        cls.load_builtin_readers()
+        target = name or "SQLiteAnnotationReader"
         return resolve_component(
-            target=name,
+            target=target,
             registry=cls.REGISTRY,
             component_type="AnnotationReader",
             expected_type=MSIBaseAnnotationReader,
@@ -36,8 +38,12 @@ class AnnotationReaderManager:
         )
 
     @classmethod
-    def load_builtin_reader(cls) -> None:
-        """Import the canonical SQLite annotation reader."""
-        from . import sqlite_annotation_reader
+    def load_builtin_readers(cls) -> None:
+        """Import built-in SQLite and METASPACE CSV annotation readers."""
+        from .strategies import (
+            metaspace_csv_annotation_reader,
+            sqlite_annotation_reader,
+        )
 
+        del metaspace_csv_annotation_reader
         del sqlite_annotation_reader

@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from ..utils.exceptions import raise_validation_error
-from ..dataset_management.catalog.sqlite_catalog import DatasetCatalog
-from .annotations_manager import AnnotationReaderManager
-from .base_annotation_reader import MSIBaseAnnotationReader
-from .validators import validate_annotation_store
+from ...utils.exceptions import raise_validation_error
+from ...dataset_management.catalog.sqlite_catalog import DatasetCatalog
+from ..annotations_manager import AnnotationReaderManager
+from ..base_annotation_reader import MSIBaseAnnotationReader
+from ..validators import validate_annotation_store
 
 
 @AnnotationReaderManager.register_reader("SQLiteAnnotationReader")

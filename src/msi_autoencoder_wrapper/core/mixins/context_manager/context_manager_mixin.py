@@ -51,7 +51,7 @@ class ContextManagerProxy:
             "Enforcing automatic module discovery for reader and binner registries."
         )
         ReaderManager.discover_strategies()
-        AnnotationReaderManager.load_builtin_reader()
+        AnnotationReaderManager.load_builtin_readers()
         BinnerManager.discover_strategies()
 
     # --------------------------------------------------
@@ -82,10 +82,11 @@ class ContextManagerProxy:
         :param img_name_or_path: Explicit target path or standalone image name key token. Defaults to None.
         :type img_name_or_path: Optional[str]
         :param annotation_catalog_path: Optional explicit SQLite catalog path.
-            Defaults to ``datasets/catalog.sqlite`` in the active workspace.
+            When omitted, first use a registered workspace dataset and then
+            detect paired METASPACE CSV exports beside the image.
         :type annotation_catalog_path: Optional[str]
-        :param auto_load_annotations: Automatically attach registered SQLite
-            annotations after the data reader is configured.
+        :param auto_load_annotations: Automatically attach the matching SQLite
+            or local METASPACE CSV annotation reader after configuring data.
         :type auto_load_annotations: bool
         :param kwargs: Arbitrary configuration parameters validated and passed to the constructor factory.
         :return: Fully resolved and validated data reader component instance.
@@ -114,7 +115,7 @@ class ContextManagerProxy:
         catalog_path: Optional[str],
         image_path: Optional[Path],
     ) -> Optional[MSIBaseAnnotationReader]:
-        """Attach SQLite annotations registered for the selected image.
+        """Attach the best available annotation source for the selected image.
 
         :param img_name_or_path: Image identifier or explicit imzML path.
         :type img_name_or_path: str | None
@@ -123,8 +124,8 @@ class ContextManagerProxy:
         :type catalog_path: str | None
         :param image_path: Resolved path exposed by the configured data reader.
         :type image_path: pathlib.Path | None
-        :return: Attached annotation reader, or ``None`` for an unregistered
-            image or a workspace without a catalog.
+        :return: Attached annotation reader, or ``None`` when neither a catalog
+            registration nor a complete local METASPACE CSV pair is available.
         :rtype: MSIBaseAnnotationReader | None
         """
         from ....dataset_management.catalog import DatasetCatalog
@@ -135,49 +136,112 @@ class ContextManagerProxy:
             if catalog_path is not None
             else workspace.get_datasets_dir() / "catalog.sqlite"
         )
-        if not resolved_catalog_path.is_file():
-            logger.debug(
-                "No annotation catalog found for image '%s' at %s",
-                img_name_or_path,
-                resolved_catalog_path,
-            )
-            return None
-
         if image_path is None:
+            logger.warning(
+                "No annotations were attached to '%s' because the configured "
+                "data reader does not expose an image path.",
+                img_name_or_path,
+            )
             return None
         resolved_image_path = Path(image_path).expanduser().resolve()
-        identity = DatasetCatalog(resolved_catalog_path).resolve_dataset_path(
-            resolved_image_path
-        )
-        if identity is None:
-            logger.debug(
-                "Image %s is not registered in the annotation catalog",
-                resolved_image_path,
+        if catalog_path is not None and not resolved_catalog_path.is_file():
+            raise_validation_error(
+                "AnnotationReader",
+                f"Explicit annotation catalog does not exist: '{resolved_catalog_path}'.",
             )
+
+        if resolved_catalog_path.is_file():
+            identity = DatasetCatalog(resolved_catalog_path).resolve_dataset_path(
+                resolved_image_path
+            )
+            if identity is not None:
+                reader_options: Dict[str, Any] = {
+                    "catalog_path": str(resolved_catalog_path)
+                }
+                if identity["kind"] == "merged":
+                    reader_options["merged_dataset_id"] = identity[
+                        "merged_dataset_id"
+                    ]
+                else:
+                    reader_options["source"] = identity["source"]
+                    reader_options["dataset_id"] = identity["dataset_id"]
+                return self._set_component(
+                    component_type="annotation_reader",
+                    target="SQLiteAnnotationReader",
+                    img_name_or_path=str(resolved_image_path),
+                    **reader_options,
+                )
+            if catalog_path is not None:
+                raise_validation_error(
+                    "AnnotationReader",
+                    (
+                        f"Image '{resolved_image_path}' is not registered in the "
+                        f"explicit annotation catalog '{resolved_catalog_path}'."
+                    ),
+                )
+
+        csv_paths = self._find_local_metaspace_annotations(resolved_image_path)
+        if csv_paths is not None:
+            annotations_path, pixel_intensities_path = csv_paths
+            return self._set_component(
+                component_type="annotation_reader",
+                target="MetaspaceCSVAnnotationReader",
+                img_name_or_path=str(resolved_image_path),
+                image_path=str(resolved_image_path),
+                annotations_path=str(annotations_path),
+                pixel_intensities_path=str(pixel_intensities_path),
+            )
+
+        logger.warning(
+            "No annotations were attached to image '%s'. Register the image in "
+            "the workspace catalog, place 'metaspace_annotations.csv' and a "
+            "matching '*_pixel_intensities.csv' beside the imzML file, or call "
+            "set_annotation_reader(...) explicitly.",
+            resolved_image_path,
+        )
+        return None
+
+    @staticmethod
+    def _find_local_metaspace_annotations(
+        image_path: Path,
+    ) -> Optional[tuple[Path, Path]]:
+        """Find one unambiguous pair of local METASPACE CSV exports."""
+        directory = image_path.parent
+        annotations_path = directory / "metaspace_annotations.csv"
+        if not annotations_path.is_file():
             return None
 
-        reader_options: Dict[str, Any] = {"catalog_path": str(resolved_catalog_path)}
-        if identity["kind"] == "merged":
-            reader_options["merged_dataset_id"] = identity["merged_dataset_id"]
-        else:
-            reader_options["source"] = identity["source"]
-            reader_options["dataset_id"] = identity["dataset_id"]
-        return self._set_component(
-            component_type="annotation_reader",
-            target="SQLiteAnnotationReader",
-            img_name_or_path=str(resolved_image_path),
-            **reader_options,
-        )
+        preferred_path = directory / f"{image_path.stem}_pixel_intensities.csv"
+        if preferred_path.is_file():
+            return annotations_path, preferred_path
+
+        candidates = sorted(directory.glob("*_pixel_intensities.csv"))
+        if len(candidates) == 1:
+            return annotations_path, candidates[0]
+        if len(candidates) > 1:
+            raise_validation_error(
+                "AnnotationReader",
+                (
+                    f"Multiple pixel-intensity CSV files match image '{image_path}': "
+                    f"{[path.name for path in candidates]}. Rename the intended file "
+                    f"to '{preferred_path.name}' or configure the reader explicitly."
+                ),
+            )
+        return None
 
     def set_annotation_reader(
         self,
-        reader_name_or_instance: Any,
+        reader_name_or_instance: Any = None,
         img_name_or_path: Optional[str] = None,
         **kwargs: Any,
     ) -> Any:
         """Register an annotation-reader strategy for an image context.
 
-        :param reader_name_or_instance: Registered annotation reader, class, or instance.
+        When no strategy is supplied, use the configured image reader to detect
+        a catalog registration or paired local METASPACE CSV exports.
+
+        :param reader_name_or_instance: Registered annotation reader, class, or
+            instance. Omit to auto-detect the source.
         :type reader_name_or_instance: Any
         :param img_name_or_path: Image context receiving the reader.
         :type img_name_or_path: Optional[str]
@@ -185,6 +249,23 @@ class ContextManagerProxy:
         :return: Resolved annotation reader.
         :rtype: Any
         """
+        if reader_name_or_instance is None:
+            active_image_key = self._wrapper.workspace.active_img_name
+            requested_image_key = (
+                Path(img_name_or_path).stem if img_name_or_path else active_image_key
+            )
+            image_key = (
+                requested_image_key
+                if requested_image_key in self.config_ledger
+                else active_image_key
+            )
+            configured_reader = self.config_ledger.get(image_key, {}).get("reader")
+            image_path = getattr(configured_reader, "file_path", None)
+            return self._load_registered_annotations(
+                img_name_or_path=image_key,
+                catalog_path=kwargs.pop("catalog_path", None),
+                image_path=image_path,
+            )
         return self._set_component(
             component_type="annotation_reader",
             target=reader_name_or_instance,
