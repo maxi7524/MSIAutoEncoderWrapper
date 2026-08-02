@@ -2,13 +2,50 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
+import pytest
+
 from msi_autoencoder_wrapper.annotations.annotations_manager import AnnotationReaderManager
-from msi_autoencoder_wrapper.annotations.sqlite_annotation_reader import SQLiteAnnotationReader
+from msi_autoencoder_wrapper.annotations.strategies.metaspace_csv_annotation_reader import (
+    MetaspaceCSVAnnotationReader,
+)
+from msi_autoencoder_wrapper.annotations.strategies.sqlite_annotation_reader import (
+    SQLiteAnnotationReader,
+)
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
 from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
+from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
+from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 from tests.mocks.components import MockMSIReader
+
+
+def _copy_image_with_metaspace_csv(
+    destination: Path,
+    source_image: Path,
+    *,
+    intensity: float = 12.5,
+) -> Path:
+    """Create one local image with its paired METASPACE CSV exports."""
+    destination.mkdir()
+    image_path = destination / "example.imzML"
+    shutil.copy2(source_image, image_path)
+    shutil.copy2(source_image.with_suffix(".ibd"), image_path.with_suffix(".ibd"))
+    x, y, _ = PyImzMLReader(image_path).GetSpectrumPosition(0)
+    (destination / "metaspace_annotations.csv").write_text(
+        "#METASPACE export\n"
+        "group,datasetName,datasetId,formula,adduct,mz,fdr\n"
+        "example,Example image,dataset-a,C6H12O6,+H,181.0707,0.05\n",
+        encoding="utf-8",
+    )
+    (destination / "example_pixel_intensities.csv").write_text(
+        "mol_formula,adduct,mz,moleculeNames,moleculeIds,"
+        f"x{x - 1}_y{y - 1}\n"
+        f"C6H12O6,+H,181.0707,Glucose,HMDB0000122,{intensity}\n",
+        encoding="utf-8",
+    )
+    return image_path
 
 
 def test_sqlite_annotation_reader_defaults_to_all_annotations(tmp_path: Path) -> None:
@@ -56,8 +93,99 @@ def test_annotation_reader_is_available_from_active_context(
     wrapper.workspace.set_active_image(str(msi_fixture_path))
 
     assert wrapper.active_context.annotation_reader is annotation_reader
-    AnnotationReaderManager.load_builtin_reader()
+    AnnotationReaderManager.load_builtin_readers()
     assert "SQLiteAnnotationReader" in AnnotationReaderManager.REGISTRY
+
+
+def test_annotation_manager_uses_sqlite_as_default(tmp_path: Path) -> None:
+    """The canonical SQLite strategy is selected when no name is supplied."""
+    catalog_path = tmp_path / "catalog.sqlite"
+    catalog = DatasetCatalog(catalog_path)
+    catalog.upsert_dataset(
+        source="metaspace",
+        dataset_id="one",
+        name="One",
+        metadata={},
+    )
+
+    reader = AnnotationReaderManager.get_reader(
+        catalog_path=catalog_path,
+        source="metaspace",
+        dataset_id="one",
+    )
+
+    assert isinstance(reader, SQLiteAnnotationReader)
+
+
+def test_data_reader_detects_local_metaspace_csv_annotations(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A local METASPACE CSV pair is attached when no catalog entry exists."""
+    image_path = _copy_image_with_metaspace_csv(tmp_path / "image", msi_fixture_path)
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path / "workspace"))
+
+    wrapper.context_manager.set_reader(MockMSIReader(image_path), str(image_path))
+    wrapper.workspace.set_active_image(str(image_path))
+
+    reader = wrapper.active_context.annotation_reader
+    assert isinstance(reader, MetaspaceCSVAnnotationReader)
+    assert reader.get_dataset_metadata()["dataset_id"] == "dataset-a"
+    assert reader.get_spectrum_annotations(0)[0]["formula"] == "C6H12O6"
+
+
+def test_annotation_reader_can_auto_detect_after_data_reader_setup(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Explicit auto-detection uses the existing local image context."""
+    image_path = _copy_image_with_metaspace_csv(tmp_path / "image", msi_fixture_path)
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path / "workspace"))
+    wrapper.context_manager.set_reader(
+        MockMSIReader(image_path),
+        str(image_path),
+        auto_load_annotations=False,
+    )
+
+    reader = wrapper.context_manager.set_annotation_reader(
+        img_name_or_path=str(image_path)
+    )
+
+    assert isinstance(reader, MetaspaceCSVAnnotationReader)
+
+
+def test_local_metaspace_csv_rejects_negative_intensity(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Negative ion intensities are invalid annotation data."""
+    image_path = _copy_image_with_metaspace_csv(
+        tmp_path / "image",
+        msi_fixture_path,
+        intensity=-1.0,
+    )
+
+    with pytest.raises(ValidationError, match="non-negative"):
+        MetaspaceCSVAnnotationReader(
+            image_path=image_path,
+            annotations_path=image_path.parent / "metaspace_annotations.csv",
+            pixel_intensities_path=image_path.parent / "example_pixel_intensities.csv",
+        )
+
+
+def test_explicit_missing_annotation_catalog_is_an_error(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """An explicit catalog path is strict rather than silently ignored."""
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path / "workspace"))
+
+    with pytest.raises(ValidationError, match="does not exist"):
+        wrapper.context_manager.set_reader(
+            MockMSIReader(msi_fixture_path),
+            str(msi_fixture_path),
+            annotation_catalog_path=str(tmp_path / "missing.sqlite"),
+        )
 
 
 def test_data_reader_automatically_loads_workspace_annotations(
