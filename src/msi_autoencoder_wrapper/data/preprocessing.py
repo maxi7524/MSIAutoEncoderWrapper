@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from .batches import RawSpectrumBatch, SpectrumBatch
+from .batches import RawSpectrumBatch, SharedAxisRawBatch, SpectrumBatch
 from ..normalization import NormalizationPipeline
 
 
@@ -25,18 +25,23 @@ class BatchPreprocessor:
         self.compute_device = torch.device(compute_device)
         self.binner = dataset.active_context.binner
 
-    def __call__(self, raw_batch: RawSpectrumBatch) -> SpectrumBatch:
+    def __call__(
+        self, raw_batch: RawSpectrumBatch | SharedAxisRawBatch
+    ) -> SpectrumBatch:
         """Transfer once, bin, normalize, and forward to the compute device."""
         non_blocking = self.device.type == "cuda"
         prepared = raw_batch.to(self.device, non_blocking=non_blocking)
         normalization = getattr(self.dataset.active_context, "normalization", None)
         raw_trace = None
         if normalization is not None and normalization.stage == "raw":
-            raw_values, raw_trace = normalization.transform(
-                prepared.intensities,
-                sample_indices=prepared.sample_indices,
-                batch_size=prepared.batch_size,
-            )
+            if isinstance(prepared, SharedAxisRawBatch):
+                raw_values, raw_trace = normalization.transform(prepared.intensities)
+            else:
+                raw_values, raw_trace = normalization.transform(
+                    prepared.intensities,
+                    sample_indices=prepared.sample_indices,
+                    batch_size=prepared.batch_size,
+                )
             prepared = replace(
                 prepared,
                 intensities=raw_values,

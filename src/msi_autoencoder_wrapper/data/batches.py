@@ -107,6 +107,77 @@ class RawSpectrumBatch:
 
 
 @dataclass(frozen=True)
+class SharedAxisRawBatch:
+    """Store a native reader batch whose spectra use one common m/z axis."""
+
+    sample_ids: torch.Tensor
+    mass_axis: torch.Tensor
+    intensities: torch.Tensor
+    targets: TargetBatch = field(default_factory=TargetBatch.empty)
+    normalization_trace: NormalizationTrace | None = None
+
+    def __post_init__(self) -> None:
+        if self.sample_ids.ndim != 1 or self.mass_axis.ndim != 1:
+            raise_validation_error(
+                "SharedAxisRawBatch", "sample_ids and mass_axis must be one-dimensional."
+            )
+        expected = (self.sample_ids.numel(), self.mass_axis.numel())
+        if self.intensities.shape != expected:
+            raise_validation_error(
+                "SharedAxisRawBatch",
+                "intensities must have shape [batch, shared_axis_points].",
+            )
+
+    @property
+    def batch_size(self) -> int:
+        """Return the number of spectra in the native reader batch."""
+        return int(self.sample_ids.numel())
+
+    @property
+    def device(self) -> torch.device:
+        """Return the device storing the intensity matrix."""
+        return self.intensities.device
+
+    def to(
+        self,
+        device: torch.device | str,
+        *,
+        non_blocking: bool = False,
+    ) -> "SharedAxisRawBatch":
+        """Move the shared axis, intensities, identifiers, and targets together."""
+        resolved = torch.device(device)
+        return SharedAxisRawBatch(
+            sample_ids=self.sample_ids.to(resolved, non_blocking=non_blocking),
+            mass_axis=self.mass_axis.to(resolved, non_blocking=non_blocking),
+            intensities=self.intensities.to(resolved, non_blocking=non_blocking),
+            targets=self.targets.to(resolved, non_blocking=non_blocking),
+            normalization_trace=(
+                self.normalization_trace.to(resolved, non_blocking=non_blocking)
+                if self.normalization_trace is not None
+                else None
+            ),
+        )
+
+    def pin_memory(self) -> "SharedAxisRawBatch":
+        """Copy CPU tensors into page-locked memory for asynchronous CUDA transfer."""
+        return SharedAxisRawBatch(
+            sample_ids=self.sample_ids.pin_memory(),
+            mass_axis=self.mass_axis.pin_memory(),
+            intensities=self.intensities.pin_memory(),
+            targets=TargetBatch(
+                values={name: value.pin_memory() for name, value in self.targets.values.items()},
+                masks={name: value.pin_memory() for name, value in self.targets.masks.items()},
+                schemas=self.targets.schemas,
+            ),
+            normalization_trace=(
+                self.normalization_trace.to("cpu")
+                if self.normalization_trace is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SpectrumBatch:
     """Store dense spectra, annotations, and optional named augmented views."""
 

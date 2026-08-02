@@ -5,7 +5,7 @@ from ..base_binner import MSIBaseBinner
 from ..binners_manager import BinnerManager
 from typing import Any, Optional
 from ...utils.exceptions import raise_validation_error
-from ...data import RawSpectrumBatch, SpectrumBatch, SpectrumSpace
+from ...data import RawSpectrumBatch, SharedAxisRawBatch, SpectrumBatch, SpectrumSpace
 
 
 @BinnerManager.register_binner("LinearBinning")
@@ -58,7 +58,9 @@ class LinearBinning(MSIBaseBinner):
         )
         return intensities
 
-    def transform_batch(self, batch: RawSpectrumBatch) -> SpectrumBatch:
+    def transform_batch(
+        self, batch: RawSpectrumBatch | SharedAxisRawBatch
+    ) -> SpectrumBatch:
         """Bin every packed raw point with one vectorized Torch aggregation.
 
         The operation runs on the device already storing ``batch``. A regular
@@ -69,6 +71,8 @@ class LinearBinning(MSIBaseBinner):
         :return: Dense spectra and their shared physical axis.
         :rtype: SpectrumBatch
         """
+        if isinstance(batch, SharedAxisRawBatch):
+            return self._transform_shared_axis_batch(batch)
         mz = batch.mass_values
         intensity = batch.intensities
         bin_indices = torch.floor((mz - self.bin_edges[0]) / self.bin_step).to(
@@ -95,6 +99,45 @@ class LinearBinning(MSIBaseBinner):
         )
         dense.scatter_add_(0, flat_indices, intensity[valid])
         spectra = dense.view(batch.batch_size, self.GetXAxisDepth())
+        axis = torch.as_tensor(self.grid, device=mz.device, dtype=mz.dtype)
+        return SpectrumBatch(
+            sample_ids=batch.sample_ids,
+            spectra=spectra,
+            space=SpectrumSpace(mass_axis=axis),
+            targets=batch.targets,
+        )
+
+    def _transform_shared_axis_batch(
+        self,
+        batch: SharedAxisRawBatch,
+    ) -> SpectrumBatch:
+        """Bin a native ``[B, P]`` batch while mapping its shared axis once."""
+        mz = batch.mass_axis
+        bin_indices = torch.floor((mz - self.bin_edges[0]) / self.bin_step).to(
+            torch.long
+        )
+        bin_indices = torch.where(
+            mz == self.bin_edges[-1],
+            torch.full_like(bin_indices, self.GetXAxisDepth() - 1),
+            bin_indices,
+        )
+        valid = (
+            torch.isfinite(mz)
+            & (bin_indices >= 0)
+            & (bin_indices < self.GetXAxisDepth())
+        )
+        safe_indices = bin_indices.clamp(0, self.GetXAxisDepth() - 1)
+        source = torch.where(
+            valid.unsqueeze(0) & torch.isfinite(batch.intensities),
+            batch.intensities,
+            torch.zeros_like(batch.intensities),
+        )
+        spectra = torch.zeros(
+            (batch.batch_size, self.GetXAxisDepth()),
+            device=batch.intensities.device,
+            dtype=batch.intensities.dtype,
+        )
+        spectra.scatter_add_(1, safe_indices.unsqueeze(0).expand_as(source), source)
         axis = torch.as_tensor(self.grid, device=mz.device, dtype=mz.dtype)
         return SpectrumBatch(
             sample_ids=batch.sample_ids,
