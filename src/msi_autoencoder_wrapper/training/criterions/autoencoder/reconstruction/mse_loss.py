@@ -4,11 +4,12 @@ Mean Squared Error reconstruction loss strategy for autoencoder spectral profile
 
 from typing import Any, Dict, Tuple
 import torch
-import torch.nn as nn
 
 from ...autoencoder_base_criterions import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....utils.logger import get_custom_logger
+from .....metrics import mse
+from .....utils.exceptions import raise_validation_error
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -29,7 +30,11 @@ class MSIMSELoss(MSIReconstructionCriterion):
         """
         super().__init__()
         self._config = {"reduction": reduction}
-        self.loss_fn = nn.MSELoss(reduction=reduction)
+        if reduction not in {"mean", "sum", "none"}:
+            raise_validation_error(
+                "MSELoss", "reduction must be 'mean', 'sum', or 'none'."
+            )
+        self.reduction = reduction
 
     def forward(
         self,
@@ -47,4 +52,9 @@ class MSIMSELoss(MSIReconstructionCriterion):
         )
 
         ## Compute and return the mathematical reduction error matrix score
-        return self.loss_fn(reconstructed_spectra, original_spectra)
+        values = mse(reconstructed_spectra, original_spectra)
+        if self.reduction == "sum":
+            return values.sum()
+        if self.reduction == "none":
+            return values
+        return values.mean()

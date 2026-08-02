@@ -7,6 +7,12 @@ from typing import Any, Optional, Dict, Union
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from ....data import (
+    BatchPreprocessor,
+    RawDatasetView,
+    RawSpectrumBatch,
+    RawSpectrumCollator,
+)
 
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
@@ -158,15 +164,45 @@ class AutoencoderContextInterface:
         }
         if torch_loader_config:
             loader_params.update(torch_loader_config)
-
-        data_loader = DataLoader(active_dataset, **loader_params)
+        compute_device = torch.device(
+            loader_params.pop(
+                "compute_device", getattr(self._context._wrapper, "device", "cpu")
+            )
+        )
+        preprocessing_device = torch.device(
+            loader_params.pop("preprocessing_device", compute_device)
+        )
+        loader_dataset = active_dataset
+        preprocessor = None
+        if callable(getattr(active_dataset, "get_raw_item", None)):
+            schemas_getter = getattr(active_dataset, "get_target_schemas", None)
+            schemas = schemas_getter() if callable(schemas_getter) else {}
+            loader_params["collate_fn"] = RawSpectrumCollator(schemas)
+            loader_params["pin_memory"] = preprocessing_device.type == "cuda"
+            loader_dataset = RawDatasetView(active_dataset)
+            preprocessor = BatchPreprocessor(
+                active_dataset,
+                preprocessing_device,
+                compute_device,
+            )
+        data_loader = DataLoader(loader_dataset, **loader_params)
         embeddings_bucket = []
+        self._architecture.to(compute_device)
+        self._architecture.eval()
 
         logger.info("Initiating sequential image feature mapping over active data stream channels.")
-        with torch.no_grad():
+        with torch.inference_mode():
             # REMARK: We take batch and always second index ([1]) - it solves problem with possible third value
             for batch in data_loader:
-                embeddings_bucket.append(self.encode(batch[1]))
+                if isinstance(batch, RawSpectrumBatch):
+                    batch = preprocessor(batch)
+                spectra = batch[1].to(
+                    compute_device,
+                    non_blocking=compute_device.type == "cuda",
+                )
+                embeddings_bucket.append(
+                    self._architecture.encoder(spectra).detach().cpu().numpy()
+                )
 
         logger.info("Sequential structural image data translation complete.")
         return np.concatenate(embeddings_bucket, axis=0)

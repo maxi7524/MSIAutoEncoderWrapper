@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
+import torch
 
+from ....metrics import (
+    SpectrumMasserstein,
+    cosine_similarity,
+    feature_errors,
+    mae,
+    mse,
+    spectral_angle,
+    tic_error,
+)
 from ....utils.exceptions import raise_validation_error
 
 METRIC_DIRECTIONS: Mapping[str, str] = {
@@ -15,7 +25,77 @@ METRIC_DIRECTIONS: Mapping[str, str] = {
     "cosine_similarity": "maximize",
     "spectral_angle": "minimize",
     "tic_error": "absolute_minimize",
+    "masserstein": "minimize",
+    "wasserstein": "minimize",
 }
+
+
+def masserstein_distances(
+    inputs: np.ndarray,
+    outputs: np.ndarray,
+    mass_axis: np.ndarray,
+    batch_size: int = 32,
+    device: str | torch.device = "cpu",
+    criterion_options: Optional[Mapping[str, Any]] = None,
+) -> np.ndarray:
+    """Calculate the training Masserstein objective independently per spectrum.
+
+    This function reuses :class:`SpectrumMasserstein`, which is also wrapped by
+    the training criterion. ``reduction='none'`` is forced because ranking and
+    spatial maps require one value for every ``spectrum_id``.
+
+    :param inputs: Original binned spectra.
+    :type inputs: numpy.ndarray
+    :param outputs: Reconstructed spectra with the same shape.
+    :type outputs: numpy.ndarray
+    :param mass_axis: Physical m/z coordinate for every feature.
+    :type mass_axis: numpy.ndarray
+    :param batch_size: Number of spectra evaluated together.
+    :type batch_size: int
+    :param device: Torch execution device.
+    :type device: str | torch.device
+    :param criterion_options: Masserstein criterion parameters used in training.
+    :type criterion_options: Mapping[str, Any] | None
+    :return: Per-spectrum Masserstein costs.
+    :rtype: numpy.ndarray
+    :raises ValidationError: If arrays, axis, or batch size are incompatible.
+    """
+    original = np.asarray(inputs)
+    reconstructed = np.asarray(outputs)
+    axis = np.asarray(mass_axis, dtype=np.float64)
+    if original.ndim != 2 or original.shape != reconstructed.shape:
+        raise_validation_error(
+            "ReconstructionAnalysis",
+            "Masserstein requires equal two-dimensional spectrum arrays.",
+        )
+    if axis.ndim != 1 or axis.size != original.shape[1] or batch_size < 1:
+        raise_validation_error(
+            "ReconstructionAnalysis",
+            "Masserstein axis size and batch_size must match the input matrix.",
+        )
+
+    # Criterion construction
+    ## Keep every training option configurable while enforcing per-item output.
+    options = dict(criterion_options or {})
+    options["reduction"] = "none"
+    metric = SpectrumMasserstein(**options).to(device)
+    axis_tensor = torch.as_tensor(axis, dtype=torch.float64, device=device)
+
+    # Bounded inference
+    ## Chunking avoids transferring the complete retained image to the device.
+    costs: list[np.ndarray] = []
+    with torch.no_grad():
+        for start in range(0, len(original), batch_size):
+            stop = min(start + batch_size, len(original))
+            target = torch.as_tensor(original[start:stop], device=device)
+            prediction = torch.as_tensor(reconstructed[start:stop], device=device)
+            values = metric(
+                prediction,
+                target,
+                mass_axis=axis_tensor,
+            )
+            costs.append(values.detach().cpu().numpy())
+    return np.concatenate(costs).astype(np.float64, copy=False)
 
 
 def reconstruction_metrics(
@@ -32,36 +112,27 @@ def reconstruction_metrics(
     :rtype: Dict[str, numpy.ndarray]
     :raises ValidationError: If input shapes differ or are not matrices.
     """
-    original = np.asarray(inputs, dtype=np.float64)
-    reconstructed = np.asarray(outputs, dtype=np.float64)
+    original = np.asarray(inputs)
+    reconstructed = np.asarray(outputs)
     if original.ndim != 2 or original.shape != reconstructed.shape:
         raise_validation_error(
             "AutoencoderAnalysis",
             "Reconstruction metrics require equal two-dimensional arrays.",
         )
-    residual = original - reconstructed
-    dot_product = np.sum(original * reconstructed, axis=1)
-    denominator = np.linalg.norm(original, axis=1) * np.linalg.norm(
-        reconstructed, axis=1
-    )
-    cosine = np.divide(
-        dot_product,
-        denominator,
-        out=np.zeros_like(dot_product),
-        where=denominator > 0,
-    )
-    cosine = np.clip(cosine, -1.0, 1.0)
+    target = torch.as_tensor(original, dtype=torch.float64)
+    prediction = torch.as_tensor(reconstructed, dtype=torch.float64)
+    feature_values = feature_errors(prediction, target)
+    input_tic = target.sum(dim=1)
+    reconstruction_tic = prediction.sum(dim=1)
     return {
-        "mse": np.mean(residual**2, axis=1),
-        "mae": np.mean(np.abs(residual), axis=1),
-        "cosine_similarity": cosine,
-        "spectral_angle": np.arccos(cosine),
-        "tic_input": np.sum(original, axis=1),
-        "tic_reconstruction": np.sum(reconstructed, axis=1),
-        "tic_error": np.sum(reconstructed, axis=1) - np.sum(original, axis=1),
-        "feature_mse": np.mean(residual**2, axis=0),
-        "feature_mae": np.mean(np.abs(residual), axis=0),
-        "feature_bias": np.mean(reconstructed - original, axis=0),
+        "mse": mse(prediction, target).numpy(),
+        "mae": mae(prediction, target).numpy(),
+        "cosine_similarity": cosine_similarity(prediction, target).numpy(),
+        "spectral_angle": spectral_angle(prediction, target).numpy(),
+        "tic_input": input_tic.numpy(),
+        "tic_reconstruction": reconstruction_tic.numpy(),
+        "tic_error": tic_error(prediction, target).numpy(),
+        **{name: value.numpy() for name, value in feature_values.items()},
     }
 
 
@@ -134,7 +205,12 @@ def feature_error_distribution(
     }
     for start in range(0, original.shape[1], chunk_size):
         stop = min(start + chunk_size, original.shape[1])
-        residual = original[:, start:stop] - reconstructed[:, start:stop]
+        # Match the core reconstruction metrics' float64 accumulation while
+        # limiting conversion to one feature chunk instead of duplicating both
+        # complete retained matrices.
+        residual = original[:, start:stop].astype(
+            np.float64, copy=False
+        ) - reconstructed[:, start:stop].astype(np.float64, copy=False)
         contribution = residual**2 if metric == "mse" else np.abs(residual)
         profiles["mean"][start:stop] = np.mean(contribution, axis=0)
         profiles["median"][start:stop] = np.median(contribution, axis=0)
@@ -157,7 +233,9 @@ def rank_models(
     :rtype: list[str]
     """
     direction = METRIC_DIRECTIONS.get(metric, "minimize")
-    key = lambda item: abs(item[1]["mean"]) if direction == "absolute_minimize" else item[1]["mean"]
+    key = lambda item: (
+        abs(item[1]["mean"]) if direction == "absolute_minimize" else item[1]["mean"]
+    )
     return [
         name
         for name, _ in sorted(
@@ -166,3 +244,12 @@ def rank_models(
             reverse=direction == "maximize",
         )
     ]
+
+
+def metric_order(values: np.ndarray, metric: str) -> np.ndarray:
+    """Return row indices ordered from best to worst for one metric."""
+    array = np.asarray(values)
+    direction = METRIC_DIRECTIONS.get(metric, "minimize")
+    sortable = np.abs(array) if direction == "absolute_minimize" else array
+    order = np.argsort(sortable)
+    return order[::-1] if direction == "maximize" else order

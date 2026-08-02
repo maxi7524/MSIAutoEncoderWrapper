@@ -5,7 +5,6 @@ InfoNCE Contrastive Loss strategy tailored for MSI chemical spatial mapping alig
 from typing import Any, Dict, Tuple
 import numpy as np
 import torch
-import torch.nn.functional as F
 from scipy.signal import find_peaks, peak_widths
 
 from ...autoencoder_base_criterions import MSIContrastiveCriterion
@@ -13,6 +12,8 @@ from ...criterions_manager import CriterionsManager
 from .....models.datasets.base_dataset import MSIBaseDataset
 from .....utils.logger import get_custom_logger
 from .....utils.exceptions import raise_incompatible_interface_error
+from .....data import SpectrumBatch
+from .....metrics import info_nce
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -84,7 +85,8 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         )
 
         for idx in sample_indices:
-            _, spectrum_tensor = dataset[idx]
+            sample = dataset[idx]
+            spectrum_tensor = sample[1]
             spectrum = spectrum_tensor.detach().cpu().numpy()
             peaks, properties = find_peaks(
                 spectrum,
@@ -118,7 +120,10 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         Dynamic online augmentation step doubling the batch matrix size (2N) via targeted chemical noise.
         """
         # Heading 1 (On-the-fly Batch Chemical Noise Augmentation Pass)
-        spatial_indices, original_spectra = batch_data
+        if isinstance(batch_data, SpectrumBatch):
+            original_spectra = batch_data.spectra
+        else:
+            _, original_spectra = batch_data
         augmented_spectra = original_spectra.clone()
         peak_bank = transient_cache.get("chemical_peak_bank", [])
 
@@ -143,9 +148,11 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                     )
 
         ## Stack original and augmented spectra down the batch dimension to pass 2N features into forward pass
+        if isinstance(batch_data, SpectrumBatch):
+            return batch_data.with_view("contrastive", augmented_spectra)
+        spatial_indices = batch_data[0]
         combined_spectra = torch.cat([original_spectra, augmented_spectra], dim=0)
         combined_indices = torch.cat([spatial_indices, spatial_indices], dim=0)
-
         return (combined_indices, combined_spectra)
 
     def forward(
@@ -172,28 +179,4 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         z_aug = projection[batch_size:]
 
         ## Apply standard L2-normalization transformations to format cosine calculation spaces
-        z_orig_norm = F.normalize(z_orig, dim=1)
-        z_aug_norm = F.normalize(z_aug, dim=1)
-
-        ## Construct complete concatenated dual projection layout matrix tracking elements [2N, Projection_Dim]
-        representations = torch.cat([z_orig_norm, z_aug_norm], dim=0)
-        similarity_matrix = torch.matmul(representations, representations.T) / self.temperature
-
-        ## Extract positive match locations using structured diagonal grid masking indices shifts
-        diag_pos_1 = torch.diag(similarity_matrix, batch_size)
-        diag_pos_2 = torch.diag(similarity_matrix, -batch_size)
-        positives = torch.cat([diag_pos_1, diag_pos_2], dim=0).view(2 * batch_size, 1)
-
-        ## Isolate negative match locations by pruning identity reflection cells from calculation operations
-        mask = torch.eye(2 * batch_size, device=projection.device, dtype=torch.bool)
-        pair_indices = (torch.arange(2 * batch_size, device=projection.device) + batch_size) % (
-            2 * batch_size
-        )
-        mask[torch.arange(2 * batch_size, device=projection.device), pair_indices] = True
-        negatives = similarity_matrix[~mask].view(2 * batch_size, -1)
-
-        ## Unify elements log representations and extract cumulative cross-entropy scores
-        logits = torch.cat([positives, negatives], dim=1)
-        labels = torch.zeros(2 * batch_size, device=projection.device, dtype=torch.long)
-
-        return F.cross_entropy(logits, labels)
+        return info_nce(z_orig, z_aug, temperature=self.temperature).mean()
