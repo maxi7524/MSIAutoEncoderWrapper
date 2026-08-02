@@ -14,6 +14,13 @@ from ..criterions.criterions_manager import CriterionsManager
 from ...utils.logger import get_custom_logger
 from ...utils.exceptions import raise_project_config_error, raise_validation_error
 from ...utils.configuration import ConfigurableComponent, make_json_compatible
+from ...data import (
+    BatchPreprocessor,
+    RawDatasetView,
+    RawSpectrumBatch,
+    RawSpectrumCollator,
+    SpectrumBatch,
+)
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -89,6 +96,27 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         for current_step, phase_config in enumerate(phases_list):
             phase_name = phase_config.get("phase_name", f"phase_{current_step + 1}")
             epochs = phase_config.get("epochs", 10)
+            compute_device = torch.device(
+                phase_config.get(
+                    "compute_device",
+                    training_config.get(
+                        "compute_device", getattr(self._wrapper, "device", "cpu")
+                    ),
+                )
+            )
+            preprocessing_device = torch.device(
+                phase_config.get(
+                    "preprocessing_device",
+                    training_config.get("preprocessing_device", compute_device),
+                )
+            )
+            if compute_device.type == "cuda" and not torch.cuda.is_available():
+                raise_validation_error("Trainer", "compute_device requires available CUDA.")
+            if preprocessing_device.type == "cuda" and not torch.cuda.is_available():
+                raise_validation_error(
+                    "Trainer", "preprocessing_device requires available CUDA."
+                )
+            model.to(compute_device)
             logger.info("Initiating sequential training loop phase: %s (%s/%s)", phase_name, current_step + 1, len(phases_list))
 
             ## Heading 2 (Gradient Lock Adjustments)
@@ -136,7 +164,12 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             dataloader = self._build_dataloader(
                 dataset=dataset,
                 phase_config=phase_config,
-                device=getattr(self._wrapper, "device", "cpu"),
+                device=preprocessing_device,
+            )
+            batch_preprocessor = (
+                BatchPreprocessor(dataset, preprocessing_device, compute_device)
+                if isinstance(dataloader.dataset, RawDatasetView)
+                else None
             )
             total_batches = len(dataloader)
             if total_batches < 1:
@@ -158,6 +191,17 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
                 ### Heading 3 (Batch Data Stream Execution Pass)
                 for step_idx, batch in enumerate(dataloader):
+                    if isinstance(batch, RawSpectrumBatch):
+                        if batch_preprocessor is None:
+                            raise_validation_error(
+                                "Trainer", "Raw batches require a batch preprocessor."
+                            )
+                        batch = batch_preprocessor(batch)
+                    elif isinstance(batch, SpectrumBatch):
+                        batch = batch.to(
+                            compute_device,
+                            non_blocking=compute_device.type == "cuda",
+                        )
                     #### Apply localized batch signal transformation hooks before triggering forward evaluation passes
                     for loss_fn in composite_loss.loss_functions.values():
                         batch = loss_fn.on_batch_start(batch_data=batch, transient_cache=transient_cache)
@@ -172,10 +216,13 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
                     optimizer.zero_grad(set_to_none=True)
                     
-                    global_device = getattr(self._wrapper, "device", "cpu")
-                    spectra_tensor = batch[1].to(
-                        global_device,
-                        non_blocking=dataloader.pin_memory,
+                    spectra_tensor = (
+                        batch.model_input()
+                        if isinstance(batch, SpectrumBatch)
+                        else batch[1].to(
+                            compute_device,
+                            non_blocking=dataloader.pin_memory,
+                        )
                     )
                     
                     #### Execute model forward computation step
@@ -403,7 +450,12 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 ),
             )
         loader_config.setdefault("shuffle", True)
-        loader_config.setdefault("num_workers", 0)
+        worker_options = phase_config.get("preprocessing_num_workers", {})
+        if isinstance(worker_options, dict):
+            default_workers = worker_options.get(torch.device(device).type, 0)
+        else:
+            default_workers = worker_options
+        loader_config.setdefault("num_workers", int(default_workers))
         loader_config.setdefault("pin_memory", str(device).startswith("cuda"))
         loader_config.setdefault("drop_last", False)
         workers = int(loader_config["num_workers"])
@@ -416,6 +468,17 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             loader_config.pop("prefetch_factor", None)
             loader_config["persistent_workers"] = False
         try:
+            raw_getter = callable(getattr(dataset, "get_raw_item", None))
+            if raw_getter:
+                if "collate_fn" in loader_config:
+                    raise_validation_error(
+                        "Trainer",
+                        "A custom collate_fn cannot replace the packed raw collator.",
+                    )
+                schemas_getter = getattr(dataset, "get_target_schemas", None)
+                schemas = schemas_getter() if callable(schemas_getter) else {}
+                loader_config["collate_fn"] = RawSpectrumCollator(schemas)
+                dataset = RawDatasetView(dataset)
             return DataLoader(dataset, batch_size=batch_size, **loader_config)
         except (TypeError, ValueError) as error:
             raise_validation_error(

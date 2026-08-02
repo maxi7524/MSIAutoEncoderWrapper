@@ -12,6 +12,7 @@ from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 from ....core.mixins.active_context.active_context_mixin import ActiveContextProxy
 from ..class_assignment import build_class_mapping, metadata_values, molecule_key
+from ....data import RawSpectrumSample, TargetSample, TargetSchema
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -134,6 +135,57 @@ class PixelDataset(MSIBaseDataset):
         ## Attach configured annotation targets after spectrum transformation
         return self._sample(idx, torch.from_numpy(self._normalize(mapped_values)))
 
+    def get_raw_item(self, idx: int) -> RawSpectrumSample:
+        """Return one unbinned spectrum for packed CPU or CUDA preprocessing.
+
+        :param idx: Stable spectrum identifier.
+        :type idx: int
+        :return: Raw m/z positions, intensities, and annotation targets.
+        :rtype: RawSpectrumSample
+        :raises ValidationError: If source values are non-finite or latent data
+            is requested because latent inputs have no raw mass coordinates.
+        """
+        if self.source != "image":
+            raise_validation_error(
+                "PixelDataset", "Raw spectral preprocessing requires source='image'."
+            )
+        reader = self.active_context.get_data_reader(self.source)
+        mass_values, intensities = reader.GetSpectrum(idx)
+        mass_array = np.array(mass_values, dtype=np.float64, copy=True)
+        intensity_array = np.array(intensities, dtype=np.float32, copy=True)
+        if (
+            mass_array.ndim != 1
+            or intensity_array.shape != mass_array.shape
+            or not np.all(np.isfinite(mass_array))
+            or not np.all(np.isfinite(intensity_array))
+        ):
+            raise_validation_error(
+                "PixelDataset", f"Raw spectrum {idx} is invalid or non-finite."
+            )
+        return RawSpectrumSample(
+            sample_id=idx,
+            mass_values=torch.as_tensor(mass_array, dtype=torch.float64),
+            intensities=torch.as_tensor(intensity_array, dtype=torch.float32),
+            targets=self._target_sample(idx),
+        )
+
+    def get_target_schemas(self) -> Dict[str, TargetSchema]:
+        """Return immutable target definitions shared by every batch."""
+        mappings = self.get_class_mappings() if self.target_specs else {}
+        return {
+            name: TargetSchema(
+                name=name,
+                target_type=spec["type"],
+                class_names=tuple(
+                    value
+                    for value, _ in sorted(
+                        mappings[name].items(), key=lambda item: item[1]
+                    )
+                ),
+            )
+            for name, spec in self.target_specs.items()
+        }
+
     def get_class_mappings(self) -> Dict[str, Dict[str, int]]:
         """Return deterministic target mappings for the active annotation store.
 
@@ -173,8 +225,15 @@ class PixelDataset(MSIBaseDataset):
         :return: Sample tuple with optional target and mask dictionaries.
         :rtype: Tuple[Any, ...]
         """
-        if not self.target_specs:
+        target_sample = self._target_sample(spectrum_id)
+        if not target_sample.values:
             return spectrum_id, spectrum
+        return spectrum_id, spectrum, target_sample.values, target_sample.masks
+
+    def _target_sample(self, spectrum_id: int) -> TargetSample:
+        """Build target tensors once for one raw or already-binned sample."""
+        if not self.target_specs:
+            return TargetSample.empty()
         annotation_reader = self.active_context.annotation_reader
         mappings = self.get_class_mappings()
         metadata = annotation_reader.get_spectrum_metadata(spectrum_id)
@@ -218,7 +277,23 @@ class PixelDataset(MSIBaseDataset):
                 )
             targets[field] = torch.tensor(class_index, dtype=torch.long)
             target_masks[field] = torch.tensor(True)
-        return spectrum_id, spectrum, targets, target_masks
+        return TargetSample(values=targets, masks=target_masks)
+
+    def normalize_batch(self, spectra: torch.Tensor) -> torch.Tensor:
+        """Normalize dense spectra independently along their feature dimension."""
+        if self.normalization == "none":
+            return spectra
+        absolute = spectra.abs()
+        if self.normalization == "tic":
+            denominator = absolute.sum(dim=1, keepdim=True)
+        elif self.normalization == "max":
+            denominator = absolute.amax(dim=1, keepdim=True)
+        else:
+            denominator = torch.linalg.vector_norm(spectra, dim=1, keepdim=True)
+        valid = denominator > self.normalization_epsilon
+        safe_denominator = torch.where(valid, denominator, torch.ones_like(denominator))
+        normalized = spectra / safe_denominator
+        return torch.where(valid, normalized, torch.zeros_like(normalized))
 
     @staticmethod
     def _validate_target_specs(

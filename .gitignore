@@ -4,7 +4,7 @@ notes_to_apply.md
 *egg-info
 
 # data
-*data
+/data/
 /assets/local/datasets/
 *.tar.gz
 *.tar

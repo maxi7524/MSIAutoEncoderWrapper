@@ -35,6 +35,20 @@ class MSIBaseBinner(ConfigurableComponent, ABC):
         """
         pass
 
+    def transform_batch(self, batch: Any) -> Any:
+        """Transform a packed raw batch on its current Torch device.
+
+        :param batch: Packed raw spectrum batch.
+        :type batch: RawSpectrumBatch
+        :return: Dense spectrum batch on the same device.
+        :rtype: SpectrumBatch
+        :raises NotImplementedError: If the binner has no Torch batch backend.
+        """
+        del batch
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement batch Torch binning."
+        )
+
     @abstractmethod
     def GetXMin(self) -> float:
         """Retrieves absolute starting floor mass boundary threshold configured across the shared grid."""
