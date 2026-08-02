@@ -13,13 +13,13 @@ import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
-from ......utils.configuration import ConfigurableComponent
+from .base_encoder import MSIBaseEncoder
 
 
 @ArchitecturesManager.register_component(
     "autoencoder", "encoder", "VariationalLinearEncoder"
 )
-class VariationalLinearEncoder(nn.Module, ConfigurableComponent):
+class VariationalLinearEncoder(MSIBaseEncoder):
     """Encode spectra as mean, log variance, and reparameterized samples."""
 
     def __init__(

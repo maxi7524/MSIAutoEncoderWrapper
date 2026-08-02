@@ -9,14 +9,14 @@ import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
-from ......utils.configuration import ConfigurableComponent
+from .base_decoder import MSIBaseDecoder
 from .output_activation import build_output_activation
 
 
 @ArchitecturesManager.register_component(
     "autoencoder", "decoder", "LinearSpectrumDecoder"
 )
-class LinearSpectrumDecoder(nn.Module, ConfigurableComponent):
+class LinearSpectrumDecoder(MSIBaseDecoder):
     """Decode latent vectors into dense nonnegative spectra."""
 
     def __init__(

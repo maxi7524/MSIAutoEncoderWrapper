@@ -11,7 +11,6 @@ from ......utils.exceptions import raise_validation_error
 
 
 SUPPORTED_OUTPUT_ACTIVATIONS: Dict[str, type[nn.Module]] = {
-    "identity": nn.Identity,
     "relu": nn.ReLU,
     "sigmoid": nn.Sigmoid,
     "softplus": nn.Softplus,

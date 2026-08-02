@@ -3,7 +3,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from ......utils.configuration import ConfigurableComponent
+from ......configuration import ConfigurableComponent
 
 class MSIBaseDecoder(nn.Module, ConfigurableComponent, ABC):
     """Contractual interface for expanding latent coordinates back into spectral reconstructions inside AE."""

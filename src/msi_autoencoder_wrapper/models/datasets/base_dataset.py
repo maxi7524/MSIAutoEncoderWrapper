@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 if TYPE_CHECKING:
     from ...core.mixins.active_context.active_context_mixin import ActiveContextProxy
 from ...utils.logger import get_custom_logger
-from ...utils.configuration import ConfigurableComponent
+from ...configuration import ConfigurableComponent
 
 # Logger initialization
 logger = get_custom_logger(__name__)
