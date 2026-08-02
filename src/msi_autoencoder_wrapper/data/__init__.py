@@ -1,6 +1,12 @@
 """Typed data contracts shared by readers, transforms, models, and analyses."""
 
-from .batches import InverseSpectrumBatch, LatentBatch, RawSpectrumBatch, SpectrumBatch
+from .batches import (
+    InverseSpectrumBatch,
+    LatentBatch,
+    RawSpectrumBatch,
+    SharedAxisRawBatch,
+    SpectrumBatch,
+)
 from .collators import RawSpectrumCollator
 from .datasets import RawDatasetView
 from .preprocessing import BatchPreprocessor
@@ -10,6 +16,7 @@ from .targets import TargetBatch, TargetSample, TargetSchema
 
 __all__ = [
     "RawSpectrumBatch",
+    "SharedAxisRawBatch",
     "InverseSpectrumBatch",
     "LatentBatch",
     "RawSpectrumCollator",
