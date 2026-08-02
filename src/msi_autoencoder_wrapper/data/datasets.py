@@ -11,7 +11,12 @@ class RawDatasetView(Dataset):
     """Expose ``get_raw_item`` while preserving the source dataset lifecycle."""
 
     def __init__(self, dataset: Any) -> None:
-        if not callable(getattr(dataset, "get_raw_item", None)):
+        source = getattr(dataset, "dataset", None)
+        if not callable(getattr(dataset, "get_raw_item", None)) and not (
+            source is not None
+            and callable(getattr(source, "get_raw_item", None))
+            and hasattr(dataset, "indices")
+        ):
             raise TypeError("RawDatasetView requires a dataset with get_raw_item().")
         self.dataset = dataset
 
@@ -19,4 +24,8 @@ class RawDatasetView(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index: int) -> Any:
-        return self.dataset.get_raw_item(index)
+        getter = getattr(self.dataset, "get_raw_item", None)
+        if callable(getter):
+            return getter(index)
+        source_index = self.dataset.indices[index]
+        return self.dataset.dataset.get_raw_item(source_index)

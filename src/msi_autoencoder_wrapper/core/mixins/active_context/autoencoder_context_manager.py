@@ -12,7 +12,10 @@ from ....data import (
     RawDatasetView,
     RawSpectrumBatch,
     RawSpectrumCollator,
+    LatentBatch,
+    SpectrumBatch,
 )
+from ....normalization import OutputSpace
 
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
@@ -87,7 +90,7 @@ class AutoencoderContextInterface:
 # Section: Autoencoder functionality 
 # --------------------------------------------------
 
-    def encode(self, x: Any) -> np.ndarray:
+    def encode(self, x: Any) -> np.ndarray | LatentBatch:
         """
         Compresses input regular grid spectrometry intensity arrays into bottleneck latent space coordinates.
 
@@ -99,14 +102,30 @@ class AutoencoderContextInterface:
         # Heading 1 (Latent Space Coordinate Compression Pass)
         self._ensure_ready()
         global_device = self._prepare_execution_environment()
-        x_tensor = self._prepare_input(x)
+        source_batch = x if isinstance(x, SpectrumBatch) else None
+        x_tensor = self._prepare_input(x.spectra if source_batch is not None else x)
 
         with torch.no_grad():
             z_embeddings = self._architecture.encoder(x_tensor.to(global_device))
             
+        if source_batch is not None:
+            return LatentBatch(
+                sample_ids=source_batch.sample_ids,
+                embeddings=z_embeddings,
+                reconstruction_space=source_batch.space.as_reconstruction(),
+                targets=source_batch.targets,
+                metadata=source_batch.metadata,
+                normalization_trace=source_batch.normalization_trace,
+            )
         return z_embeddings.cpu().numpy()
 
-    def decode(self, z: Any, grid_xs: bool = False) -> Any:
+    def decode(
+        self,
+        z: Any,
+        grid_xs: bool = False,
+        *,
+        output_space: OutputSpace | None = None,
+    ) -> Any:
         """
         Decompresses dense bottleneck latent coordinates back into spatial grid layout reconstructions.
 
@@ -120,20 +139,55 @@ class AutoencoderContextInterface:
         # Heading 1 (Reconstructive Dimensional Decompressions Pass)
         self._ensure_ready(require_inverse=not grid_xs)
         global_device = self._prepare_execution_environment()
-        z_tensor = self._prepare_input(z)
+        latent_batch = z if isinstance(z, LatentBatch) else None
+        z_tensor = self._prepare_input(z.embeddings if latent_batch is not None else z)
 
         with torch.no_grad():
             x_hat = self._architecture.decoder(z_tensor.to(global_device))
 
+        normalization = self._context.normalization
+        trace = latent_batch.normalization_trace if latent_batch is not None else None
+        resolved_space = self._resolve_output_space(output_space, normalization)
+        if resolved_space == "source" and normalization is not None and trace is None:
+            raise_validation_error(
+                "Autoencoder",
+                "Source-space decoding requires a LatentBatch carrying normalization state.",
+            )
+        if (
+            resolved_space == "source"
+            and normalization is not None
+            and normalization.reconstruction.denormalization_stage == "after_decode"
+        ):
+            x_hat = normalization.inverse(x_hat, trace)
+
         x_hat_arr = x_hat.cpu().numpy()
 
         if grid_xs:
+            if resolved_space == "source" and normalization is not None and normalization.reconstruction.denormalization_stage == "after_inverse_binning":
+                return normalization.inverse(x_hat, trace).cpu().numpy()
             return x_hat_arr
 
         inverse_binner = self._context.inverse_binner
-        if x_hat_arr.ndim == 1:
-            return inverse_binner(x_hat_arr)
-        return [inverse_binner(row) for row in x_hat_arr]
+        inverse_rows = [inverse_binner(row) for row in np.atleast_2d(x_hat_arr)]
+        if resolved_space == "source" and normalization is not None and normalization.reconstruction.denormalization_stage == "after_inverse_binning":
+            restored_rows = []
+            for index, (mass_axis, values) in enumerate(inverse_rows):
+                state = type(trace)(
+                    pipeline_name=trace.pipeline_name,
+                    stage=trace.stage,
+                    states=tuple(
+                        {name: tensor[index : index + 1] for name, tensor in item.items()}
+                        for item in trace.states
+                    ),
+                    capabilities=trace.capabilities,
+                )
+                restored = normalization.inverse(
+                    torch.as_tensor(values, device=x_hat.device, dtype=x_hat.dtype).unsqueeze(0),
+                    state,
+                ).squeeze(0)
+                restored_rows.append((mass_axis, restored.cpu().numpy()))
+            inverse_rows = restored_rows
+        return inverse_rows[0] if x_hat_arr.ndim == 1 else inverse_rows
 
     def transform(self, torch_loader_config: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """
@@ -266,3 +320,15 @@ class AutoencoderContextInterface:
         else:
             tensor = torch.tensor(np.array(x), dtype=torch.float32)
         return tensor.unsqueeze(0) if tensor.dim() == 1 else tensor
+
+    @staticmethod
+    def _resolve_output_space(output_space: OutputSpace | None, normalization: Any) -> OutputSpace:
+        """Resolve explicit, active-policy, and stage-derived output behavior."""
+        if output_space is not None:
+            return output_space
+        if normalization is None:
+            return "source"
+        configured = normalization.reconstruction.output_space
+        if configured is not None:
+            return configured
+        return "normalized" if normalization.stage == "raw" else "source"
