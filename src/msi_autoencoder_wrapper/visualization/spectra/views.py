@@ -13,12 +13,52 @@ from matplotlib.figure import Figure
 from ..theme import VisualizationTheme, resolve_theme
 
 
+def plot_sparse_spectrum_match(
+    reference_mz: np.ndarray,
+    reference_intensity: np.ndarray,
+    candidate_mz: np.ndarray,
+    candidate_intensity: np.ndarray,
+    match: object,
+    axes: Optional[tuple[Axes, Axes]] = None,
+    candidate_label: str = "candidate",
+    theme: VisualizationTheme | str | None = None,
+) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Plot native sparse spectra and matched intensity residuals.
+
+    The lower panel is defined only on matched reference coordinates. Positional
+    displacement is shown by connectors in the upper panel and is never turned
+    into two artificial opposite intensity impulses.
+    """
+    resolved = resolve_theme(theme)
+    if axes is None:
+        figure, created = plt.subplots(2, 1, figsize=resolved.figure_size, dpi=resolved.figure_dpi, sharex=True, gridspec_kw={"height_ratios": (2.0, 1.0)})
+        signal_axis, residual_axis = created
+    else:
+        signal_axis, residual_axis = axes; figure = signal_axis.figure
+    reference_mz = np.asarray(reference_mz); reference_intensity = np.asarray(reference_intensity)
+    candidate_mz = np.asarray(candidate_mz); candidate_intensity = np.asarray(candidate_intensity)
+    signal_axis.vlines(reference_mz, 0.0, reference_intensity, color=resolved.input_color, linewidth=resolved.input_line_width, alpha=resolved.primary_alpha, label="reference (+)")
+    color = resolved.color_for_model(candidate_label)
+    signal_axis.vlines(candidate_mz, 0.0, -candidate_intensity, color=color, linewidth=resolved.reconstruction_line_width, alpha=resolved.secondary_alpha, label=f"{candidate_label} (-)")
+    for reference_index, candidate_index in zip(match.matched_reference_indices, match.matched_candidate_indices):
+        signal_axis.plot([reference_mz[reference_index], candidate_mz[candidate_index]], [reference_intensity[reference_index], -candidate_intensity[candidate_index]], color=resolved.baseline_color, alpha=0.12, linewidth=resolved.reference_line_width)
+    residual = match.matched_reference_intensity - match.matched_candidate_intensity
+    residual_axis.vlines(reference_mz[match.matched_reference_indices], 0.0, residual, color=resolved.residual_color, linewidth=resolved.residual_line_width, label="matched intensity residual")
+    residual_axis.scatter(reference_mz[match.unmatched_reference_indices], reference_intensity[match.unmatched_reference_indices], marker="x", color=resolved.false_negative_color, label="unmatched reference")
+    residual_axis.scatter(candidate_mz[match.unmatched_candidate_indices], -candidate_intensity[match.unmatched_candidate_indices], marker="x", color=resolved.false_positive_color, label="unmatched candidate")
+    for axis in (signal_axis, residual_axis):
+        axis.axhline(0.0, color=resolved.baseline_color, linewidth=resolved.reference_line_width, linestyle=resolved.baseline_line_style); axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha); axis.legend(loc=resolved.legend_location, frameon=resolved.legend_frame)
+    signal_axis.set_ylabel("Intensity"); residual_axis.set(xlabel="m/z", ylabel="Matched Δ intensity")
+    return figure, (signal_axis, residual_axis)
+
+
 def plot_spectrum_comparison(
     mass_axis: np.ndarray,
     original: np.ndarray,
     reconstructions: Mapping[str, np.ndarray] | np.ndarray,
     axes: Optional[tuple[Axes, Axes]] = None,
     clip_reconstruction: bool = True,
+    mirrored: bool = False,
     theme: VisualizationTheme | str | None = None,
 ) -> tuple[Figure, tuple[Axes, Axes]]:
     """Plot input/reconstructions above signed residuals on aligned axes.
@@ -78,11 +118,11 @@ def plot_spectrum_comparison(
         residual_limit = max(residual_limit, float(np.max(np.abs(residual), initial=0.0)))
         signal_axis.plot(
             mass_axis,
-            displayed,
+            -displayed if mirrored else displayed,
             color=color,
             alpha=resolved.secondary_alpha,
             linewidth=resolved.reconstruction_line_width,
-            label=model_name,
+            label=f"{model_name} (-)" if mirrored else model_name,
             zorder=resolved.reconstruction_zorder,
         )
         residual_axis.plot(
