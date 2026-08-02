@@ -45,6 +45,7 @@ class BaseWorkspaceProxy(BaseWrapperProxy):
         self.active_img_name: Optional[str] = None
         self.active_img_names: Optional[List[str]] = None
         self._active_img_custom_path: Optional[Path] = None
+        self.execution_scope: str = "local"
 
         self.default_img_name: Optional[str] = None
         self._default_img_custom_path: Optional[Path] = None
