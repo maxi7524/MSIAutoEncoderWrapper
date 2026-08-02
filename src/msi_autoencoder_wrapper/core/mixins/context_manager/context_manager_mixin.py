@@ -10,7 +10,7 @@ from ....utils.printing import present_available_components
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 from ....utils.validators import resolve_component
-from ....utils.configuration import get_component_config
+from ....configuration import get_component_config
 from ....readers.base_reader import MSIBaseReader
 from ....readers.readers_manager import ReaderManager
 from ....annotations.base_annotation_reader import MSIBaseAnnotationReader

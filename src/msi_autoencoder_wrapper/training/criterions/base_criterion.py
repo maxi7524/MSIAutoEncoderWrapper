@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from ...models.datasets.base_dataset import MSIBaseDataset
 from ...utils.logger import get_custom_logger
-from ...utils.configuration import ConfigurableComponent
+from ...configuration import ConfigurableComponent
 from ...utils.exceptions import raise_incompatible_interface_error
 
 # Logger initialization

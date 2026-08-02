@@ -15,12 +15,12 @@ from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
 )
 from msi_autoencoder_wrapper.models.model_loader import ModelLoader
 from msi_autoencoder_wrapper.utils.exceptions import WorkspaceConfigError
-from msi_autoencoder_wrapper.workspace.model_store import ModelStore
+from msi_autoencoder_wrapper.core.mixins.workspace.model_store import ModelStore
 from tests.mocks.components import MockMSIReader, build_small_autoencoder
 
 
 LAYOUT = {
-    "imgs_dir": "imgs",
+    "datasets_dir": "datasets",
     "models_root": "models",
     "model_config_subdir": "config",
     "model_latent_subdir": "latent",

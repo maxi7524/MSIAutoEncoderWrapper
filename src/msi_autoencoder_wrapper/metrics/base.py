@@ -9,6 +9,8 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 
+from ..configuration import ConfigurableComponent
+
 MetricDirection = Literal["minimize", "maximize", "absolute_minimize"]
 MetricScope = Literal["sample", "feature", "class", "dataset"]
 
@@ -23,12 +25,16 @@ class MetricRequirements:
     required_space: Literal["normalized", "source"] | None = None
 
 
-class BaseMetric(nn.Module, ABC):
+class BaseMetric(nn.Module, ConfigurableComponent, ABC):
     """Base contract shared by all model-independent metrics."""
 
     direction: MetricDirection
     scope: MetricScope
     requirements = MetricRequirements()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._config: dict[str, Any] = {}
 
 
 class SpectrumMetric(BaseMetric, ABC):

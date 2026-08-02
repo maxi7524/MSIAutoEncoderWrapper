@@ -8,7 +8,7 @@ from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
     ArchitecturesManager,
 )
 from msi_autoencoder_wrapper.models.model_loader import ModelLoader
-from msi_autoencoder_wrapper.utils.configuration import get_component_config
+from msi_autoencoder_wrapper.configuration import get_component_config
 
 
 def test_variational_components_round_trip_through_recursive_model_config() -> None:

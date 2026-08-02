@@ -59,8 +59,8 @@ def test_named_head_losses_bind_head_id_to_its_target_field() -> None:
 def test_reconstruction_criterions_return_differentiable_scalars(criterion_name: str) -> None:
     """Reconstruction criteria accept the standardized model output mapping."""
     criterion = CriterionsManager._REGISTRY["autoencoder"]["reconstruction"][criterion_name]()
-    original = torch.randn(4, 16)
-    reconstruction = torch.randn(4, 16, requires_grad=True)
+    original = torch.rand(4, 16)
+    reconstruction = torch.rand(4, 16, requires_grad=True)
 
     loss = criterion({"reconstruction": reconstruction}, (torch.arange(4), original))
     loss.backward()
@@ -68,6 +68,25 @@ def test_reconstruction_criterions_return_differentiable_scalars(criterion_name:
     assert loss.ndim == 0
     assert reconstruction.grad is not None
     assert isinstance(criterion.export_config(), dict)
+
+
+@pytest.mark.parametrize("criterion_name", ["MSELoss", "SobolevLoss", "MassersteinLoss"])
+def test_reconstruction_criterions_reject_negative_intensities(
+    criterion_name: str,
+) -> None:
+    """Every reconstruction objective enforces the MSI intensity domain."""
+    criterion = CriterionsManager._REGISTRY["autoencoder"]["reconstruction"][
+        criterion_name
+    ]()
+    original = torch.rand(2, 8)
+    reconstruction = torch.rand(2, 8)
+    reconstruction[0, 0] = -0.1
+
+    with pytest.raises(IncompatibleInterfaceError, match="non-negative intensities"):
+        criterion(
+            {"reconstruction": reconstruction},
+            (torch.arange(2), original),
+        )
 
 
 def test_composite_loss_combines_registered_criterions() -> None:
@@ -81,8 +100,8 @@ def test_composite_loss_combines_registered_criterions() -> None:
             },
         },
     )
-    original = torch.randn(4, 16)
-    reconstruction = torch.randn(4, 16, requires_grad=True)
+    original = torch.rand(4, 16)
+    reconstruction = torch.rand(4, 16, requires_grad=True)
 
     loss, metrics = composite(
         {"reconstruction": reconstruction}, (torch.arange(4), original)

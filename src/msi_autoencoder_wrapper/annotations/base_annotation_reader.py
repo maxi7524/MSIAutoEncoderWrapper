@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Mapping, Optional
 
-from ..utils.configuration import ConfigurableComponent
+from ..configuration import ConfigurableComponent
 
 
 class MSIBaseAnnotationReader(ConfigurableComponent, ABC):

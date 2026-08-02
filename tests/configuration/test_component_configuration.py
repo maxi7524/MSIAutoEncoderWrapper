@@ -7,12 +7,19 @@ from pathlib import Path
 import pytest
 
 from msi_autoencoder_wrapper.binners.binners_manager import BinnerManager
-from msi_autoencoder_wrapper.utils.configuration import (
+from msi_autoencoder_wrapper.configuration import (
+    ConfigurableComponent,
     get_component_config,
     make_json_compatible,
 )
 from msi_autoencoder_wrapper.utils.exceptions import ProjectConfigError
 from msi_autoencoder_wrapper.training.criterions.criterions_manager import CriterionsManager
+from msi_autoencoder_wrapper.metrics import BaseMetric, MetricsRegistry
+from msi_autoencoder_wrapper.models.architectures import ArchitecturesManager
+from msi_autoencoder_wrapper.models.architectures.types.autoencoders.decoders.base_decoder import MSIBaseDecoder
+from msi_autoencoder_wrapper.models.architectures.types.autoencoders.encoders.base_encoder import MSIBaseEncoder
+from msi_autoencoder_wrapper.models.architectures.types.autoencoders.heads.base_head import MSIBaseHead
+from msi_autoencoder_wrapper.models.architectures.types.autoencoders.projectors.base_projector import MSIBaseProjector
 
 
 def test_component_config_is_portable_and_isolated() -> None:
@@ -54,3 +61,32 @@ def test_json_normalization_describes_ready_functional_components() -> None:
 
     assert normalized["criterion"]["type"] == "MSIMSELoss"
     assert normalized["criterion"]["parameters"] == {"reduction": "sum"}
+
+
+def test_architecture_registry_enforces_configurable_category_contracts() -> None:
+    """Every registered architecture strategy uses the shared configuration system."""
+    ArchitecturesManager.discover_architectures()
+    category_bases = {
+        "decoder": MSIBaseDecoder,
+        "encoder": MSIBaseEncoder,
+        "head": MSIBaseHead,
+        "projector": MSIBaseProjector,
+    }
+
+    for categories in ArchitecturesManager._COMPONENT_REGISTRY.values():
+        for category, implementations in categories.items():
+            for implementation in implementations.values():
+                assert issubclass(implementation, category_bases[category])
+                assert issubclass(implementation, ConfigurableComponent)
+
+
+def test_registered_metric_classes_use_shared_configuration_contract() -> None:
+    """Stateful metric implementations participate in portable configuration."""
+    for definitions in MetricsRegistry.available().values():
+        for definition in definitions.values():
+            implementation = definition.implementation
+            if isinstance(implementation, type):
+                assert issubclass(implementation, BaseMetric)
+                metric = implementation()
+                restored = type(metric).from_config(metric.get_config())
+                assert restored.get_config() == metric.get_config()

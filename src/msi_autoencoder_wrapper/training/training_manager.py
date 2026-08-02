@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from ..utils.logger import get_custom_logger
 from .engine.base_trainer import MSIPyTorchTrainer
-from ..utils.configuration import ConfigurableComponent, make_json_compatible
+from ..configuration import ConfigurableComponent, make_json_compatible
 
 # Logger initialization
 logger = get_custom_logger(__name__)

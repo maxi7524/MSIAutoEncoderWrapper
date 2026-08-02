@@ -22,7 +22,6 @@ from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 def test_supported_output_activations_are_declared_explicitly() -> None:
     """Expose the complete accepted configuration vocabulary in one registry."""
     assert set(SUPPORTED_OUTPUT_ACTIVATIONS) == {
-        "identity",
         "relu",
         "sigmoid",
         "softplus",
@@ -44,9 +43,22 @@ def test_output_activation_factory_reports_supported_values() -> None:
     """Reject unknown configuration values with the accepted names in the error."""
     with pytest.raises(
         ValidationError,
-        match="identity, relu, sigmoid, softplus",
+        match="relu, sigmoid, softplus",
     ):
         build_output_activation({"type": "unknown", "parameters": {}})
+
+
+@pytest.mark.parametrize("activation_name", sorted(SUPPORTED_OUTPUT_ACTIVATIONS))
+def test_every_output_activation_is_nonnegative(activation_name: str) -> None:
+    """Every activation admitted for an MSI spectrum decoder preserves its domain."""
+    activation = build_output_activation(
+        {"type": activation_name, "parameters": {}}
+    )
+
+    output = activation(torch.tensor([-10.0, 0.0, 10.0]))
+
+    assert torch.isfinite(output).all()
+    assert torch.all(output >= 0)
 
 
 def test_cnn_decoder_uses_configured_final_activation() -> None:

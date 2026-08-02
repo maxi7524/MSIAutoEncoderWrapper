@@ -1,6 +1,27 @@
 """Portable configuration loading and orchestration."""
 
-from .orchestrator import ConfigurationOrchestrator
-from .registry import ConfigurationRegistry
+from typing import Any
 
-__all__ = ["ConfigurationOrchestrator", "ConfigurationRegistry"]
+from .components import (
+    ConfigurableComponent,
+    describe_component_target,
+    get_component_config,
+    make_json_compatible,
+)
+
+__all__ = [
+    "ConfigurableComponent",
+    "ConfigurationOrchestrator",
+    "describe_component_target",
+    "get_component_config",
+    "make_json_compatible",
+]
+
+
+def __getattr__(name: str) -> Any:
+    """Keep the component contract lightweight until orchestration is requested."""
+    if name == "ConfigurationOrchestrator":
+        from .orchestrator import ConfigurationOrchestrator
+
+        return ConfigurationOrchestrator
+    raise AttributeError(name)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from .base import MetricRequirements
 from ..normalization import NormalizationTrace
 from ..utils.exceptions import raise_validation_error
@@ -32,3 +34,28 @@ def validate_metric_compatibility(
         raise_validation_error("Metric", "Normalization does not preserve linear intensity semantics.")
     if not requirements.accepts_samplewise_scalar and capabilities.samplewise_scalar:
         raise_validation_error("Metric", "The metric does not accept samplewise scalar normalization.")
+
+
+def validate_metric_inputs(
+    requirements: MetricRequirements,
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    trace: NormalizationTrace | None = None,
+) -> None:
+    """Validate metric tensors and their represented intensity space."""
+    validate_metric_compatibility(requirements, trace)
+    if prediction.shape != target.shape:
+        raise_validation_error(
+            "Metric", "Prediction and target tensors must have identical shapes."
+        )
+    if not torch.isfinite(prediction).all() or not torch.isfinite(target).all():
+        raise_validation_error(
+            "Metric", "Prediction and target tensors must contain only finite values."
+        )
+    if requirements.requires_nonnegative and (
+        torch.any(prediction < 0) or torch.any(target < 0)
+    ):
+        raise_validation_error(
+            "Metric", "Prediction and target intensities must be non-negative."
+        )

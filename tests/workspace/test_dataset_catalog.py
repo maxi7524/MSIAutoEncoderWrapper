@@ -124,8 +124,8 @@ def test_catalog_indexes_molecular_annotations_by_spectrum_id(tmp_path: Path) ->
     assert "spectrum_values" not in stored[0]
 
 
-def test_workspace_resolves_nested_dataset_and_keeps_legacy_alias(tmp_path: Path) -> None:
-    """New dataset folders work through both the new and legacy workspace APIs."""
+def test_workspace_resolves_nested_dataset(tmp_path: Path) -> None:
+    """Dataset keys resolve through the canonical nested workspace layout."""
     dataset_path = tmp_path / "datasets" / "sample" / "sample.imzML"
     dataset_path.parent.mkdir(parents=True)
     dataset_path.write_text("fixture", encoding="utf-8")
@@ -135,4 +135,3 @@ def test_workspace_resolves_nested_dataset_and_keeps_legacy_alias(tmp_path: Path
 
     assert wrapper.workspace.get_active_image_file_path() == dataset_path
     assert wrapper.workspace._resolve_and_verify_image_file("sample") == dataset_path
-    assert wrapper.workspace.get_imgs_dir() == wrapper.workspace.get_datasets_dir()

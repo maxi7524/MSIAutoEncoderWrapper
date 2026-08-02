@@ -10,12 +10,13 @@ import torch.nn.functional as F
 
 from ...utils.exceptions import raise_validation_error
 from ...utils.logger import get_custom_logger
-from ..base import MetricRequirements
+from ..base import MetricRequirements, SpectrumMetric
+from ..compatibility import validate_metric_inputs
 
 logger = get_custom_logger(__name__)
 
 
-class SpectrumMasserstein(torch.nn.Module):
+class SpectrumMasserstein(SpectrumMetric):
     r"""Compare spectra by robust optimal transport with an auxiliary sink.
 
     This loss is a differentiable reconstruction adaptation of the Masserstein
@@ -188,6 +189,8 @@ class SpectrumMasserstein(torch.nn.Module):
                 ),
             )
 
+        validate_metric_inputs(self.requirements, reconstruction, original)
+
         if mass_axis is None:
             axis = self._resolve_axis(
                 reconstruction.shape[1],
@@ -204,8 +207,8 @@ class SpectrumMasserstein(torch.nn.Module):
                     "MassersteinLoss",
                     "mass_axis must contain one coordinate per spectrum feature.",
                 )
-        original_mass = torch.clamp(original, min=0.0)
-        reconstructed_mass = torch.clamp(reconstruction, min=0.0)
+        original_mass = original
+        reconstructed_mass = reconstruction
         batch_costs = self._transport_cost_batch(
             original_mass,
             reconstructed_mass,

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional, Tuple
 
-from ....utils.configuration import get_component_config
+from ....configuration import get_component_config
 
 
 AutoencoderPolicy = Literal["common", "per_member"]

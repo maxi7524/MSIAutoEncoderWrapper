@@ -11,7 +11,7 @@ from .base_workspace_proxy import BaseWorkspaceProxy
 from .getters_and_setters_proxy import GLOBAL_CONTEXT_KEY
 from .....utils.exceptions import raise_validation_error
 from .....utils.logger import get_custom_logger
-from .....workspace.model_store import ModelStore
+from ..model_store import ModelStore
 
 logger = get_custom_logger(__name__)
 
@@ -84,23 +84,6 @@ class IoModelsProxy(BaseWorkspaceProxy):
         :rtype: Dict[str, Any]
         """
         return self._model_store.load_weights(img_name, model_name)
-
-    def save_torch_model(
-        self,
-        img_name: str,
-        model_name: str,
-        model_object: torch.nn.Module,
-    ) -> None:
-        """Save a full pickled model only when explicitly requested.
-
-        :param img_name: Image key or ``global`` model context.
-        :type img_name: str
-        :param model_name: User-facing model name.
-        :type model_name: str
-        :param model_object: Compiled PyTorch model.
-        :type model_object: torch.nn.Module
-        """
-        self._model_store.save_full_model(img_name, model_name, model_object)
 
     def save_history(
         self,
@@ -272,37 +255,3 @@ class IoModelsProxy(BaseWorkspaceProxy):
             destination=Path(destination),
             overwrite=overwrite,
         )
-
-    def save_all(
-        self,
-        img_name: str,
-        model_name: str,
-        state_dict: Dict[str, Any],
-        config_dict: Dict[str, Any],
-        history_dict: Any = None,
-        model_object: Optional[torch.nn.Module] = None,
-    ) -> None:
-        """Save explicitly supplied artifacts using the portable default format.
-
-        :param img_name: Image key or ``global`` model context.
-        :type img_name: str
-        :param model_name: User-facing model name.
-        :type model_name: str
-        :param state_dict: Model weight state dictionary.
-        :type state_dict: Dict[str, Any]
-        :param config_dict: Consolidated model configuration.
-        :type config_dict: Dict[str, Any]
-        :param history_dict: Optional training history.
-        :type history_dict: Any
-        :param model_object: Optional legacy full-model export.
-        :type model_object: Optional[torch.nn.Module]
-        """
-        self._model_store.save_model(
-            context_name=img_name,
-            model_name=model_name,
-            config=config_dict,
-            state_dict=state_dict,
-            history=history_dict,
-        )
-        if model_object is not None:
-            self._model_store.save_full_model(img_name, model_name, model_object)
