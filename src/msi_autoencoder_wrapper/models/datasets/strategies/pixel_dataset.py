@@ -193,8 +193,39 @@ class PixelDataset(MSIBaseDataset):
             raise_validation_error(
                 "PixelDataset", "Raw spectral preprocessing requires source='image'."
             )
+        return self.get_raw_items([idx])[0]
+
+    def get_raw_items(self, indices: list[int]) -> list[RawSpectrumSample]:
+        """Read and validate several raw spectra through the reader bulk API.
+
+        :param indices: Stable flat spectrum identifiers.
+        :type indices: list[int]
+        :return: Raw samples in the same order as ``indices``.
+        :rtype: list[RawSpectrumSample]
+        """
+        if self.source != "image":
+            raise_validation_error(
+                "PixelDataset", "Raw spectral preprocessing requires source='image'."
+            )
         reader = self.active_context.get_data_reader(self.source)
-        mass_values, intensities = reader.GetSpectrum(idx)
+        spectra = reader.GetSpectra(indices)
+        if len(spectra) != len(indices):
+            raise_validation_error(
+                "PixelDataset",
+                "Reader bulk output must contain one spectrum per requested index.",
+            )
+        return [
+            self._raw_sample(idx, mass_values, intensities)
+            for idx, (mass_values, intensities) in zip(indices, spectra)
+        ]
+
+    def _raw_sample(
+        self,
+        idx: int,
+        mass_values: Any,
+        intensities: Any,
+    ) -> RawSpectrumSample:
+        """Convert one reader result without changing its physical mass axis."""
         mass_array = np.array(mass_values, dtype=np.float64, copy=True)
         intensity_array = np.array(intensities, dtype=np.float32, copy=True)
         if (

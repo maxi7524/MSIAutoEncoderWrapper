@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 from xml.etree import ElementTree
@@ -74,6 +75,17 @@ class PyImzMLReader(MSIBaseReader):
     def GetSpectrumPosition(self, idx: int) -> Tuple[int, int, int]:
         coordinate = self._parser.coordinates[idx]
         return int(coordinate[0]), int(coordinate[1]), int(coordinate[2])
+
+    def GetSpectra(
+        self,
+        indices: Sequence[int],
+    ) -> list[Tuple[np.ndarray, np.ndarray]]:
+        """Read an index batch without repeated public target dispatch."""
+        spectra = []
+        for index in indices:
+            axis, intensities = self._parser.getspectrum(int(index))
+            spectra.append((np.asarray(axis), np.asarray(intensities)))
+        return spectra
 
     def GetNumberOfSpectra(self) -> int:
         return len(self._parser.coordinates)
