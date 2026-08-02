@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import torch
 
 from ..utils.exceptions import raise_validation_error
+from ..normalization import NormalizationTrace
 from .spaces import SpectrumSpace
 from .targets import TargetBatch
 
@@ -22,6 +23,7 @@ class RawSpectrumBatch:
     offsets: torch.Tensor
     sample_indices: torch.Tensor
     targets: TargetBatch = field(default_factory=TargetBatch.empty)
+    normalization_trace: NormalizationTrace | None = None
 
     def __post_init__(self) -> None:
         batch_size = int(self.sample_ids.numel())
@@ -70,6 +72,11 @@ class RawSpectrumBatch:
             offsets=self.offsets.to(resolved, non_blocking=non_blocking),
             sample_indices=self.sample_indices.to(resolved, non_blocking=non_blocking),
             targets=self.targets.to(resolved, non_blocking=non_blocking),
+            normalization_trace=(
+                self.normalization_trace.to(resolved, non_blocking=non_blocking)
+                if self.normalization_trace is not None
+                else None
+            ),
         )
 
     def pin_memory(self) -> "RawSpectrumBatch":
@@ -91,6 +98,11 @@ class RawSpectrumBatch:
                 },
                 schemas=self.targets.schemas,
             ),
+            normalization_trace=(
+                self.normalization_trace.to("cpu")
+                if self.normalization_trace is not None
+                else None
+            ),
         )
 
 
@@ -104,6 +116,7 @@ class SpectrumBatch:
     targets: TargetBatch = field(default_factory=TargetBatch.empty)
     views: Mapping[str, torch.Tensor] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    normalization_trace: NormalizationTrace | None = None
 
     def __post_init__(self) -> None:
         if self.spectra.ndim != 2:
@@ -150,6 +163,11 @@ class SpectrumBatch:
                 for name, value in self.views.items()
             },
             metadata=self.metadata,
+            normalization_trace=(
+                self.normalization_trace.to(resolved, non_blocking=non_blocking)
+                if self.normalization_trace is not None
+                else None
+            ),
         )
 
     def with_view(self, name: str, values: torch.Tensor) -> "SpectrumBatch":
@@ -163,6 +181,7 @@ class SpectrumBatch:
             targets=self.targets,
             views=views,
             metadata=self.metadata,
+            normalization_trace=self.normalization_trace,
         )
 
     def pin_memory(self) -> "SpectrumBatch":
@@ -189,6 +208,11 @@ class SpectrumBatch:
             ),
             views={name: value.pin_memory() for name, value in self.views.items()},
             metadata=self.metadata,
+            normalization_trace=(
+                self.normalization_trace.to("cpu")
+                if self.normalization_trace is not None
+                else None
+            ),
         )
 
     def model_input(self) -> torch.Tensor:
@@ -223,6 +247,7 @@ class LatentBatch:
     reconstruction_space: SpectrumSpace
     targets: TargetBatch = field(default_factory=TargetBatch.empty)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    normalization_trace: NormalizationTrace | None = None
 
     def __post_init__(self) -> None:
         if self.embeddings.ndim != 2:
@@ -248,6 +273,11 @@ class LatentBatch:
             ),
             targets=self.targets.to(resolved, non_blocking=non_blocking),
             metadata=self.metadata,
+            normalization_trace=(
+                self.normalization_trace.to(resolved, non_blocking=non_blocking)
+                if self.normalization_trace is not None
+                else None
+            ),
         )
 
 
@@ -261,6 +291,7 @@ class InverseSpectrumBatch:
     offsets: torch.Tensor
     source_space: SpectrumSpace
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    normalization_trace: NormalizationTrace | None = None
 
     def __post_init__(self) -> None:
         point_count = self.mass_values.numel()
@@ -288,4 +319,9 @@ class InverseSpectrumBatch:
             offsets=self.offsets.to(resolved, non_blocking=non_blocking),
             source_space=self.source_space.to(resolved, non_blocking=non_blocking),
             metadata=self.metadata,
+            normalization_trace=(
+                self.normalization_trace.to(resolved, non_blocking=non_blocking)
+                if self.normalization_trace is not None
+                else None
+            ),
         )

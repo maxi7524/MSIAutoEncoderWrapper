@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import torch
@@ -12,11 +13,22 @@ MetricDirection = Literal["minimize", "maximize", "absolute_minimize"]
 MetricScope = Literal["sample", "feature", "class", "dataset"]
 
 
+@dataclass(frozen=True)
+class MetricRequirements:
+    """Declare mathematical input properties required by a metric."""
+
+    requires_nonnegative: bool = False
+    requires_linear_intensity: bool = False
+    accepts_samplewise_scalar: bool = True
+    required_space: Literal["normalized", "source"] | None = None
+
+
 class BaseMetric(nn.Module, ABC):
     """Base contract shared by all model-independent metrics."""
 
     direction: MetricDirection
     scope: MetricScope
+    requirements = MetricRequirements()
 
 
 class SpectrumMetric(BaseMetric, ABC):

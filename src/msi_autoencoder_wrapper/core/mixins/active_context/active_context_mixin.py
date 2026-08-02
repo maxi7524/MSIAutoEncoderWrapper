@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from ....annotations.base_annotation_reader import MSIBaseAnnotationReader
     from ....binners.base_binner import MSIBaseBinner
     from ....binners.base_inverse import MSIBaseInverseBinner
+    from ....normalization import NormalizationPipeline
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -43,6 +44,7 @@ class ActiveContextProxy(LatentContextMixin):
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
         self._cached_model_functionality: Optional[Any] = None
+        self._cached_normalization: Optional[Any] = None
         self._initialize_latent_context()
 
     # --------------------------------------------------
@@ -100,6 +102,7 @@ class ActiveContextProxy(LatentContextMixin):
             self._cached_binner = img_bucket.get("binner")
             self._cached_inverse_binner = img_bucket.get("inverse_binner")
             self._cached_model_functionality = img_bucket.get("model_functionality")
+            self._cached_normalization = img_bucket.get("normalization")
         else:
             logger.error("Active reader mapping failed: No reader configuration has been recorded for image context '%s'", current_target)
             raise_validation_error(
@@ -151,6 +154,16 @@ class ActiveContextProxy(LatentContextMixin):
         if self._cached_inverse_binner is None:
             self._resolve_active_pipeline()
         return self._cached_inverse_binner
+
+    @property
+    def normalization(self) -> Optional[NormalizationPipeline]:
+        """Return the normalization pipeline configured for the active image."""
+        if self._instantiated_image_key is None:
+            image_key = getattr(self._wrapper.workspace, "active_img_name", None)
+            if image_key is None:
+                return None
+            self._resolve_active_pipeline()
+        return self._cached_normalization
 
     @property
     def autoencoder(self) -> Optional[AutoencoderContextInterface]:
@@ -248,6 +261,7 @@ class ActiveContextProxy(LatentContextMixin):
         self._cached_binner = None
         self._cached_inverse_binner = None
         self._cached_model_functionality = None
+        self._cached_normalization = None
         self.unload_latent()
 
 

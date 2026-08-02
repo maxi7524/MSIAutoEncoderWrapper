@@ -1,6 +1,7 @@
 """Model-independent numerical metrics organized by object space."""
 
-from .base import BaseMetric, ClassMetric, ClassificationMetric, SpectrumMetric
+from .base import BaseMetric, ClassMetric, ClassificationMetric, MetricRequirements, SpectrumMetric
+from .compatibility import validate_metric_compatibility
 from .registry import MetricDefinition, MetricsRegistry, MetricsRunner
 from .strategies.classification import binary_cross_entropy, cross_entropy
 from .strategies.classes import PerClassClassification
@@ -21,6 +22,7 @@ __all__ = [
     "ClassMetric",
     "ClassificationMetric",
     "MetricDefinition",
+    "MetricRequirements",
     "MetricsRegistry",
     "MetricsRunner",
     "PerClassClassification",
@@ -36,6 +38,7 @@ __all__ = [
     "sobolev",
     "spectral_angle",
     "tic_error",
+    "validate_metric_compatibility",
 ]
 
 for _name, _space, _implementation in (
