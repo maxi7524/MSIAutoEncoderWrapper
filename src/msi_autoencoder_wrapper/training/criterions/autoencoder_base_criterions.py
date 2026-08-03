@@ -1,0 +1,144 @@
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Tuple
+import torch
+from ...data import SpectrumBatch
+
+from ...utils.exceptions import raise_incompatible_interface_error
+from .base_criterion import MSIBaseCriterion
+
+
+
+class MSIReconstructionCriterion(MSIBaseCriterion, ABC):
+    """Base contract for losses comparing input and reconstructed spectra."""
+
+    criterion_type = "reconstruction"
+
+    @staticmethod
+    def reconstruction_pair(
+        model_outputs: Dict[str, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return reconstructed and target spectra after interface validation.
+
+        :param model_outputs: Output mapping returned by the model.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Dataset batch containing indices and input spectra.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Reconstruction followed by the target tensor on the same device.
+        :rtype: Tuple[torch.Tensor, torch.Tensor]
+        :raises IncompatibleInterfaceError: If required tensors are unavailable.
+        """
+        if "reconstruction" not in model_outputs:
+            raise_incompatible_interface_error(
+                context_name="ReconstructionCriterion",
+                message="Model outputs must contain a 'reconstruction' tensor.",
+            )
+        if len(batch_data) < 2 or not isinstance(batch_data[1], torch.Tensor):
+            raise_incompatible_interface_error(
+                context_name="ReconstructionCriterion",
+                message="Batch data must contain an input spectrum tensor at index 1.",
+            )
+        reconstruction = model_outputs["reconstruction"]
+        target = (
+            batch_data.model_input()
+            if isinstance(batch_data, SpectrumBatch)
+            else batch_data[1]
+        )
+        target = target.to(reconstruction.device)
+        if not torch.isfinite(reconstruction).all() or not torch.isfinite(target).all():
+            raise_incompatible_interface_error(
+                "ReconstructionCriterion",
+                "Reconstructed and target spectra must contain only finite intensities.",
+            )
+        if torch.any(reconstruction < 0) or torch.any(target < 0):
+            raise_incompatible_interface_error(
+                "ReconstructionCriterion",
+                "Reconstructed and target spectra must contain non-negative intensities.",
+            )
+        return reconstruction, target
+
+
+class MSIContrastiveCriterion(MSIBaseCriterion, ABC):
+    """Base contract for representation losses using augmented spectrum pairs."""
+
+    criterion_type = "contrastive"
+
+
+class MSIHeadCriterion(MSIBaseCriterion, ABC):
+    """Base contract for objectives attached to one named model head."""
+
+    criterion_type = "head"
+
+    def __init__(self, head_id: str, target_field: str) -> None:
+        """Initialize the named head output and dataset target binding.
+
+        :param head_id: Identifier used by the model's ``head_<id>`` output.
+        :type head_id: str
+        :param target_field: Dataset target and mask dictionary key.
+        :type target_field: str
+        """
+        super().__init__()
+        self.head_id = head_id
+        self.target_field = target_field
+
+    @property
+    def output_key(self) -> str:
+        """Return the standardized model-output key for this head."""
+        return f"head_{self.head_id}"
+
+    def head_batch(
+        self,
+        model_outputs: Dict[str, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return logits, targets, and availability mask for this head.
+
+        :param model_outputs: Output mapping returned by the model.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Dataset batch containing target and mask mappings.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Logits, target tensor, and Boolean availability mask.
+        :rtype: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        :raises IncompatibleInterfaceError: If the configured output or target
+            binding is absent from the model and dataset interfaces.
+        """
+        if self.output_key not in model_outputs:
+            raise_incompatible_interface_error(
+                "HeadCriterion", f"Missing model output '{self.output_key}'."
+            )
+        if len(batch_data) < 4:
+            raise_incompatible_interface_error(
+                "HeadCriterion", "Head training requires target and mask dictionaries."
+            )
+        targets = batch_data[2]
+        masks = batch_data[3]
+        if self.target_field not in targets or self.target_field not in masks:
+            raise_incompatible_interface_error(
+                "HeadCriterion", f"Missing dataset target '{self.target_field}'."
+            )
+        logits = model_outputs[self.output_key]
+        if isinstance(batch_data, SpectrumBatch):
+            logits = logits[: batch_data.batch_size]
+        return (
+            logits,
+            targets[self.target_field].to(logits.device),
+            masks[self.target_field].to(logits.device, dtype=torch.bool),
+        )
+    @abstractmethod
+    def forward(
+        self,
+        model_outputs: Dict[str, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
+        **kwargs: Any
+    ) -> torch.Tensor:
+        """
+        Computes the target objective mathematical loss matrix score using extracted forward tensors.
+
+        :param model_outputs: Collection mapping outputs generated by the active model forward pass.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Variables tuple matching data loader outputs.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Singular scalar tensor containing tracking gradients.
+        :rtype: torch.Tensor
+        """
+        pass

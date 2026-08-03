@@ -1,0 +1,3 @@
+execution:
+  backend: local
+  max_parallel_runs: 1

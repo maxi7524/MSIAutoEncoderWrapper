@@ -4,11 +4,83 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "MSIAutoEncoderWrapper"
+name = "msi_autoencoder_wrapper"
 version = "0.0.1"
 description = "MIMUW love forever - Autoencoder wrapper for MSI data"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "ipywidgets",
+    "matplotlib",
+    "metaspace2020==2.0.9",
+    "numpy",
+    "pandas",
+    "polars",
+    "pridepy==0.0.16",
+    "pyimzml",
+    "PyYAML",
+    "requests",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "statsmodels",
+    "tabulate",
+]
+
+[project.scripts]
+msi-wrapper = "msi_autoencoder_wrapper.execution.cli:main"
+
+[project.optional-dependencies]
+cpu = [
+    "m2aia",
+    "torch==2.7.1",
+    "SimpleITK"
+]
+cu118 = [
+    "m2aia",
+    "torch==2.7.1",
+    "SimpleITK"
+]
+mps = [
+    "torch==2.7.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel",
+    "jupyterlab>=4.6.2",
+    "pytest",
+]
+docs = [
+    "furo",
+    "myst-nb",
+    "sphinx",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu118" },
+        { extra = "mps" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu118", extra = "cu118" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
 
 [tool.setuptools]
 package-dir = {"" = "src"}
