@@ -10,9 +10,6 @@ state.
 - [Extend annotation normalization](extending-annotation-normalization.md) — map provider annotations into canonical molecules and spectrum links.
 - [Change the catalog](changing-the-catalog.md) — migrate canonical SQLite state and preserve reader behavior.
 
-The earlier [combined provider guide](../adding-a-dataset-source.md) remains
-available during review.
-
 ```{toctree}
 :hidden:
 

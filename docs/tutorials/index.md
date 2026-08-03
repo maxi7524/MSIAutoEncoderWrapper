@@ -1,10 +1,30 @@
 # Tutorials
 
-Tutorials present complete MSI workflows in execution order. Each tutorial
-produces a result that can be inspected or reused by a later workflow.
+The tutorials are executable, result-oriented introductions to the library.
+They use the repository's `data/tutorial_workspace` workspace and its
+`example_1` and `example_2` datasets. Detailed parameter references and
+alternative configurations remain in the [how-to guides](../how-to/index.md).
 
-## Contents
+## Prepare the tutorial workspace
 
-The existing notebooks will be reorganized and linked here after the user-facing
-documentation is approved. The planned groups cover workspace and contexts,
-autoencoders, cohort models, dataset management, and CLI configuration.
+Run all notebooks from the repository root. The example datasets are expected
+under `data/tutorial_workspace/datasets`. If they are absent, run:
+
+```bash
+python docs/tutorials/download_tutorial_data.py
+```
+
+The download source is intentionally marked as TODO until the maintainer adds
+the public Google Drive bundle. Existing local datasets are never replaced.
+
+## Tutorial groups
+
+```{toctree}
+:maxdepth: 2
+
+workspace-and-contexts/index
+autoencoder/index
+cohort-models/index
+dataset-management/index
+cli-and-configuration/index
+```

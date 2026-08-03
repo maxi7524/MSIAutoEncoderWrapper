@@ -30,5 +30,4 @@ objectives-and-metrics/index
 data-components/index
 dataset-management/index
 analysis/index
-adding-a-dataset-source
 ```

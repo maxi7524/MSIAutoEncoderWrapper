@@ -23,6 +23,4 @@ models-training-and-execution/index
 metrics-analysis-and-visualization/index
 data-pipeline/index
 dataset-management/index
-data-pipeline
-dataset-management
 ```

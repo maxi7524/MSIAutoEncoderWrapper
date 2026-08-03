@@ -13,9 +13,6 @@ artifact provenance.
 - [Merge and provenance](merge-and-provenance.md) — deterministic spectrum selection, output geometry, and reversible mappings.
 - [Filesystem layout](filesystem-layout.md) — persistent, staging, selection, source, and merged artifact locations.
 
-The previous [combined internal note](../dataset-management.md) remains as a
-reference during review.
-
 ```{toctree}
 :hidden:
 

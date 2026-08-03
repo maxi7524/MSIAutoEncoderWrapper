@@ -12,13 +12,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 project = "MSIAutoEncoderWrapper"
 author = "MSIAutoEncoderWrapper contributors"
 
-extensions = ["myst_parser"]
-source_suffix = {".md": "markdown"}
+extensions = ["myst_nb"]
+source_suffix = {".md": "myst-nb", ".ipynb": "myst-nb"}
 master_doc = "index"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+suppress_warnings = ["myst.header", "mystnb.unknown_mime_type"]
 
 myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
 myst_heading_anchors = 4
+nb_execution_mode = "off"
 
 html_theme = "furo"
 html_title = "MSIAutoEncoderWrapper"

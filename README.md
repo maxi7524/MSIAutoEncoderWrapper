@@ -165,32 +165,17 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 ```
 
 ## Tutorials
-The tutorials are ordered so that each notebook builds on the contracts introduced
-by the previous one:
 
-1. **[Workspace and model artifacts](assets/notebooks/tutorials/01_workspace_and_models.ipynb)**
-   — create and customize a workspace, install the future example bundle, and
-   load, save, and export portable models.
-2. **[Readers, binners, and coordinates](assets/notebooks/tutorials/02_readers_binners_and_coordinates.ipynb)**
-   — configure data components, compare M²aia and pyimzML backends, and select
-   spectra and spatial slices in XY or matrix order.
-3. **[Model configuration and training](assets/notebooks/tutorials/03_model_configuration_and_training.ipynb)**
-   — use registries and presets, configure categorized criteria, estimate
-   RAM/VRAM/disk requirements, and train the current single-image pipeline.
-4. **[Autoencoder and latent space](assets/notebooks/tutorials/04_autoencoder_and_latent_space.ipynb)**
-   — distinguish loaded and image-local models, encode/decode data, write latent
-   imzML, slice latent images, and monitor memory.
-5. **[Multi-image models — TODO](assets/notebooks/tutorials/05_multi_image_models_todo.ipynb)**
-   — records the planned scope without presenting unimplemented APIs as usable.
-6. **[PRIDE dataset explorer](assets/notebooks/tutorials/06_pride_dataset_explorer.ipynb)**
-   — explores annotated MSI pairs, reviews rejection diagnostics, and exports
-   reusable query filters.
-7. **[METASPACE dataset explorer](assets/notebooks/tutorials/07_metaspace_dataset_explorer_reworked_concise.ipynb)**
-   — searches public annotated MSI datasets, inspects biological and acquisition
-   metadata, reviews individual dataset pages, and exports reusable query filters.
-8. **[METASPACE download and merge](assets/notebooks/tutorials/08_metaspace_dataset_download_and_merge.ipynb)**
-   — resolves reviewed filters to a selection, authenticates a download session,
-   retrieves spatial annotations, and produces a merged MSI dataset.
+The executable tutorials are grouped with the Sphinx documentation:
+
+- **Workspace and contexts:** [workspace setup](docs/tutorials/workspace-and-contexts/workspace_01_workspace_and_models.ipynb) and [readers, binners, and coordinates](docs/tutorials/workspace-and-contexts/workspace_02_readers_binners_and_coordinates.ipynb).
+- **Autoencoders:** [configuration and training](docs/tutorials/autoencoder/autoencoder_01_model_configuration_and_training.ipynb) and [inference and latent images](docs/tutorials/autoencoder/autoencoder_02_inference_and_latent_space.ipynb).
+- **Cohort models:** [multi-image contexts and datasets](docs/tutorials/cohort-models/cohort_models_01_multi_image_models.ipynb).
+- **Dataset management:** [PRIDE discovery](docs/tutorials/dataset-management/dataset_management_01_pride_explorer.ipynb), [METASPACE discovery](docs/tutorials/dataset-management/dataset_management_02_metaspace_explorer.ipynb), and [METASPACE download and merge](docs/tutorials/dataset-management/dataset_management_03_metaspace_download_and_merge.ipynb).
+- **CLI and configuration:** [validate and plan an experiment](docs/tutorials/cli-and-configuration/cli_configuration_01_validate_and_plan.ipynb).
+
+See the [tutorial index](docs/tutorials/index.md) for the recommended order and
+workspace preparation.
 
 ## Documentation 
 

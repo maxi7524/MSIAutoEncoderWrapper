@@ -15,9 +15,6 @@ annotation, local import, merging, and catalog inspection.
 - [Download and merge](download-and-merge.md) — process sources sequentially with bounded disk use.
 - [Inspect the catalog](inspecting-the-catalog.md) — query canonical SQLite datasets, annotations, and merged mappings.
 
-The earlier [consolidated protocol](../dataset-management.md) remains available
-while these task-specific guides are reviewed.
-
 ```{toctree}
 :hidden:
 
