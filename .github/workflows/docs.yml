@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - Restructure-library
   pull_request:
     branches:
       - main
@@ -57,9 +56,13 @@ jobs:
           path: docs/_build/html
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
 
     environment:
       name: github-pages
