@@ -1,16 +1,16 @@
 
-## MSIAutoEncoderWrapper
+# MSIAutoEncoderWrapper
 
 ## Introduction
 
 `MSIAutoEncoderWrapper` is a Python library for training and deploying Autoencoder architectures on **Mass Spectrometry Imaging (MSI)** data.
 
 ### Key Features
-* **Seamless Data Integration**: Direct loading of `imzML` files via `m2aia`.
+* **Seamless Data Integration**: Direct loading of `imzML` files via M²aia or pyimzML.
 * **Standardized Pipeline**: Automatic handling of spectral binning, normalization, and PyTorch dataset creation.
 * **Model Agnostic**: Easily plug in any PyTorch Autoencoder architecture.
 * **Integrated Visualization**: Mixin classes for plotting training history, latent space maps, and reconstructions.
-* **Automated I/O**: Simplified saving and loading of model weights and compressed latent representations.
+* **Automated I/O**: Portable JSON model configuration, model weights, and latent `imzML`/`ibd` representations.
 
 
 ### Research Context
@@ -20,64 +20,183 @@ This library reimplements and extends the work from:
 The original implementation was refactored to use `m2aia` for improved data handling and performance.
 
 
-
-# Usage
-
 ## Installation
 
-### 1. Environment Setup
-We recommend using [Mamba](https://mamba.readthedocs.io/en/latest/) or [Conda](https://docs.conda.io/en/latest/) to manage dependencies. A pre-configured `environment.yml` file is provided.
+Here we provide commands to set up an environment with one of the following
+configurations:
+
+* `cpu` — installs the CPU-only PyTorch build (Linux and Windows).
+* `mps` — installs the CPU-only PyTorch build (macOS, both mps and other CPUs).
+   > REMARK: 
+   > It is also compatible with other CPUs, we discern this option because of lack libraries for m2aia. 
+
+* `cu118` — installs the PyTorch build for CUDA 11.8.
+
+### System packages
+
+To use the `m2aia` imzML readers, install the system libraries and
+OpenSlide. The following command supports Debian and Ubuntu systems:
 
 
 ```bash
-# To use `m2aia` you need to install system libraries:
 sudo apt-get update
 sudo apt-get install -y libglu1-mesa-dev libgomp1 libopenslide-dev
 ```
 
+> REMARK:
+> We also implemented `PyImzMLReader` for compatibility. 
+
+### Environment
+
+Run the commands from the project root. Choose exactly one environment manager
+and one configuration.
+
+#### uv manager (suggested)
+
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then
+create and synchronize the project environment:
+
+To install all basic packages run:
+
 ```bash
-# Create the environment
-conda env create -f scripts/environment/msi_env.yml
-
-# Activate the environment
-conda activate msi_env
-
-# Install torch (~3 GB) (adding it to .yml drastically slows process)
-# TODO - adjust `pytorch-cuda`  
-micromamba install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+uv sync 
 ```
 
-### 2. Library Installation
-Currently, the library is in development mode. Install it in editable mode:
+To install / change TORCH version run: 
 
 ```bash
-# From the project root directory
-pip install -e .
+# CPU: Linux or Windows, includes m2aia package and loader
+uv sync --extra cpu
+```
+
+or:
+
+```bash
+# CUDA 11.8: Linux or Windows with CUDA 11.8; includes m2aia
+uv sync --extra cu118
+```
+
+or:
+```bash
+# MPS: macOS with Apple Metal Performance Shaders, excludes m2aia
+uv sync --extra mps
+```
+
+The environment is stored in `.venv`. Pass the selected configuration to
+`uv run` to keep the environment synchronized while executing commands:
+
+```bash
+# CPU
+uv run --extra cpu pytest
+uv run --extra cpu python
+
+# CUDA 11.8
+uv run --extra cu118 pytest
+uv run --extra cu118 python
+
+# MPS 
+uv run --extra mps pytest
+uv run --extra mps python
+```
+
+#### Conda managers
+
+The same setup works with Conda, Mamba, or Micromamba. The examples below use
+`conda`; replace it consistently with `mamba` or `micromamba` when needed.
+
+```bash
+# Create and activate the environment
+conda create --name msi_env python=3.12 pip -y
+conda activate msi_env
+
+# CPU
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[cpu]"
+```
+
+For CUDA 11.8, replace the two installation commands with:
+
+```bash
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+python -m pip install -e ".[cu118]"
+```
+
+For macOS with MPS, install the standard PyPI build of PyTorch:
+
+```bash
+python -m pip install -e ".[mps]"
+```
+
+#### venv manager
+
+Create a standard Python virtual environment:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+
+# CPU
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[cpu]"
+```
+
+For CUDA 11.8, replace the two installation commands with:
+
+```bash
+python -m pip install torch==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+python -m pip install -e ".[cu118]"
+```
+
+For macOS with MPS, install the standard PyPI build of PyTorch:
+
+```bash
+python -m pip install -e ".[mps]"
+```
+
+Verify the selected PyTorch build:
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
 ```
 
 ## Tutorials
-Detailed guides can be found in the `notebooks/tutorials` directory:
 
-1.  **[Tutorial 1: Compression](notebooks/tutorials/tutorial1_compression.ipynb)**
-    * Initialize and train an `MSIContrastiveModel`.
-    * Analyze training losses and visualize reconstruction quality.
-    * Compress a full `imzML` image into a latent space saved in `npz` format.
-    * Demonstration of loading the latent space independently of the raw data.
+The executable tutorials are grouped with the Sphinx documentation:
 
-2.  **[Tutorial 2: Reconstruction & Visualization](notebooks/tutorials/tutorial2_decompression.ipynb)**
-    * Load a pre-trained model and a compressed latent space file.
-    * Reconstruct the latent space back into the original spectral domain.
-    * Export results back to `imzML` format.
-    * Visualization of latent components.
+- **Workspace and contexts:** [workspace setup](docs/tutorials/workspace-and-contexts/workspace_01_workspace_and_models.ipynb) and [readers, binners, and coordinates](docs/tutorials/workspace-and-contexts/workspace_02_readers_binners_and_coordinates.ipynb).
+- **Autoencoders:** [configuration and training](docs/tutorials/autoencoder/autoencoder_01_model_configuration_and_training.ipynb) and [inference and latent images](docs/tutorials/autoencoder/autoencoder_02_inference_and_latent_space.ipynb).
+- **Cohort models:** [multi-image contexts and datasets](docs/tutorials/cohort-models/cohort_models_01_multi_image_models.ipynb).
+- **Dataset management:** [PRIDE discovery](docs/tutorials/dataset-management/dataset_management_01_pride_explorer.ipynb), [METASPACE discovery](docs/tutorials/dataset-management/dataset_management_02_metaspace_explorer.ipynb), and [METASPACE download and merge](docs/tutorials/dataset-management/dataset_management_03_metaspace_download_and_merge.ipynb).
+- **CLI and configuration:** [validate and plan an experiment](docs/tutorials/cli-and-configuration/cli_configuration_01_validate_and_plan.ipynb).
 
-## Creating Custom Models
+See the [tutorial index](docs/tutorials/index.md) for the recommended order and
+workspace preparation.
+
+## Documentation 
+
+The [documentation entry page](docs/index.md) links to task-oriented guides,
+library internals, and instructions for developers.
+
+
+
+<!-- ### Creating Custom Models
 Users can implement their own architectures and loss functions (criterions) by subclassing the base modules. For detailed instructions on how to integrate your own PyTorch models into the wrapper, please refer to:
 * **[Development Guide: Custom Models](docs/CUSTOM_MODELS.md)**
+* **[Training Criteria](docs/CRITERIONS.md)** — criterion categories, lifecycle
+  hooks, configuration, and the Masserstein reconstruction objective.
+* **[External Dataset Pipeline](docs/DATASET_PIPELINE.md)** — METASPACE
+  discovery, catalog-only and download modes, annotation readers, and imzML
+  merge provenance. -->
 
 ## Feedback & Support
 If you have questions, suggestions, or find any bugs, please feel free to open an issue or [contact me directly by mail](mailto:mb.strozyk@student.uw.edu.pl).
 
-<!-- Later mayebe :): contact the maintainers at [your-email@domain.com]. -->
+<!-- Later mayebe :) contact the maintainers at [your-email@domain.com]. -->
 
 
 ## Bibliography

@@ -1,9 +1,11 @@
 # local files
 notes_to_apply.md
+.tmp
 *egg-info
 
 # data
-*data
+/data/
+/assets/local/datasets/
 *.tar.gz
 *.tar
 *.zip
@@ -13,3 +15,8 @@ __pycache__
 .pytest_cache
 .vscode
 .to_delete
+.pym2aia_prefs.xml
+/docs/_build/
+
+# notebooks
+*.ipynb diff=jupyternotebook
