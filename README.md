@@ -1,5 +1,6 @@
 
 # MSIAutoEncoderWrapper
+[Documentation](https://maxi7524.github.io/MSIAutoEncoderWrapper/)
 
 ## Introduction
 
@@ -166,32 +167,23 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 
 ## Tutorials
 
-The executable tutorials are grouped with the Sphinx documentation:
+The executable tutorials are available in the Sphinx documentation:
 
-- **Workspace and contexts:** [workspace setup](docs/tutorials/workspace-and-contexts/workspace_01_workspace_and_models.ipynb) and [readers, binners, and coordinates](docs/tutorials/workspace-and-contexts/workspace_02_readers_binners_and_coordinates.ipynb).
-- **Autoencoders:** [configuration and training](docs/tutorials/autoencoder/autoencoder_01_model_configuration_and_training.ipynb) and [inference and latent images](docs/tutorials/autoencoder/autoencoder_02_inference_and_latent_space.ipynb).
-- **Cohort models:** [multi-image contexts and datasets](docs/tutorials/cohort-models/cohort_models_01_multi_image_models.ipynb).
-- **Dataset management:** [PRIDE discovery](docs/tutorials/dataset-management/dataset_management_01_pride_explorer.ipynb), [METASPACE discovery](docs/tutorials/dataset-management/dataset_management_02_metaspace_explorer.ipynb), and [METASPACE download and merge](docs/tutorials/dataset-management/dataset_management_03_metaspace_download_and_merge.ipynb).
-- **CLI and configuration:** [validate and plan an experiment](docs/tutorials/cli-and-configuration/cli_configuration_01_validate_and_plan.ipynb).
+- **Workspace and contexts:** [open tutorials](https://maxi7524.github.io/MSIAutoEncoderWrapper/tutorials/workspace-and-contexts/)
+- **Autoencoders:** [open tutorials](https://maxi7524.github.io/MSIAutoEncoderWrapper/tutorials/autoencoder/)
+- **Cohort models:** [open tutorials](https://maxi7524.github.io/MSIAutoEncoderWrapper/tutorials/cohort-models/)
+- **Dataset management:** [open tutorials](https://maxi7524.github.io/MSIAutoEncoderWrapper/tutorials/dataset-management/)
+- **CLI and configuration:** [open tutorials](https://maxi7524.github.io/MSIAutoEncoderWrapper/tutorials/cli-and-configuration/)
 
-See the [tutorial index](docs/tutorials/index.md) for the recommended order and
-workspace preparation.
+See the [tutorial index](https://maxi7524.github.io/MSIAutoEncoderWrapper/tutorials/)
+for the recommended order and workspace preparation.
 
-## Documentation 
+## Documentation
 
-The [documentation entry page](docs/index.md) links to task-oriented guides,
-library internals, and instructions for developers.
+The complete documentation is available at:
 
+https://maxi7524.github.io/MSIAutoEncoderWrapper/
 
-
-<!-- ### Creating Custom Models
-Users can implement their own architectures and loss functions (criterions) by subclassing the base modules. For detailed instructions on how to integrate your own PyTorch models into the wrapper, please refer to:
-* **[Development Guide: Custom Models](docs/CUSTOM_MODELS.md)**
-* **[Training Criteria](docs/CRITERIONS.md)** — criterion categories, lifecycle
-  hooks, configuration, and the Masserstein reconstruction objective.
-* **[External Dataset Pipeline](docs/DATASET_PIPELINE.md)** — METASPACE
-  discovery, catalog-only and download modes, annotation readers, and imzML
-  merge provenance. -->
 
 ## Feedback & Support
 If you have questions, suggestions, or find any bugs, please feel free to open an issue or [contact me directly by mail](mailto:mb.strozyk@student.uw.edu.pl).
