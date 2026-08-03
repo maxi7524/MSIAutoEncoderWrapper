@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - Restructure-library
   pull_request:
     branches:
       - main
