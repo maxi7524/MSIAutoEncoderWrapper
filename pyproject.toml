@@ -53,7 +53,7 @@ dev = [
 ]
 docs = [
     "furo",
-    "myst-parser",
+    "myst-nb",
     "sphinx",
 ]
 
