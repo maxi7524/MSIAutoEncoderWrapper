@@ -101,6 +101,19 @@ class LinearBinning(MSIBaseBinner):
 
         ### Accumulate raw intensities in mass intervals
 
+        #### Bin assignment rule (scipy.stats.binned_statistic / numpy.histogram
+        #### semantics): every interval is half-open ``[bin_edges[i], bin_edges[i+1])``,
+        #### except the last one, which is closed on both ends
+        #### ``[bin_edges[-2], bin_edges[-1]]``. Consequently a raw point falls into
+        #### **exactly one** bin, never split across two and never duplicated — a point
+        #### that lands precisely on a shared edge value belongs to the bin that starts
+        #### there (its right neighbor), not the one that ends there, except at the very
+        #### last edge. Points strictly outside ``[bin_edges[0], bin_edges[-1]]`` are
+        #### silently dropped from every bin (not an error, not counted anywhere) — this
+        #### is why ``crop_spectrum`` in the analysis package re-crops the raw reference
+        #### to a restricted binner's own ``[x_min, x_max]`` before comparing: otherwise
+        #### raw points outside that window would show up as "unmatched" even though the
+        #### binner itself never saw them in the first place.
         #### All points assigned to the same interval contribute to one output bin
         intensities, _, _ = binned_statistic(
             xs, ys, statistic="sum", bins=self.bin_edges

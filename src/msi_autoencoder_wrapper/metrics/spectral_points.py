@@ -37,6 +37,74 @@ def _inputs(axis: np.ndarray, intensity: np.ndarray, name: str) -> tuple[np.ndar
     return x[valid], y[valid]
 
 
+def _one_to_one_matches(rx: np.ndarray, radii: np.ndarray, cx: np.ndarray) -> list[tuple[int, int]]:
+    """Match every reference point to at most one candidate, most-constrained
+    reference points first, resolved in vectorized rounds.
+
+    Each round: for every reference point that still has at least one *available*
+    (not yet claimed by an earlier round) candidate in its tolerance window, compute
+    that window against the current candidate pool in bulk (``searchsorted`` on the
+    whole remaining array at once, not per point). Among those with candidates, only
+    the ones whose window currently has the *fewest* available candidates are resolved
+    this round — ties (several equally-constrained points wanting the same candidate)
+    go to whichever is closer; the loser stays unresolved and is re-evaluated next
+    round, when the contested candidate is already gone and its window has changed.
+    Reference points with zero available candidates are permanently dropped.
+
+    This "fewest options first" order is what makes the result different from (and
+    better than) a fixed left-to-right sweep by m/z: a reference point with several
+    candidates to choose from can no longer starve a point that only had one option, by
+    being processed first purely because it happens to sit at a lower m/z.
+
+    Termination is guaranteed: each round either drops at least one reference point
+    (assigned or permanently unmatched) or the loop exits, so it runs at most
+    ``rx.size`` rounds — in practice far fewer, since real spectra rarely have more than
+    a handful of reference points genuinely contesting the same candidate.
+
+    :return: ``(reference_index, candidate_index)`` pairs, sorted by reference index.
+    """
+    remaining = np.arange(rx.size)
+    used = np.zeros(cx.size, dtype=bool)
+    pairs: list[tuple[int, int]] = []
+    while remaining.size:
+        available = np.flatnonzero(~used)
+        if available.size == 0:
+            break
+        cx_available = cx[available]
+        window_left = np.searchsorted(cx_available, rx[remaining] - radii[remaining], side="left")
+        window_right = np.searchsorted(cx_available, rx[remaining] + radii[remaining], side="right")
+        window_size = window_right - window_left
+
+        has_candidate = window_size > 0
+        if not np.any(has_candidate):
+            break  # nothing left can ever be matched
+        most_constrained = int(window_size[has_candidate].min())
+        active = np.flatnonzero(has_candidate & (window_size == most_constrained))
+
+        ## Resolve this round's most-constrained tier: nearest available candidate per
+        ## active point, contested candidates going to whichever point is closer.
+        best_distance_by_candidate: dict[int, tuple[float, int]] = {}
+        for local_index in active:
+            window = available[window_left[local_index]:window_right[local_index]]
+            nearest_in_window = int(window[np.argmin(np.abs(cx[window] - rx[remaining[local_index]]))])
+            distance = float(abs(cx[nearest_in_window] - rx[remaining[local_index]]))
+            current_best = best_distance_by_candidate.get(nearest_in_window)
+            if current_best is None or distance < current_best[0]:
+                best_distance_by_candidate[nearest_in_window] = (distance, int(local_index))
+
+        resolved_local = {local_index for _, local_index in best_distance_by_candidate.values()}
+        for candidate_index, (_, local_index) in best_distance_by_candidate.items():
+            pairs.append((int(remaining[local_index]), candidate_index))
+            used[candidate_index] = True
+
+        drop_local = resolved_local | set(np.flatnonzero(~has_candidate).tolist())
+        keep_mask = np.ones(remaining.size, dtype=bool)
+        keep_mask[list(drop_local)] = False
+        remaining = remaining[keep_mask]
+    pairs.sort(key=lambda pair: pair[0])
+    return pairs
+
+
 def match_spectral_points(reference_mz: np.ndarray, reference_intensity: np.ndarray, candidate_mz: np.ndarray, candidate_intensity: np.ndarray, tolerance: float, tolerance_unit: ToleranceUnit = "Da", matching_strategy: MatchingStrategy = "one_to_one") -> SpectralPointMatch:
     r"""Match two sorted sparse spectra by m/z proximity.
 
@@ -78,16 +146,25 @@ def match_spectral_points(reference_mz: np.ndarray, reference_intensity: np.ndar
           admissible candidate. A candidate may be claimed by more than one reference
           point (no exclusivity between reference points). Diagnostic only: never use
           it for a reported metric, since one candidate counted against several
-          reference points inflates apparent coverage.
-        - ``"one_to_one"`` — same "closest candidate wins" rule as ``"nearest"``, but
-          candidates already claimed by an earlier (lower m/z) reference point are
-          excluded from later windows, so every candidate is used by at most one
-          reference point. This is a genuine bijective partial matching (no double
-          counting) and is the strategy every quantitative metric in this module is
-          computed with. It is implemented as one linear left-to-right sweep over the
-          sorted axes (``candidate_start`` only ever advances) rather than a full
-          assignment-problem solver — exact here because the exclusion order matches
-          the order the reference axis is walked in.
+          reference points inflates apparent coverage. Fully vectorized (see
+          implementation) — no per-point Python loop.
+        - ``"one_to_one"`` — every candidate is claimed by at most one reference point (a
+          genuine bijective partial matching, no double counting) — the strategy every
+          quantitative metric in this module is computed with. Resolved in rounds (see
+          :func:`_one_to_one_matches`): each round, among reference points that still
+          have at least one *available* (not yet claimed) candidate, the ones with the
+          *fewest* available candidates go first, with ties (several equally-constrained
+          points contesting the same candidate) broken by proximity; winning candidates
+          are removed from the pool and the round repeats for whoever is left. This
+          "most-constrained-first" order — rather than a fixed left-to-right sweep by
+          m/z — avoids a real failure mode of naive greedy matching: a reference point
+          with several options gets processed first and happens to take the one
+          candidate that was another reference point's *only* option, leaving that other
+          point unmatched even though a different assignment would have matched both.
+          Each round is vectorized (bulk ``searchsorted`` over the current candidate
+          pool); only the number of rounds is a Python-level loop, and it collapses to
+          very few rounds whenever admissible-candidate windows rarely overlap (the
+          common case for sparse centroided spectra matched at a tight tolerance).
         - ``"local_mass"`` — every candidate inside a reference point's window is kept,
           not just the nearest one, and their intensities are **summed** into that
           reference point's matched candidate intensity
@@ -113,30 +190,38 @@ def match_spectral_points(reference_mz: np.ndarray, reference_intensity: np.ndar
     radii = np.full(rx.size, tolerance) if tolerance_unit == "Da" else rx * tolerance * 1e-6
     pairs: list[tuple[int, int]] = []; groups: list[np.ndarray] = []
     if matching_strategy == "nearest":
-        ## nearest: closest admissible candidate per reference point; candidates may repeat across reference points.
-        for index in range(rx.size):
-            left = int(np.searchsorted(cx, rx[index] - radii[index], side="left")); right = int(np.searchsorted(cx, rx[index] + radii[index], side="right"))
-            candidates = np.arange(left, right, dtype=int)
-            if candidates.size:
-                chosen = int(candidates[np.argmin(np.abs(cx[candidates] - rx[index]))]); pairs.append((index, chosen)); groups.append(np.asarray([chosen]))
+        ## nearest: fully vectorized nearest-candidate lookup (no per-point Python loop);
+        ## candidates may repeat across reference points. Sorted-array nearest-neighbor
+        ## trick: the nearest value to rx[i] in a sorted cx is always immediately before
+        ## or immediately after searchsorted's insertion point.
+        if rx.size and cx.size:
+            insert = np.searchsorted(cx, rx)
+            left_index = np.clip(insert - 1, 0, cx.size - 1)
+            right_index = np.clip(insert, 0, cx.size - 1)
+            left_distance = np.abs(cx[left_index] - rx)
+            right_distance = np.abs(cx[right_index] - rx)
+            prefer_left = left_distance <= right_distance
+            nearest_index = np.where(prefer_left, left_index, right_index)
+            nearest_distance = np.where(prefer_left, left_distance, right_distance)
+            within_tolerance = nearest_distance <= radii
+            for ref_index, cand_index in zip(np.flatnonzero(within_tolerance).tolist(), nearest_index[within_tolerance].tolist()):
+                pairs.append((ref_index, cand_index)); groups.append(np.asarray([cand_index]))
     elif matching_strategy == "local_mass":
-        ## local_mass: keep every admissible candidate (not just the nearest); their intensities are summed later, position error still comes from the nearest one.
-        for index in range(rx.size):
-            left = int(np.searchsorted(cx, rx[index] - radii[index], side="left")); right = int(np.searchsorted(cx, rx[index] + radii[index], side="right"))
-            candidates = np.arange(left, right, dtype=int)
-            if candidates.size:
-                chosen = int(candidates[np.argmin(np.abs(cx[candidates] - rx[index]))]); pairs.append((index, chosen)); groups.append(candidates)
+        ## local_mass: window boundaries computed in bulk (vectorized); the group itself
+        ## has a variable size per reference point, so building each group still needs a
+        ## per-point loop, just without the per-point searchsorted calls.
+        if rx.size and cx.size:
+            left = np.searchsorted(cx, rx - radii, side="left")
+            right = np.searchsorted(cx, rx + radii, side="right")
+            for index in range(rx.size):
+                if right[index] > left[index]:
+                    candidates = np.arange(left[index], right[index], dtype=int)
+                    chosen = int(candidates[np.argmin(np.abs(cx[candidates] - rx[index]))])
+                    pairs.append((index, chosen)); groups.append(candidates)
     elif rx.size and cx.size:
-        ## one_to_one: closest admissible candidate per reference point, each candidate excluded from later windows once claimed.
-        # Ordered greedy matching is linear-memory and deterministic. The next
-        # admissible candidate is used once; local ties prefer smaller error.
-        candidate_start = 0
-        for index in range(rx.size):
-            left = max(candidate_start, int(np.searchsorted(cx, rx[index] - radii[index], side="left")))
-            right = int(np.searchsorted(cx, rx[index] + radii[index], side="right"))
-            if left < right:
-                candidates = np.arange(left, right, dtype=int); chosen = int(candidates[np.argmin(np.abs(cx[candidates] - rx[index]))])
-                pairs.append((index, chosen)); groups.append(np.asarray([chosen])); candidate_start = chosen + 1
+        ## one_to_one: see _one_to_one_matches for the most-constrained-first, round-based algorithm.
+        pairs = _one_to_one_matches(rx, radii, cx)
+        groups = [np.asarray([candidate_index]) for _, candidate_index in pairs]
     # Assemble the match: signed Da/ppm error per pair, matched/unmatched indices on
     # both sides, and (local_mass-summed) intensity aligned to each matched reference point.
     ref = np.asarray([pair[0] for pair in pairs], dtype=int); cand = np.asarray([pair[1] for pair in pairs], dtype=int)
