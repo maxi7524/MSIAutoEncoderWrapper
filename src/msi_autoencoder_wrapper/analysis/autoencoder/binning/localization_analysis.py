@@ -151,10 +151,11 @@ def plot_localization_profile(
         figure = ax.figure
     xs = [record["mz_bin_mid"] for record in profile]
     ys = [record[f"{statistic}_{unit}"] for record in profile]
-    ax.plot(xs, ys, marker="o", color=color, alpha=resolved.primary_alpha, label=label or f"{statistic} |error| ({unit})")
+    line_color = color or resolved.color_for_model(label or statistic)
+    ax.plot(xs, ys, marker="o", color=line_color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=line_color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label=label or f"{statistic} |error| ({unit})")
     ax.set(xlabel="m/z", ylabel=f"localization error ({unit})")
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
-    ax.legend(fontsize=resolved.tick_font_size, loc=resolved.legend_location, frameon=resolved.legend_frame)
+    ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
+    ax.legend(fontsize=resolved.legend_font_size, loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame)
     figure.tight_layout()
     return figure, ax
 
@@ -195,11 +196,12 @@ def plot_unmatched_fraction_profile(
         figure = ax.figure
     xs = [record["mz_bin_mid"] for record in profile]
     ys = [record["unmatched_fraction"] for record in profile]
-    ax.plot(xs, ys, marker="o", color=color or resolved.residual_color, alpha=resolved.primary_alpha, label=label or "unmatched reference fraction")
+    line_color = color or resolved.residual_color
+    ax.plot(xs, ys, marker="o", color=line_color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=line_color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label=label or "unmatched reference fraction")
     ax.set(xlabel="m/z", ylabel="unmatched fraction")
     ax.set_ylim(0.0, 1.0)
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
-    ax.legend(fontsize=resolved.tick_font_size, loc=resolved.legend_location, frameon=resolved.legend_frame)
+    ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
+    ax.legend(fontsize=resolved.legend_font_size, loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame)
     figure.tight_layout()
     return figure, ax
 

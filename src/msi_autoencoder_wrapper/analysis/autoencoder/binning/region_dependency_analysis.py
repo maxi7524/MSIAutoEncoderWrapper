@@ -244,17 +244,18 @@ def plot_optimal_parameter_by_region(
     local.sort(key=lambda record: record["region_midpoint"])
     xs = [record["region_midpoint"] for record in local]
     ys = [record[y] for record in local]
+    color = resolved.color_for_model("per-region")
     if y == "optimal_label":
-        ax.plot(xs, ys, marker="o", color=resolved.color_for_model("per-region"), alpha=resolved.primary_alpha, label="per-region optimum")
+        ax.plot(xs, ys, marker="o", color=color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label="per-region optimum")
         ax.tick_params(axis="y", labelrotation=0)
     else:
-        ax.plot(xs, ys, marker="o", color=resolved.color_for_model("per-region"), alpha=resolved.primary_alpha, label="per-region optimum")
+        ax.plot(xs, ys, marker="o", color=color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label="per-region optimum")
     if global_records:
         global_value = global_records[0][y]
         if y != "optimal_label":
             ax.axhline(global_value, color=resolved.baseline_color, linestyle=resolved.baseline_line_style, linewidth=resolved.reference_line_width, label=f"global optimum ({global_value:g})")
     ax.set(xlabel="region midpoint m/z", ylabel=y)
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
-    ax.legend(fontsize=resolved.tick_font_size, loc=resolved.legend_location, frameon=resolved.legend_frame)
+    ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
+    ax.legend(fontsize=resolved.legend_font_size, loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame)
     figure.tight_layout()
     return figure, ax

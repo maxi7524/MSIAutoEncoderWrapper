@@ -258,14 +258,27 @@ def plot_inverse_tradeoff(
             ys = [by_key[(label, comparison)][statistic] for label in ordered_labels if method_by_label.get(label) == method and (label, comparison) in by_key]
             if not xs:
                 continue
-            ax.plot(xs, ys, marker="o", color=color, linestyle=LINESTYLE_BY_COMPARISON.get(comparison, "-."), alpha=resolved.primary_alpha, label=f"{method} / {comparison}")
+            ax.plot(
+                xs,
+                ys,
+                marker="o",
+                color=color,
+                linestyle=LINESTYLE_BY_COMPARISON.get(comparison, "-."),
+                linewidth=resolved.line_width,
+                markersize=resolved.marker_size,
+                markerfacecolor=color,
+                markeredgecolor=resolved.panel_color,
+                markeredgewidth=resolved.marker_edge_width,
+                alpha=resolved.primary_alpha,
+                label=f"{method} / {comparison}",
+            )
 
     ax.set_xticks(list(x_position.values()))
     ax.set_xticklabels(list(x_position.keys()), rotation=45, ha="right")
     ax.set_ylabel(metric)
     ax.set_title(f"{metric} ({normalization}, {statistic})", loc=resolved.title_location)
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
-    ax.legend(fontsize=resolved.tick_font_size, loc=resolved.legend_location, frameon=resolved.legend_frame)
+    ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
+    ax.legend(fontsize=resolved.legend_font_size, loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame)
     figure.tight_layout()
     return figure, ax
 

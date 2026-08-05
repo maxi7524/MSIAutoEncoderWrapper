@@ -44,10 +44,10 @@ def plot_sparse_spectrum_match(
         signal_axis.plot([reference_mz[reference_index], candidate_mz[candidate_index]], [reference_intensity[reference_index], -candidate_intensity[candidate_index]], color=resolved.baseline_color, alpha=0.12, linewidth=resolved.reference_line_width)
     residual = match.matched_reference_intensity - match.matched_candidate_intensity
     residual_axis.vlines(reference_mz[match.matched_reference_indices], 0.0, residual, color=resolved.residual_color, linewidth=resolved.residual_line_width, label="matched intensity residual")
-    residual_axis.scatter(reference_mz[match.unmatched_reference_indices], reference_intensity[match.unmatched_reference_indices], marker="x", color=resolved.false_negative_color, label="unmatched reference")
-    residual_axis.scatter(candidate_mz[match.unmatched_candidate_indices], -candidate_intensity[match.unmatched_candidate_indices], marker="x", color=resolved.false_positive_color, label="unmatched candidate")
+    residual_axis.scatter(reference_mz[match.unmatched_reference_indices], reference_intensity[match.unmatched_reference_indices], marker="x", color=resolved.false_negative_color, s=resolved.marker_size ** 2, linewidths=resolved.marker_edge_width, alpha=resolved.marker_alpha, label="unmatched reference")
+    residual_axis.scatter(candidate_mz[match.unmatched_candidate_indices], -candidate_intensity[match.unmatched_candidate_indices], marker="x", color=resolved.false_positive_color, s=resolved.marker_size ** 2, linewidths=resolved.marker_edge_width, alpha=resolved.marker_alpha, label="unmatched candidate")
     for axis in (signal_axis, residual_axis):
-        axis.axhline(0.0, color=resolved.baseline_color, linewidth=resolved.reference_line_width, linestyle=resolved.baseline_line_style); axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha); axis.legend(loc=resolved.legend_location, frameon=resolved.legend_frame)
+        axis.axhline(0.0, color=resolved.baseline_color, linewidth=resolved.reference_line_width, linestyle=resolved.baseline_line_style); axis.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width); axis.legend(loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame, fontsize=resolved.legend_font_size)
     signal_axis.set_ylabel("Intensity"); residual_axis.set(xlabel="m/z", ylabel="Matched Δ intensity")
     return figure, (signal_axis, residual_axis)
 
@@ -99,7 +99,7 @@ def plot_sparse_spectrum_multi_match(
         residual = match.matched_reference_intensity - match.matched_candidate_intensity
         residual_axis.vlines(reference_mz[match.matched_reference_indices], 0.0, residual, color=color, linewidth=resolved.residual_line_width, alpha=resolved.residual_alpha, label=f"{label} residual")
     for axis in (signal_axis, residual_axis):
-        axis.axhline(0.0, color=resolved.baseline_color, linewidth=resolved.reference_line_width, linestyle=resolved.baseline_line_style); axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha); axis.legend(loc=resolved.legend_location, frameon=resolved.legend_frame, fontsize=resolved.tick_font_size)
+        axis.axhline(0.0, color=resolved.baseline_color, linewidth=resolved.reference_line_width, linestyle=resolved.baseline_line_style); axis.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width); axis.legend(loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame, fontsize=resolved.legend_font_size)
     signal_axis.set_ylabel("Intensity"); residual_axis.set(xlabel="m/z", ylabel="Matched Δ intensity")
     return figure, (signal_axis, residual_axis)
 
@@ -200,14 +200,16 @@ def plot_spectrum_comparison(
         loc=resolved.legend_location,
         frameon=resolved.legend_frame,
         ncols=resolved.legend_columns,
+        fontsize=resolved.legend_font_size,
     )
     residual_axis.legend(
         loc=resolved.legend_location,
         frameon=resolved.legend_frame,
         ncols=resolved.legend_columns,
+        fontsize=resolved.legend_font_size,
     )
     for axis in (signal_axis, residual_axis):
         axis.set_facecolor(resolved.panel_color)
-        axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
+        axis.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
         axis.tick_params(labelsize=resolved.tick_font_size)
     return figure, (signal_axis, residual_axis)
