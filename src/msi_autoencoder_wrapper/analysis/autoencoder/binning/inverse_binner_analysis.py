@@ -195,7 +195,7 @@ def summarize_inverse_sweep(records: Sequence[Mapping[str, Any]]) -> list[dict[s
         grouped.setdefault(key, []).append(record["value"])
         method_by_label[record["label"]] = record["method"]
     return [
-        {"label": key[0], "method": method_by_label[key[0]], "comparison": key[1], "normalization": key[2], "metric": key[3], **summarize_metric(values)}
+        {"label": key[0], "method": method_by_label[key[0]], "comparison": key[1], "normalization": key[2], "metric": key[3], **summarize_metric(values), "_values": [float(value) for value in values if np.isfinite(value)]}
         for key, values in grouped.items()
     ]
 
@@ -209,6 +209,7 @@ def plot_inverse_tradeoff(
     labels: Optional[Sequence[str]] = None,
     ax=None,
     theme: VisualizationTheme | str | None = None,
+    quantiles: Optional[tuple[float, float]] = (0.25, 0.75),
 ):
     """One plot, every method and (by default) both comparisons overlaid at once —
     the primary plot for picking a manual parameter value.
@@ -234,6 +235,9 @@ def plot_inverse_tradeoff(
     :param labels: Explicit x-axis order (typically ``METHOD_GRID_LABELS`` from the
         notebook); defaults to every label present in ``summary_records`` for this
         ``metric``/``normalization``, first-seen order.
+    :param quantiles: Lower and upper per-spectrum quantiles drawn around every method
+        and comparison curve, or ``None`` to draw only summary-statistic lines.
+    :type quantiles: Optional[tuple[float, float]]
     """
     resolved = resolve_theme(theme)
     if ax is None:
@@ -250,6 +254,10 @@ def plot_inverse_tradeoff(
     method_order = list(dict.fromkeys(method_by_label[label] for label in ordered_labels if label in method_by_label))
     by_key = {(record["label"], record["comparison"]): record for record in selected}
     x_position = {label: index for index, label in enumerate(ordered_labels)}
+    if quantiles is not None:
+        lower_quantile, upper_quantile = (float(value) for value in quantiles)
+        if not 0.0 <= lower_quantile <= upper_quantile <= 1.0:
+            raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
 
     for method_index, method in enumerate(method_order):
         color = resolved.color_for_model(method, method_index)
@@ -258,6 +266,7 @@ def plot_inverse_tradeoff(
             ys = [by_key[(label, comparison)][statistic] for label in ordered_labels if method_by_label.get(label) == method and (label, comparison) in by_key]
             if not xs:
                 continue
+            selected_records = [by_key[(label, comparison)] for label in ordered_labels if method_by_label.get(label) == method and (label, comparison) in by_key]
             ax.plot(
                 xs,
                 ys,
@@ -272,6 +281,13 @@ def plot_inverse_tradeoff(
                 alpha=resolved.primary_alpha,
                 label=f"{method} / {comparison}",
             )
+            if quantiles is not None:
+                bounds = np.asarray([
+                    np.quantile(np.asarray(record["_values"], dtype=np.float64), (lower_quantile, upper_quantile)) if record["_values"] else (np.nan, np.nan)
+                    for record in selected_records
+                ])
+                ax.fill_between(xs, bounds[:, 0], bounds[:, 1], color=color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
+                ax.vlines(xs, bounds[:, 0], bounds[:, 1], color=color, linewidth=resolved.distribution_line_width, alpha=resolved.secondary_alpha)
 
     ax.set_xticks(list(x_position.values()))
     ax.set_xticklabels(list(x_position.keys()), rotation=45, ha="right")

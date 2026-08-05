@@ -47,8 +47,10 @@ def localization_profile(
         ``reference_point_count`` (all reference points in the bin, matched or not),
         ``matched_count``, ``unmatched_fraction`` (unmatched reference points / all
         reference points in the bin — "how much signal near this m/z gets lost"),
-        ``median_da``/``q95_da``/``median_ppm``/``q95_ppm`` (over *matched* points only).
-        Bins with zero reference points are omitted.
+        ``q25_da``/``median_da``/``q75_da``/``q95_da`` and corresponding ppm fields
+        (over *matched* points only). Per-spectrum unmatched-fraction quantiles are
+        included separately from the pooled ``unmatched_fraction``. Bins with zero
+        reference points are omitted.
     """
     label, method, params = method_grid_point["label"], method_grid_point["method"], dict(method_grid_point.get("params", {}))
     forward_binner, inverse_binner, inverse_cache = precompute.inverse(delta_m, inverse_binner_factory(method, **params), x_min, x_max, cache_key=label)
@@ -67,8 +69,8 @@ def localization_profile(
         reference_mz, reference_y = (grid_mz, grid_y) if comparison == "inverse_binned" else (raw_mz, raw_y)
         match = match_spectral_points(reference_mz, reference_y, result.mz, result.intensity, tolerance, tolerance_unit, "one_to_one")
         all_reference_mz.append(reference_mz)
+        matched_reference_mz.append(reference_mz[match.matched_reference_indices])
         if match.matched_reference_indices.size:
-            matched_reference_mz.append(reference_mz[match.matched_reference_indices])
             matched_da.append(np.abs(match.mz_errors_da))
             matched_ppm.append(np.abs(match.mz_errors_ppm))
 
@@ -89,14 +91,33 @@ def localization_profile(
         matched_count = int(np.sum(matched_mask))
         bin_da = pooled_da[matched_mask]
         bin_ppm = pooled_ppm[matched_mask]
+        per_spectrum_unmatched = []
+        for spectrum_all_mz, spectrum_matched_mz in zip(all_reference_mz, matched_reference_mz):
+            spectrum_reference_count = int(np.sum((spectrum_all_mz >= start) & (spectrum_all_mz < end)))
+            if spectrum_reference_count == 0:
+                continue
+            spectrum_matched_count = int(np.sum((spectrum_matched_mz >= start) & (spectrum_matched_mz < end)))
+            per_spectrum_unmatched.append(1.0 - spectrum_matched_count / spectrum_reference_count)
+        unmatched_values = np.asarray(per_spectrum_unmatched, dtype=np.float64)
         records.append({
             "mz_bin_start": float(start), "mz_bin_end": float(end), "mz_bin_mid": float((start + end) / 2),
             "reference_point_count": reference_count, "matched_count": matched_count,
             "unmatched_fraction": 1.0 - matched_count / reference_count,
+            "q25_unmatched_fraction": float(np.quantile(unmatched_values, 0.25)),
+            "median_unmatched_fraction": float(np.median(unmatched_values)),
+            "q75_unmatched_fraction": float(np.quantile(unmatched_values, 0.75)),
+            "q95_unmatched_fraction": float(np.quantile(unmatched_values, 0.95)),
+            "_unmatched_fraction_values": unmatched_values.tolist(),
+            "q25_da": float(np.quantile(bin_da, 0.25)) if bin_da.size else np.nan,
             "median_da": float(np.median(bin_da)) if bin_da.size else np.nan,
+            "q75_da": float(np.quantile(bin_da, 0.75)) if bin_da.size else np.nan,
             "q95_da": float(np.quantile(bin_da, 0.95)) if bin_da.size else np.nan,
+            "_error_da_values": bin_da.tolist(),
+            "q25_ppm": float(np.quantile(bin_ppm, 0.25)) if bin_ppm.size else np.nan,
             "median_ppm": float(np.median(bin_ppm)) if bin_ppm.size else np.nan,
+            "q75_ppm": float(np.quantile(bin_ppm, 0.75)) if bin_ppm.size else np.nan,
             "q95_ppm": float(np.quantile(bin_ppm, 0.95)) if bin_ppm.size else np.nan,
+            "_error_ppm_values": bin_ppm.tolist(),
         })
     return records
 
@@ -133,6 +154,7 @@ def plot_localization_profile(
     label: Optional[str] = None,
     color: Optional[str] = None,
     theme: VisualizationTheme | str | None = None,
+    quantiles: Optional[tuple[float, float]] = (0.25, 0.75),
 ):
     """Plot error-vs-m/z-position (``median_{unit}``/``q95_{unit}``) from
     :func:`localization_profile`, one line — call twice with different ``statistic`` on
@@ -143,6 +165,9 @@ def plot_localization_profile(
         explicitly (together with ``color``) when overlaying more than one profile on
         the same ``ax`` so the legend distinguishes them.
     :param color: Line color; defaults to matplotlib's automatic cycling.
+    :param quantiles: Lower and upper quantiles drawn as a per-bin error band, or
+        ``None`` to draw only the selected statistic.
+    :type quantiles: Optional[tuple[float, float]]
     """
     resolved = resolve_theme(theme)
     if ax is None:
@@ -152,6 +177,17 @@ def plot_localization_profile(
     xs = [record["mz_bin_mid"] for record in profile]
     ys = [record[f"{statistic}_{unit}"] for record in profile]
     line_color = color or resolved.color_for_model(label or statistic)
+    if quantiles is not None:
+        lower_quantile, upper_quantile = (float(value) for value in quantiles)
+        if not 0.0 <= lower_quantile <= upper_quantile <= 1.0:
+            raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
+        bounds = []
+        for record in profile:
+            values = np.asarray(record[f"_error_{unit}_values"], dtype=np.float64)
+            values = values[np.isfinite(values)]
+            bounds.append(np.quantile(values, (lower_quantile, upper_quantile)) if values.size else (np.nan, np.nan))
+        resolved_bounds = np.asarray(bounds, dtype=np.float64)
+        ax.fill_between(xs, resolved_bounds[:, 0], resolved_bounds[:, 1], color=line_color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
     ax.plot(xs, ys, marker="o", color=line_color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=line_color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label=label or f"{statistic} |error| ({unit})")
     ax.set(xlabel="m/z", ylabel=f"localization error ({unit})")
     ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
@@ -166,6 +202,7 @@ def plot_localization_profiles(
     statistic: str = "median",
     ax=None,
     theme: VisualizationTheme | str | None = None,
+    quantiles: Optional[tuple[float, float]] = (0.25, 0.75),
 ):
     """:func:`plot_localization_profile` for every ``{label: profile}`` entry overlaid
     on one plot, one color per label (``theme.color_for_model`` — same color convention,
@@ -173,7 +210,7 @@ def plot_localization_profiles(
     resolved = resolve_theme(theme)
     figure = None
     for index, (label, profile) in enumerate(profiles.items()):
-        figure, ax = plot_localization_profile(profile, unit, statistic, ax, label=f"{label} ({statistic})", color=resolved.color_for_model(label, index), theme=resolved)
+        figure, ax = plot_localization_profile(profile, unit, statistic, ax, label=f"{label} ({statistic})", color=resolved.color_for_model(label, index), theme=resolved, quantiles=quantiles)
     return figure, ax
 
 
@@ -183,11 +220,15 @@ def plot_unmatched_fraction_profile(
     label: Optional[str] = None,
     color: Optional[str] = None,
     theme: VisualizationTheme | str | None = None,
+    quantiles: Optional[tuple[float, float]] = (0.25, 0.75),
 ):
     """Plot the fraction of reference points left unmatched, vs m/z position.
 
     :param label: Legend label; defaults to ``"unmatched reference fraction"``.
     :param color: Line color; defaults to ``theme.residual_color``.
+    :param quantiles: Lower and upper per-spectrum quantiles drawn as a band, or
+        ``None`` to draw only the pooled unmatched fraction.
+    :type quantiles: Optional[tuple[float, float]]
     """
     resolved = resolve_theme(theme)
     if ax is None:
@@ -197,6 +238,17 @@ def plot_unmatched_fraction_profile(
     xs = [record["mz_bin_mid"] for record in profile]
     ys = [record["unmatched_fraction"] for record in profile]
     line_color = color or resolved.residual_color
+    if quantiles is not None:
+        lower_quantile, upper_quantile = (float(value) for value in quantiles)
+        if not 0.0 <= lower_quantile <= upper_quantile <= 1.0:
+            raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
+        bounds = []
+        for record in profile:
+            values = np.asarray(record["_unmatched_fraction_values"], dtype=np.float64)
+            values = values[np.isfinite(values)]
+            bounds.append(np.quantile(values, (lower_quantile, upper_quantile)) if values.size else (np.nan, np.nan))
+        resolved_bounds = np.asarray(bounds, dtype=np.float64)
+        ax.fill_between(xs, resolved_bounds[:, 0], resolved_bounds[:, 1], color=line_color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
     ax.plot(xs, ys, marker="o", color=line_color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=line_color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label=label or "unmatched reference fraction")
     ax.set(xlabel="m/z", ylabel="unmatched fraction")
     ax.set_ylim(0.0, 1.0)
@@ -210,6 +262,7 @@ def plot_unmatched_fraction_profiles(
     profiles: Mapping[str, list[dict[str, Any]]],
     ax=None,
     theme: VisualizationTheme | str | None = None,
+    quantiles: Optional[tuple[float, float]] = (0.25, 0.75),
 ):
     """:func:`plot_unmatched_fraction_profile` for every ``{label: profile}`` entry
     overlaid on one plot, one color per label (same convention as
@@ -217,5 +270,5 @@ def plot_unmatched_fraction_profiles(
     resolved = resolve_theme(theme)
     figure = None
     for index, (label, profile) in enumerate(profiles.items()):
-        figure, ax = plot_unmatched_fraction_profile(profile, ax, label=label, color=resolved.color_for_model(label, index), theme=resolved)
+        figure, ax = plot_unmatched_fraction_profile(profile, ax, label=label, color=resolved.color_for_model(label, index), theme=resolved, quantiles=quantiles)
     return figure, ax

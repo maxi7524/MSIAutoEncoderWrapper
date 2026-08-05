@@ -18,7 +18,7 @@ from ....readers.base_reader import MSIBaseReader
 from ....readers.spatial import SpatialImage, aggregate_window
 from ....utils.logger import get_custom_logger
 from ....visualization import VisualizationTheme
-from ....visualization.interactive import IonImageViewer
+from ....visualization.interactive import ContinuousIonImageViewer, IonImageViewer
 from ....visualization.spatial import plot_image_grid
 from .inverse_binner_analysis import inverse_binner_factory
 from .precompute import BinningPrecompute
@@ -133,3 +133,62 @@ def ion_image_browser(
         return {name: image.values for name, image in images.items()}
 
     return IonImageViewer(mz_options, provider, theme=theme)
+
+
+def ion_image_browser_range(
+    reader: MSIBaseReader,
+    precompute: BinningPrecompute,
+    delta_m: float,
+    method_grid_point: dict[str, Any],
+    mz_min: Optional[float] = None,
+    mz_max: Optional[float] = None,
+    mz_step: Optional[float] = None,
+    tolerance: float = 0.01,
+    aggregation: str = "sum",
+    x_min: Optional[float] = None,
+    x_max: Optional[float] = None,
+    theme: VisualizationTheme | str | None = None,
+) -> ContinuousIonImageViewer:
+    """Return a browser with a floating-point slider over a continuous m/z range.
+
+    This is a separate interface from :func:`ion_image_browser`; the indexed browser
+    and its methods remain unchanged. Missing slider boundaries are resolved from the
+    sampled raw spectra, and ``mz_step`` defaults to ``delta_m``. The first render
+    computes only the requested forward configuration and inverse method; subsequent
+    slider updates reuse :class:`BinningPrecompute` caches.
+
+    :param mz_min: Lower slider boundary. Defaults to the sampled global minimum.
+    :type mz_min: Optional[float]
+    :param mz_max: Upper slider boundary. Defaults to the sampled global maximum.
+    :type mz_max: Optional[float]
+    :param mz_step: Slider increment. Defaults to ``delta_m``.
+    :type mz_step: Optional[float]
+    :return: Viewer whose ``plot(mz)`` and ``widget(initial_mz)`` accept physical m/z.
+    :rtype: ContinuousIonImageViewer
+    """
+    global_min, global_max = precompute.global_mass_range
+    resolved_min = global_min if mz_min is None else float(mz_min)
+    resolved_max = global_max if mz_max is None else float(mz_max)
+    resolved_step = float(delta_m) if mz_step is None else float(mz_step)
+
+    def provider(mz: float) -> dict[str, np.ndarray]:
+        images = three_way_ion_images(
+            reader,
+            precompute,
+            delta_m,
+            method_grid_point,
+            mz,
+            tolerance,
+            aggregation,
+            x_min,
+            x_max,
+        )
+        return {name: image.values for name, image in images.items()}
+
+    return ContinuousIonImageViewer(
+        resolved_min,
+        resolved_max,
+        resolved_step,
+        provider,
+        theme=theme,
+    )

@@ -184,7 +184,7 @@ def summarize_forward_sweep(records: Sequence[Mapping[str, Any]]) -> list[dict[s
         grouped.setdefault(key, []).append(record["value"])
         dimension_by_delta_m[record["delta_m"]] = record["feature_dimension"]
     return [
-        {"delta_m": key[0], "feature_dimension": dimension_by_delta_m[key[0]], "normalization": key[1], "metric": key[2], **summarize_metric(values)}
+        {"delta_m": key[0], "feature_dimension": dimension_by_delta_m[key[0]], "normalization": key[1], "metric": key[2], **summarize_metric(values), "_values": [float(value) for value in values if np.isfinite(value)]}
         for key, values in grouped.items()
     ]
 
@@ -255,14 +255,35 @@ def plot_forward_tradeoff(
     statistic: str = "median",
     ax=None,
     theme: VisualizationTheme | str | None = None,
+    quantiles: Optional[tuple[float, float]] = (0.25, 0.75),
 ):
     """Plot one summary statistic of one metric against ``delta_m`` (or
     ``feature_dimension`` — pass ``x="feature_dimension"`` for the rate-distortion
     framing: output size vs error, instead of step size vs error).
 
     Takes :func:`summarize_forward_sweep` output (not the long-form records) — one
-    point per ``delta_m``, connected in increasing-``x`` order.
+    point per ``delta_m``, connected in increasing-``x`` order. By default, vertical
+    ranges and a translucent band show the per-spectrum interquartile interval.
+
+    :param quantiles: Lower and upper per-spectrum quantiles drawn around the selected
+        statistic, or ``None`` to draw only the central curve.
+    :type quantiles: Optional[tuple[float, float]]
     """
     selected = [record for record in summary_records if record["metric"] == metric and record["normalization"] == normalization]
     selected.sort(key=lambda record: record[x])
-    return plot_metric_tradeoff([record[x] for record in selected], [record[statistic] for record in selected], x, metric, ax=ax, theme=theme)
+    figure, ax = plot_metric_tradeoff([record[x] for record in selected], [record[statistic] for record in selected], x, metric, ax=ax, theme=theme)
+    if quantiles is not None:
+        lower_quantile, upper_quantile = (float(value) for value in quantiles)
+        if not 0.0 <= lower_quantile <= upper_quantile <= 1.0:
+            raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
+        xs = np.asarray([record[x] for record in selected], dtype=np.float64)
+        bounds = np.asarray([
+            np.quantile(np.asarray(record["_values"], dtype=np.float64), (lower_quantile, upper_quantile)) if record["_values"] else (np.nan, np.nan)
+            for record in selected
+        ])
+        color = ax.lines[-1].get_color()
+        resolved = resolve_theme(theme)
+        ax.fill_between(xs, bounds[:, 0], bounds[:, 1], color=color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
+        ax.vlines(xs, bounds[:, 0], bounds[:, 1], color=color, linewidth=resolved.distribution_line_width, alpha=resolved.secondary_alpha)
+    figure.tight_layout()
+    return figure, ax
