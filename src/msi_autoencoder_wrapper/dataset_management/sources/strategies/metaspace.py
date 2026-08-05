@@ -18,6 +18,14 @@ from ....utils.exceptions import (
 )
 from ....utils.logger import get_custom_logger
 from .metaspace_authentication import metaspace_client_options
+from .metaspace_metadata import attach_api_metadata, summarise_records
+from .metaspace_parameters import (
+    FREE_TEXT_FILTER_FIELDS,
+    FREE_TEXT_VALUE_GROUPS,
+    canonical_free_text,
+    filter_schema,
+    split_filters,
+)
 from ..base import DatasetSource
 from ..source_manager import DatasetSourceManager
 
@@ -79,51 +87,7 @@ class MetaspaceDatasetSource(DatasetSource):
     @staticmethod
     def get_available_filters() -> Dict[str, Any]:
         """Return notebook-friendly documentation for METASPACE filters."""
-        return {
-            "name": {"type": "string", "api_field": "nameMask"},
-            "dataset_ids": {"type": "string | list[string]", "api_field": "idMask"},
-            "submitter_id": {"type": "string", "api_field": "submitter"},
-            "group_id": {"type": "string", "api_field": "group"},
-            "project_id": {"type": "string", "api_field": "project"},
-            "molecule": {
-                "type": "string",
-                "api_field": "hasAnnotationMatching.compoundQuery",
-            },
-            "polarity": {
-                "type": "Positive | Negative",
-                "api_field": "polarity",
-                "choices": ["Positive", "Negative"],
-            },
-            "organism": {"type": "string", "api_field": "organism"},
-            "organism_part": {"type": "string", "api_field": "organismPart"},
-            "condition": {"type": "string", "api_field": "condition"},
-            "growth_conditions": {"type": "string", "api_field": "growthConditions"},
-            "analyzer_type": {"type": "string", "api_field": "analyzerType"},
-            "ionisation_source": {"type": "string", "api_field": "ionisationSource"},
-            "maldi_matrix": {"type": "string", "api_field": "maldiMatrix"},
-            "has_optical_image": {
-                "type": "boolean",
-                "local": True,
-                "choices": [True, False],
-                "description": "Applied to the optical-image field returned by GraphQL.",
-            },
-            "status": {"type": "string", "default": "FINISHED"},
-            "annotation_fdr": {"type": "float", "default": 0.1},
-            "min_annotation_count": {"type": "integer | null", "local": True},
-            "max_annotation_count": {"type": "integer | null", "local": True},
-            "include_molecule_stats": {"type": "boolean", "default": False},
-            "include_spatial_annotation_stats": {
-                "type": "boolean",
-                "default": False,
-                "local": True,
-            },
-            "min_molecule_count": {"type": "integer | null", "local": True},
-            "min_unique_molecule_count": {"type": "integer | null", "local": True},
-            "exclude_dataset_ids": {
-                "type": "list[string]",
-                "description": "Local exclusions applied after provider discovery.",
-            },
-        }
+        return filter_schema()
 
     def get_available_values(self, filter_key: str) -> List[Dict[str, Any]]:
         """Return values currently present in accessible METASPACE datasets.
@@ -197,9 +161,11 @@ class MetaspaceDatasetSource(DatasetSource):
 
     def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
         """Filter METASPACE datasets and attach review-oriented statistics."""
-        native_filters, local_filters = _split_filters(filters)
+        native_filters, local_filters = split_filters(filters)
         datasets = self.client.datasets(**native_filters)
         records = [self._dataset_record(dataset) for dataset in datasets]
+        attach_api_metadata(self.client, records)
+        records, free_text_rejected = _apply_free_text_filters(records, local_filters)
         fdr = float(local_filters.get("annotation_fdr", 0.1))
         _attach_annotation_counts(self.client, records, fdr)
         if bool(local_filters.get("include_spatial_annotation_stats")):
@@ -209,9 +175,9 @@ class MetaspaceDatasetSource(DatasetSource):
             for key in ("min_molecule_count", "min_unique_molecule_count")
         ):
             _attach_molecule_statistics(self.client, records, fdr)
-        self._accepted_records, self._rejected_records = _apply_local_filters(
-            records, local_filters
-        )
+        accepted, quantitative_rejected = _apply_local_filters(records, local_filters)
+        self._accepted_records = accepted
+        self._rejected_records = free_text_rejected + quantitative_rejected
         logger.info(
             "METASPACE discovery accepted %s datasets and rejected %s datasets",
             len(self._accepted_records),
@@ -266,7 +232,14 @@ class MetaspaceDatasetSource(DatasetSource):
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         """Return source metadata and stable summary fields for one dataset."""
-        return self._dataset_record(self.client.dataset(id=dataset_id))
+        record = self._dataset_record(self.client.dataset(id=dataset_id))
+        attach_api_metadata(self.client, [record])
+        return record
+
+    @staticmethod
+    def summarise(records: List[Mapping[str, Any]]) -> Dict[str, Any]:
+        """Return aggregate storage, m/z intersection and analysis methods."""
+        return summarise_records(records)
 
     def get_annotations(
         self,
@@ -496,6 +469,8 @@ def _available_values(
             if value not in {None, ""}:
                 values.append((value, str(value)))
     counts = Counter(values)
+    if filter_key in _FREE_TEXT_FILTER_FIELDS:
+        return _group_free_text_values(counts)
     return [
         {"value": value, "label": label, "count": count}
         for (value, label), count in sorted(
@@ -505,47 +480,49 @@ def _available_values(
     ]
 
 
-_METASPACE_FILTER_ALIASES = {
-    "name": "nameMask",
-    "dataset_ids": "idMask",
-    "organism_part": "organismPart",
-    "growth_conditions": "growthConditions",
-}
-_LOCAL_FILTERS = {
-    "annotation_fdr",
-    "include_molecule_stats",
-    "include_spatial_annotation_stats",
-    "min_annotation_count",
-    "max_annotation_count",
-    "min_molecule_count",
-    "min_unique_molecule_count",
-    "has_optical_image",
-}
+def _group_free_text_values(
+    counts: "Counter[Tuple[Any, str]]",
+) -> List[Dict[str, Any]]:
+    """Collapse spelling/formatting variants of a free-text field into one row.
+
+    :param counts: Occurrence count per raw ``(value, label)`` pair, as
+        collected in :func:`_available_values`.
+    :type counts: Counter[Tuple[Any, str]]
+    :return: One row per group with a summed ``count`` and a ``variants``
+        string listing every raw spelling folded into it.
+    :rtype: List[Dict[str, Any]]
+
+    Grouping is keyed by :func:`_canonical_free_text` -- the same declared
+    alias table used by ``filter()`` (:func:`_free_text_matches`) -- so
+    this view always agrees with what a filter query will actually match.
+    Only spelling variants listed in ``FREE_TEXT_VALUE_GROUPS`` are merged;
+    anything not reviewed there stays on its own row.
+    """
+    groups: Dict[str, List[Tuple[Any, str, int]]] = defaultdict(list)
+    for (value, label), count in counts.items():
+        groups[_canonical_free_text(label)].append((value, label, count))
+
+    rows: List[Dict[str, Any]] = []
+    for canonical, members in groups.items():
+        members.sort(key=lambda member: -member[2])
+        canonical_value, canonical_label, _ = members[0]
+        if canonical in FREE_TEXT_VALUE_GROUPS:
+            canonical_value = canonical_label = canonical
+        rows.append(
+            {
+                "value": canonical_value,
+                "label": canonical_label,
+                "count": sum(count for _, _, count in members),
+                "variants": ", ".join(
+                    f"{label} ({count})" for _, label, count in members
+                ),
+            }
+        )
+    rows.sort(key=lambda row: (-row["count"], row["label"].casefold()))
+    return rows
 
 
-def _split_filters(filters: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Separate METASPACE GraphQL filters from local aggregate constraints."""
-    options = dict(filters)
-    local = {
-        key: options.pop(key)
-        for key in list(options)
-        if key in _LOCAL_FILTERS
-    }
-    fdr = float(local.get("annotation_fdr", 0.1))
-    molecule = options.pop("molecule", None)
-    native = {
-        _METASPACE_FILTER_ALIASES.get(key, key): value
-        for key, value in options.items()
-        if value is not None
-    }
-    native.setdefault("status", "FINISHED")
-    if molecule:
-        native["hasAnnotationMatching"] = {
-            "compoundQuery": str(molecule),
-            "fdrLevel": fdr,
-        }
-    local.setdefault("annotation_fdr", fdr)
-    return native, local
+_FREE_TEXT_FILTER_FIELDS = FREE_TEXT_FILTER_FIELDS
 
 
 def _attach_annotation_counts(
@@ -737,6 +714,91 @@ def _attach_spatial_annotation_statistics(
                 "spatial_stats_status": "complete",
             }
         )
+
+
+def _canonical_free_text(value: Any) -> str:
+    """Return the canonical group key for one free-text metadata value.
+
+    The explicit groups live in :mod:`metaspace_parameters`. Unreviewed values
+    remain separate instead of being merged heuristically.
+    """
+    return canonical_free_text(value)
+
+
+def _free_text_matches(field_value: Any, query_value: str) -> bool:
+    """Check one submitter free-text field against one query term.
+
+    Both sides are reduced to their canonical group via
+    :func:`_canonical_free_text` before comparison, so a filter query
+    always agrees with the grouping shown by ``get_available_values`` --
+    both are driven by the same declared alias table.
+    """
+    canonical_query = _canonical_free_text(query_value)
+    if not canonical_query:
+        return True
+    return _canonical_free_text(field_value) == canonical_query
+
+
+def _free_text_filter_matches(field_value: Any, query: Any) -> bool:
+    """Check a free-text field against a query string or an iterable of OR'd queries."""
+    queries = [query] if isinstance(query, str) else list(query)
+    return any(_free_text_matches(field_value, str(term)) for term in queries)
+
+
+def _apply_free_text_filters(
+    records: List[Dict[str, Any]],
+    filters: Mapping[str, Any],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Apply tolerant local matching for unstructured METASPACE metadata fields.
+
+    :param records: Dataset records fetched from METASPACE, before annotation
+        or molecule statistics are attached.
+    :type records: List[Dict[str, Any]]
+    :param filters: Local filter mapping; only keys in
+        :data:`_FREE_TEXT_FILTER_FIELDS` are consulted.
+    :type filters: Mapping[str, Any]
+    :return: Accepted records and rejection diagnostics, in the same shape as
+        :func:`_apply_local_filters`.
+    :rtype: Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
+
+    Run before the annotation/molecule/spatial enrichment steps so that
+    expensive per-dataset METASPACE queries are not spent on datasets that
+    are rejected here anyway.
+    """
+    accepted: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for record in records:
+        metadata = record["metadata"]
+        reason = None
+        for filter_key, field in _FREE_TEXT_FILTER_FIELDS.items():
+            query = filters.get(filter_key)
+            if query is None:
+                continue
+            if not _free_text_filter_matches(metadata.get(field), query):
+                reason = (
+                    f"{field} does not match {query!r}; observed "
+                    f"{metadata.get(field)!r}"
+                )
+                break
+        if reason is None:
+            accepted.append(record)
+        else:
+            rejected.append(
+                {
+                    "dataset_id": record["dataset_id"],
+                    "name": record["name"],
+                    "reason": reason,
+                    "project_url": metadata.get("project_url"),
+                }
+            )
+    if rejected:
+        logger.debug(
+            "METASPACE free-text filters rejected %s datasets before enrichment",
+            len(rejected),
+        )
+    return accepted, rejected
+
+
 def _apply_local_filters(
     records: List[Dict[str, Any]],
     filters: Mapping[str, Any],
