@@ -106,10 +106,22 @@ def plot_metric_by_property_bucket(
         [value_by_spectrum[spectrum_id] for spectrum_id, bucket in buckets.items() if bucket == bucket_label and spectrum_id in value_by_spectrum and np.isfinite(value_by_spectrum[spectrum_id])]
         for bucket_label in ordered_bucket_labels
     ]
-    ax.boxplot(grouped, tick_labels=ordered_bucket_labels, showmeans=True)
+    color = resolved.color_for_model(label)
+    ax.boxplot(
+        grouped,
+        tick_labels=ordered_bucket_labels,
+        showmeans=True,
+        patch_artist=True,
+        boxprops={"facecolor": color, "edgecolor": color, "linewidth": resolved.line_width, "alpha": resolved.secondary_alpha},
+        whiskerprops={"color": color, "linewidth": resolved.line_width, "alpha": resolved.primary_alpha},
+        capprops={"color": color, "linewidth": resolved.line_width, "alpha": resolved.primary_alpha},
+        medianprops={"color": resolved.text_color, "linewidth": resolved.line_width, "alpha": resolved.primary_alpha},
+        meanprops={"markeredgecolor": resolved.panel_color, "markerfacecolor": color, "markersize": resolved.marker_size, "markeredgewidth": resolved.marker_edge_width, "alpha": resolved.marker_alpha},
+        flierprops={"marker": "o", "markerfacecolor": color, "markeredgecolor": resolved.panel_color, "markersize": resolved.marker_size, "markeredgewidth": resolved.marker_edge_width, "alpha": resolved.marker_alpha},
+    )
     ax.set(xlabel=f"{property_name} bucket", ylabel=metric)
     ax.set_title(f"{metric} by {property_name} bucket | {label} | {comparison}/{normalization}", loc=resolved.title_location)
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
+    ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
     figure.tight_layout()
     return figure, ax
 
@@ -159,15 +171,27 @@ def plot_metric_by_property_bucket_multi(
         offset = (label_index - (label_count - 1) / 2) * width
         positions = [bucket_index + 1 + offset for bucket_index in range(bucket_count)]
         color = resolved.color_for_model(label, label_index)
-        boxes = ax.boxplot(grouped, positions=positions, widths=width * 0.9, patch_artist=True, showmeans=True)
+        boxes = ax.boxplot(
+            grouped,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            showmeans=True,
+            boxprops={"edgecolor": color, "linewidth": resolved.line_width},
+            whiskerprops={"color": color, "linewidth": resolved.line_width, "alpha": resolved.primary_alpha},
+            capprops={"color": color, "linewidth": resolved.line_width, "alpha": resolved.primary_alpha},
+            medianprops={"color": resolved.text_color, "linewidth": resolved.line_width, "alpha": resolved.primary_alpha},
+            meanprops={"markeredgecolor": resolved.panel_color, "markerfacecolor": color, "markersize": resolved.marker_size, "markeredgewidth": resolved.marker_edge_width, "alpha": resolved.marker_alpha},
+            flierprops={"marker": "o", "markerfacecolor": color, "markeredgecolor": resolved.panel_color, "markersize": resolved.marker_size, "markeredgewidth": resolved.marker_edge_width, "alpha": resolved.marker_alpha},
+        )
         for box in boxes["boxes"]:
             box.set_facecolor(color); box.set_alpha(resolved.secondary_alpha)
-        ax.plot([], [], color=color, label=label)  # legend proxy (boxplot artists don't auto-legend)
+        ax.plot([], [], color=color, linewidth=resolved.line_width, alpha=resolved.primary_alpha, label=label)  # legend proxy (boxplot artists don't auto-legend)
     ax.set_xticks(range(1, bucket_count + 1))
     ax.set_xticklabels(ordered_bucket_labels)
     ax.set(xlabel=f"{property_name} bucket", ylabel=metric)
     ax.set_title(f"{metric} by {property_name} bucket | {comparison}/{normalization}", loc=resolved.title_location)
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
-    ax.legend(fontsize=resolved.tick_font_size, loc=resolved.legend_location, frameon=resolved.legend_frame)
+    ax.grid(resolved.grid_visible, axis=resolved.grid_axis, color=resolved.grid_color, alpha=resolved.grid_alpha, linewidth=resolved.grid_line_width)
+    ax.legend(fontsize=resolved.legend_font_size, loc=resolved.legend_location, ncols=resolved.legend_columns, frameon=resolved.legend_frame)
     figure.tight_layout()
     return figure, ax

@@ -206,9 +206,8 @@ def plot_metric_by_delta_m(
 
     Color encodes ``delta_m`` via :func:`sequential_colors` (a sequential colormap
     sampled across the sweep, since ``delta_m`` is a continuous, ordered parameter —
-    not the categorical model palette). Series are drawn as unfilled step outlines
-    (``histtype="step"``) so overlapping distributions stay distinguishable instead of
-    piling into one opaque block.
+    not the categorical model palette). Series combine translucent filled areas with
+    stronger outlines so overlapping distributions remain distinguishable.
 
     Metrics are never shared across plots (different scales) and normalizations are
     never mixed on one plot — call once per (metric, normalization) pair, or use
@@ -223,7 +222,7 @@ def plot_metric_by_delta_m(
             record["value"] for record in records
             if record["metric"] == metric and record["normalization"] == normalization and record["delta_m"] == delta_m
         ])
-        figure, ax = plot_metric_distribution(values, metric, ax, bins, kind, label=f"Δm={delta_m:g}", theme=resolved, color=color, histtype="step")
+        figure, ax = plot_metric_distribution(values, metric, ax, bins, kind, label=f"Δm={delta_m:g}", theme=resolved, color=color, histtype="stepfilled")
     ax.set_title(f"{metric} ({normalization}) across Δm", loc=resolved.title_location)
     figure.tight_layout()
     return figure, ax
