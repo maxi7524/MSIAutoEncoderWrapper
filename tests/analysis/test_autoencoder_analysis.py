@@ -30,7 +30,15 @@ from msi_autoencoder_wrapper.analysis.autoencoder import (
     plot_spatial_image,
     plot_spectrum_comparison,
 )
+from msi_autoencoder_wrapper.analysis.autoencoder.base import _tensor_to_host_array
 from msi_autoencoder_wrapper.readers.spatial import SpatialImage
+from msi_autoencoder_wrapper.analysis.autoencoder.binning.binner_forward_analysis import plot_forward_tradeoff
+from msi_autoencoder_wrapper.analysis.autoencoder.binning.inverse_binner_analysis import plot_inverse_tradeoff
+from msi_autoencoder_wrapper.analysis.autoencoder.binning.localization_analysis import plot_localization_profiles, plot_unmatched_fraction_profiles
+from msi_autoencoder_wrapper.analysis.autoencoder.binning.ion_image_analysis import (
+    ion_image_browser_range,
+)
+from msi_autoencoder_wrapper.visualization.interactive import ContinuousIonImageViewer
 
 
 class _Dataset(Dataset):
@@ -184,6 +192,23 @@ def test_prepare_caches_metrics_arrays_and_generic_heads() -> None:
     assert set(head_metrics) == {"condition_head", "molecule_head"}
     assert "accuracy" in head_metrics["condition_head"]
     assert "micro_f1" in head_metrics["molecule_head"]
+
+
+def test_tensor_to_host_array_detaches_before_numpy_conversion(monkeypatch) -> None:
+    """Analysis identifiers cross the device boundary before NumPy conversion."""
+    tensor = torch.tensor([3, 7], dtype=torch.int32, requires_grad=False)
+    original_numpy = torch.Tensor.numpy
+
+    def guarded_numpy(value: torch.Tensor) -> np.ndarray:
+        assert value.device.type == "cpu"
+        assert not value.requires_grad
+        return original_numpy(value)
+
+    monkeypatch.setattr(torch.Tensor, "numpy", guarded_numpy)
+
+    result = _tensor_to_host_array(tensor, np.int64)
+
+    np.testing.assert_array_equal(result, np.asarray([3, 7], dtype=np.int64))
 
 
 def test_cached_results_support_spatial_and_selection_views() -> None:
@@ -392,3 +417,112 @@ def test_masserstein_analysis_reuses_per_spectrum_training_criterion() -> None:
     assert values.shape == (2,)
     assert np.isfinite(values).all()
     assert np.all(values >= 0.0)
+
+
+def test_continuous_ion_image_viewer_uses_physical_mass_and_caches_images() -> None:
+    calls: list[float] = []
+
+    def provider(mz: float) -> dict[str, np.ndarray]:
+        calls.append(mz)
+        return {"X": np.full((2, 2), mz)}
+
+    viewer = ContinuousIonImageViewer(100.0, 200.0, 0.1, provider)
+    first, _ = viewer.plot(150.25)
+    second, _ = viewer.plot(150.25)
+
+    assert calls == [150.25]
+    assert first._suptitle.get_text() == "m/z 150.25000"
+    plt.close(first)
+    plt.close(second)
+
+
+def test_ion_image_browser_range_is_separate_from_indexed_browser() -> None:
+    precompute = SimpleNamespace(global_mass_range=(50.0, 250.0))
+
+    viewer = ion_image_browser_range(
+        reader=SimpleNamespace(),
+        precompute=precompute,
+        delta_m=0.2,
+        method_grid_point={"label": "selected", "method": "ThresholdInverseBinner"},
+    )
+
+    assert isinstance(viewer, ContinuousIonImageViewer)
+    assert viewer.mz_min == 50.0
+    assert viewer.mz_max == 250.0
+    assert viewer.mz_step == 0.2
+
+
+def test_existing_tradeoff_plots_draw_requested_quantile_ranges() -> None:
+    populations = ([0.1, 0.2, 0.3], [0.2, 0.4, 0.8])
+    forward_summary = [
+        {
+            "delta_m": delta_m,
+            "feature_dimension": dimension,
+            "normalization": "raw",
+            "metric": "wasserstein",
+            "median": float(np.median(values)),
+            "_values": values,
+        }
+        for delta_m, dimension, values in zip((0.1, 0.2), (100, 50), populations)
+    ]
+    inverse_summary = [
+        {
+            "label": label,
+            "method": "ThresholdInverseBinner",
+            "comparison": comparison,
+            "normalization": "raw",
+            "metric": "wasserstein",
+            "median": float(np.median(values)),
+            "_values": values,
+        }
+        for label, values in zip(("q0.5", "q0.9"), populations)
+        for comparison in ("inverse_binned", "inverse_original")
+    ]
+
+    forward_figure, forward_axis = plot_forward_tradeoff(
+        forward_summary,
+        "wasserstein",
+        quantiles=(0.1, 0.9),
+    )
+    inverse_figure, inverse_axis = plot_inverse_tradeoff(
+        inverse_summary,
+        "wasserstein",
+        labels=("q0.5", "q0.9"),
+        quantiles=(0.1, 0.9),
+    )
+
+    assert len(forward_axis.collections) >= 2
+    assert len(inverse_axis.collections) >= 4
+    plt.close(forward_figure)
+    plt.close(inverse_figure)
+
+
+def test_existing_localization_plots_draw_requested_quantile_bands() -> None:
+    profile = [
+        {
+            "mz_bin_mid": mz,
+            "median_da": float(np.median(errors)),
+            "unmatched_fraction": float(np.mean(unmatched)),
+            "_error_da_values": errors,
+            "_unmatched_fraction_values": unmatched,
+        }
+        for mz, errors, unmatched in (
+            (100.0, [0.01, 0.02, 0.08], [0.0, 0.1, 0.4]),
+            (150.0, [0.02, 0.03, 0.10], [0.1, 0.2, 0.5]),
+        )
+    ]
+    profiles = {"selected": profile}
+
+    localization_figure, localization_axis = plot_localization_profiles(
+        profiles,
+        quantiles=(0.1, 0.9),
+    )
+    unmatched_figure, unmatched_axis = plot_unmatched_fraction_profiles(
+        profiles,
+        quantiles=(0.1, 0.9),
+    )
+
+    assert len(localization_axis.collections) == 1
+    assert len(unmatched_axis.collections) == 1
+    plt.close(localization_figure)
+    plt.close(unmatched_figure)
