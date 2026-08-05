@@ -3,6 +3,14 @@
 ## Podstawy teoretyczne 
 Tutaj rozpisze formalne uzasadnienie dlaczego pewne metody powinny działac, w dalszej części są przeprowadzone testy numeryczne. 
 
+#TODO - tutaj opisać na podstawie czego my to charakteryzuje 
+
+
+## Zaimplementowane algorytmy 
+
+
+#TODO - co dokładnei zostało zaimplementowane 
+
 ### Grid 
 
 #### Da
