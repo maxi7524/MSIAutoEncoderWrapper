@@ -62,6 +62,20 @@ def test_one_to_one_and_local_mass_matching() -> None:
     assert metrics["peak_recall"] == 1; assert metrics["tic_relative_error"] == pytest.approx(0)
 
 
+def test_one_to_one_matches_both_points_when_left_to_right_would_starve_one() -> None:
+    # r1=0.000 sees two admissible candidates (c2 at -0.005, c1 at 0.001); r2=0.011 only
+    # sees c1. A fixed left-to-right-by-m/z greedy sweep lets r1 (processed first, lower
+    # m/z) take its nearest candidate c1, leaving r2 — which had no other option — with
+    # nothing, even though assigning r1->c2 and r2->c1 would have matched both. The
+    # most-constrained-first algorithm must resolve r2 (1 option) before r1 (2 options)
+    # and therefore match both.
+    reference_x = np.asarray([0.000, 0.011]); reference_y = np.asarray([1.0, 1.0])
+    candidate_x = np.asarray([-0.005, 0.001]); candidate_y = np.asarray([1.0, 1.0])
+    match = match_spectral_points(reference_x, reference_y, candidate_x, candidate_y, tolerance=0.012, tolerance_unit="Da", matching_strategy="one_to_one")
+    assert match.matched_reference_indices.size == 2
+    assert set(zip(match.matched_reference_indices.tolist(), match.matched_candidate_indices.tolist())) == {(0, 0), (1, 1)}
+
+
 def test_empty_spectra_are_supported() -> None:
     match = match_spectral_points(np.asarray([]), np.asarray([]), np.asarray([]), np.asarray([]), .01)
     metrics = spectral_point_metrics(np.asarray([]), np.asarray([]), np.asarray([]), np.asarray([]), match)
