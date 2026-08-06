@@ -11,6 +11,7 @@ import numpy as np
 from ....binners.binners_strategies.linear_binner import LinearBinning
 from ....metrics import match_spectral_points, spectral_point_metrics
 from ....utils.exceptions import raise_validation_error
+from ....visualization import resolve_theme
 from ....visualization.metrics import plot_metric_distribution, plot_metric_tradeoff
 from ....visualization.spectra import plot_sparse_spectrum_match
 from ..reconstruction.metrics import reconstruction_metrics, summarize
@@ -103,7 +104,7 @@ class BinningAnalysis:
 
     def plot_metric_distributions(self, metric: str, normalization: str = "raw", spectrum_ids: Optional[Sequence[int]] = None, kind: str = "histogram", bins: int = 40, **kwargs: Any):
         """Render one panel per mathematically distinct comparison."""
-        records = self.records(spectrum_ids, **kwargs); figure, axes = plt.subplots(1, 3, figsize=(18, 5), dpi=self.owner.theme.figure_dpi, squeeze=False)
+        records = self.records(spectrum_ids, **kwargs); resolved = resolve_theme(self.owner.theme); figure, axes = plt.subplots(1, 3, figsize=(18, 5), dpi=resolved.figure_dpi, squeeze=False)
         for index, comparison in enumerate(BINNING_COMPARISONS):
             values = [record["value"] for record in records if record["comparison"] == comparison and record["normalization"] == normalization and record["metric"] == metric]
             plot_metric_distribution(np.asarray(values), metric, axes[0, index], bins, kind, comparison, self.owner.theme); axes[0, index].set_title(comparison)
@@ -159,7 +160,8 @@ class BinningAnalysis:
     def plot_ranked_spectra(self, metrics: Sequence[str], comparison: str, normalization: str, spectrum_ids: Optional[Sequence[int]] = None, inverse_binner: Any | None = None, tolerance: float = 0.01, tolerance_unit: str = "Da", matching_strategy: str = "local_mass"):
         """Plot best, median, and worst spectra independently for every metric."""
         records = self.records(spectrum_ids, tolerance, tolerance_unit, matching_strategy, (normalization,), inverse_binner=inverse_binner)
-        figure, axes = plt.subplots(2 * len(metrics), 3, figsize=(18, 7 * len(metrics)), dpi=self.owner.theme.figure_dpi, squeeze=False)
+        resolved = resolve_theme(self.owner.theme)
+        figure, axes = plt.subplots(2 * len(metrics), 3, figsize=(18, 7 * len(metrics)), dpi=resolved.figure_dpi, squeeze=False)
         maximize = {"cosine_similarity", "peak_precision", "peak_recall", "matched_intensity_fraction", "size_reduction"}
         for metric_index, metric in enumerate(metrics):
             selected = [record for record in records if record["comparison"] == comparison and record["metric"] == metric and np.isfinite(record["value"])]

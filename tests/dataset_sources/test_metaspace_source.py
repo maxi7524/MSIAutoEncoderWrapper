@@ -11,9 +11,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from msi_autoencoder_wrapper.dataset_management.exploration.dataset_explorer import (
+    DatasetExplorer,
+)
 from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace import (
     MetaspaceDatasetSource,
     _records_from_table,
+)
+from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace_metadata import (
+    attach_api_metadata,
+    summarise_records,
+)
+from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace_parameters import (
+    FREE_TEXT_VALUE_GROUPS,
+    split_filters,
 )
 from msi_autoencoder_wrapper.utils.exceptions import (
     DownloadLimitError,
@@ -34,6 +45,7 @@ class FakeMetaspaceDataset:
 
     def __init__(self) -> None:
         self.result_calls: List[Dict[str, Any]] = []
+        self.download_calls: List[tuple[Path, str]] = []
 
     def results(self, **kwargs: Any) -> List[Dict[str, Any]]:
         self.result_calls.append(kwargs)
@@ -55,6 +67,7 @@ class FakeMetaspaceDataset:
         return [images]
 
     def download_to_dir(self, path: Path, base_name: str) -> None:
+        self.download_calls.append((path, base_name))
         path.mkdir(parents=True, exist_ok=True)
         (path / f"{base_name}.imzML").write_text("imzml", encoding="utf-8")
         (path / f"{base_name}.ibd").write_bytes(b"ibd")
@@ -96,6 +109,8 @@ class FakeGraphQLClient:
         variables: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         assert field_name == "allDatasets"
+        if "datasetMetadata" in query:
+            return [{"id": "dataset-a"}]
         assert variables["fdrLevels"] == [10]
         return [
             {
@@ -124,6 +139,87 @@ class FakeGraphQLClient:
         ]
 
 
+def test_declared_filter_mapping_is_explicit_and_rejects_unknown_keys() -> None:
+    """Canonical values and provider field names have one declared source."""
+    native, local = split_filters({"name": "liver", "condition": "Wild type"})
+
+    assert native == {"nameMask": "liver", "status": "FINISHED"}
+    assert local == {"condition": "Wild type", "annotation_fdr": 0.1}
+    assert FREE_TEXT_VALUE_GROUPS["Wildtype"] == ("Wildtype", "Wild type", "Wtype")
+    with pytest.raises(ValueError, match="Unknown METASPACE filters"):
+        split_filters({"typo": "value"})
+
+
+def test_api_metadata_contains_sizes_settings_pixels_and_mass_range() -> None:
+    """Public GraphQL fields reproduce the annotation-settings panel and m/z range."""
+    class MetadataGraph:
+        def listQuery(self, field_name: str, query: str, variables: Dict[str, Any]) -> List[Dict[str, Any]]:
+            assert "diagnostics { type data }" in query
+            assert "error" not in query
+            return [
+                {
+                    "id": "dataset-a",
+                    "configJson": json.dumps({"image_generation": {"ppm": 5}, "analysis_version": 1}),
+                    "sizeHash": json.dumps({"imzml_size": 80_058_778, "ibd_size": 314_981_417}),
+                    "acquisitionGeometry": json.dumps({"pixel_count": 32_576}),
+                    "diagnostics": [
+                        {
+                            "type": "IMZML_METADATA",
+                            "data": json.dumps(
+                                {
+                                    "min_mz": 100.0,
+                                    "max_mz": 1000.0,
+                                    "n_spectra": 32_576,
+                                }
+                            ),
+                        }
+                    ],
+                }
+            ]
+
+    records = [{"dataset_id": "dataset-a", "metadata": {}}]
+    attach_api_metadata(SimpleNamespace(_gqclient=MetadataGraph()), records)
+    metadata = records[0]["metadata"]
+
+    assert metadata["mz_tolerance_ppm"] == 5.0
+    assert metadata["analysis_method"] == "Original MSM"
+    assert metadata["pixel_count"] == 32_576
+    assert metadata["total_size_bytes"] == 395_040_195
+    assert (metadata["mz_min"], metadata["mz_max"]) == (100.0, 1000.0)
+
+
+def test_metaspace_summary_intersects_mass_ranges_and_unions_methods() -> None:
+    """The summary reports cohort storage, common m/z axis and all methods."""
+    summary = summarise_records(
+        [
+            {"metadata": {"total_size_bytes": 100, "mz_min": 50, "mz_max": 900, "analysis_method": "Original MSM", "ionisation_source": "MALDI", "analyzer": {"type": "Orbitrap"}}},
+            {"metadata": {"total_size_bytes": 200, "mz_min": 100, "mz_max": 1000, "analysis_method": "METASPACE-ML", "ionisation_source": "DESI", "analyzer": {"type": "Orbitrap"}}},
+        ]
+    )
+
+    assert summary == {
+        "dataset_count": 2,
+        "total_size_bytes": 300,
+        "size_complete": True,
+        "mz_intersection_min": 100.0,
+        "mz_intersection_max": 900.0,
+        "analysis_methods": ["METASPACE-ML", "Original MSM"],
+        "measurement_methods": ["DESI", "MALDI", "Orbitrap"],
+    }
+
+
+def test_explorer_appends_summary_only_when_requested() -> None:
+    """The default table stays unchanged and ``summarise=True`` adds a final row."""
+    explorer = DatasetExplorer(MetaspaceDatasetSource(client=FakeMetaspaceClient()))
+
+    ordinary = explorer.search()
+    summarised = explorer.results(summarise=True)
+
+    assert ordinary["dataset_id"].tolist() == ["dataset-a"]
+    assert summarised["dataset_id"].tolist() == ["dataset-a", "SUMMARY"]
+    assert summarised.iloc[-1]["name"] == "1 datasets (partial size data)"
+
+
 def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     tmp_path: Path,
 ) -> None:
@@ -132,15 +228,15 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     source = MetaspaceDatasetSource(client=client)
 
     records = source.filter(
-        {"organism": "Mus musculus", "include_molecule_stats": True}
+        {"organism": "MOUSE", "include_molecule_stats": True}
     )
     annotations = source.get_annotations("dataset-a")
     destination = source.download_dataset("dataset-a", tmp_path / "dataset-a")
 
-    assert client.filters == {
-        "organism": "Mus musculus",
-        "status": "FINISHED",
-    }
+    # "organism" is unstructured free text on METASPACE (e.g. "Mus musculus
+    # (mouse)" vs "Mouse" vs "mouse"), so it is matched locally and
+    # case-insensitively and the cache restricts the API query to matching IDs.
+    assert client.filters == {"idMask": ["dataset-a"], "status": "FINISHED"}
     assert records[0]["metadata"]["condition"] == "healthy"
     assert records[0]["metadata"]["databases"] == [
         {"name": "HMDB", "version": "v4", "id": 1}
@@ -153,6 +249,7 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     assert annotations[0]["database_version"] == "v4"
     assert client.value.result_calls == [{"database": ("HMDB", "v4"), "fdr": 0.1}]
     assert annotations[0]["ion_image"] == [[1.0, 0.0], [0.0, 0.0]]
+    assert client.value.download_calls == [(destination, "dataset-a")]
     assert (destination / "dataset-a.imzML").is_file()
 
 
@@ -229,10 +326,77 @@ def test_metaspace_available_values_are_derived_from_dataset_metadata() -> None:
 
     values = source.get_available_values("organism")
 
-    assert values == [{"value": "mouse", "label": "mouse", "count": 1}]
+    assert values == [
+        {"value": "Mouse", "label": "Mouse", "count": 1, "variants": "mouse (1)"}
+    ]
     assert client.filters == {"status": "FINISHED"}
     with pytest.raises(ValueError, match="free text or quantitative"):
         source.get_available_values("molecule")
+
+
+def test_available_values_group_case_only_organism_part_spelling_variants() -> None:
+    """'Root' and 'root' collapse into one row through `_canonical_free_text`."""
+
+    class MultiDatasetClient(FakeMetaspaceClient):
+        def datasets(self, **filters: Any) -> List[FakeMetaspaceDataset]:
+            self.filters = filters
+            first = FakeMetaspaceDataset()
+            first.id = "dataset-a"
+            first.metadata = {"Sample_Information": {"Organism_Part": "Root"}}
+            second = FakeMetaspaceDataset()
+            second.id = "dataset-b"
+            second.metadata = {"Sample_Information": {"Organism_Part": "root"}}
+            return [first, second]
+
+    source = MetaspaceDatasetSource(client=MultiDatasetClient())
+
+    values = source.get_available_values("organism_part")
+
+    assert values == [
+        {
+            "value": "Root",
+            "label": "Root",
+            "count": 2,
+            "variants": "Root (1), root (1)",
+        }
+    ]
+
+
+def test_condition_filter_tolerates_metaspace_free_text_spelling_variants() -> None:
+    """'Wild type' must match a dataset whose submitter typed 'Wildtype'."""
+    client = FakeMetaspaceClient()
+    client.value.metadata = {"organism": "mouse", "condition": "Wildtype"}
+    source = MetaspaceDatasetSource(client=client)
+
+    records = source.filter({"condition": "Wild type"})
+
+    assert [record["dataset_id"] for record in records] == ["dataset-a"]
+    assert client.filters == {"idMask": ["dataset-a"], "status": "FINISHED"}
+
+
+def test_condition_filter_rejects_unrelated_free_text_values() -> None:
+    """Tolerant matching must not merge genuinely different condition labels."""
+    client = FakeMetaspaceClient()
+    client.value.metadata = {"organism": "mouse", "condition": "Diseased"}
+    source = MetaspaceDatasetSource(client=client)
+
+    records = source.filter({"condition": "Wild type"})
+
+    assert records == []
+    rejected = source.get_rejected_records()
+    assert len(rejected) == 1
+    assert "condition" in rejected[0]["reason"]
+
+
+def test_organism_filter_accepts_a_list_of_synonyms() -> None:
+    """A list of query terms is OR-matched against the free-text field."""
+    client = FakeMetaspaceClient()
+    client.value.metadata = {"organism": "Mus musculus (mouse)", "condition": "n/a"}
+    source = MetaspaceDatasetSource(client=client)
+
+    records = source.filter({"organism": ["Rat", "Mouse"]})
+
+    assert [record["dataset_id"] for record in records] == ["dataset-a"]
 
 
 def test_download_reports_metaspace_access_message(tmp_path: Path) -> None:

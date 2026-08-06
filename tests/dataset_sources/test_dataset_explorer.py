@@ -151,11 +151,13 @@ def test_explorer_supports_metaspace_filters_and_metadata() -> None:
     client = Client()
     explorer = DatasetExplorer(MetaspaceDatasetSource(client=client))
 
-    results = explorer.search({"organism": "Mus musculus", "polarity": "Positive"})
+    results = explorer.search({"organism": "mouse", "polarity": "Positive"})
 
     assert explorer.available_filters()["polarity"]["type"] == "Positive | Negative"
+    # "organism" is unstructured METASPACE free text, so it is matched
+    # locally and case-insensitively rather than forwarded to the API.
     assert client.filters == {
-        "organism": "Mus musculus",
+        "idMask": ["metaspace-one"],
         "polarity": "Positive",
         "status": "FINISHED",
     }

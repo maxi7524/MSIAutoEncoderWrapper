@@ -20,7 +20,7 @@ def test_binner_discovery_and_manager_factories() -> None:
     )
 
     assert binner.GetXAxisDepth() == 10
-    assert inverse.get_config() == {"max_bins": 3, "window_size": 1}
+    assert inverse.get_config() == {"max_bins": 3, "window_size": 1, "track_diagnostics": False}
 
 
 def test_binner_manager_accepts_classes_and_ready_instances() -> None:

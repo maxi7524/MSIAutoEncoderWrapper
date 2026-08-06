@@ -27,6 +27,10 @@ discovers source strategies and resolves keys, compatible classes, or instances.
 
 [`metaspace.py`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace.py)
 owns METASPACE catalog, result, ion-image, and download interpretation.
+Its complete provider data flow, GraphQL enrichment, cohort statistics, and
+persistence boundaries are documented in
+
+[METASPACE provider](metaspace-provider.md).
 [`pride.py`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/pride.py)
 owns PRIDE project and file APIs. Unsupported provider capabilities return
 explicit diagnostics or errors rather than fabricated common fields.
