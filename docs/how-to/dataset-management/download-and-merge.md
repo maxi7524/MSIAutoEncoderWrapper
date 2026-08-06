@@ -10,6 +10,13 @@ metadata and annotations, appends selected spectra, and removes staging files.
 Default operation retains the merged output and catalog while deleting staged
 source pairs. `--keep-downloads` preserves all downloaded sources.
 
+Datasets are handled sequentially. Before each provider request, the operation
+checks `workspace/datasets/sources/<source>/<dataset_id>/` and reuses a complete
+non-empty pair. Otherwise it resumes that dataset in
+`workspace/datasets/.staging/<source>/<dataset_id>/`; existing staging files
+are not deleted before the provider receives the destination. A reused
+canonical source pair is never removed after merge.
+
 ### Required selection
 
 The operation consumes the same reviewed selection and annotation options as
@@ -39,4 +46,5 @@ source pairs are required after merge.
 
 The catalog is persistent, but an interrupted merged imzML output should not be
 treated as complete. Inspect both output files and the merged mapping before
-reusing the result.
+reusing the result. Source pairs already present in the canonical source or
+staging directories are checked separately for every dataset on the next run.

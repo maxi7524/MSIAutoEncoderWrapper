@@ -44,6 +44,23 @@ RETAINABLE_RESULTS = {
 }
 
 
+def _tensor_to_host_array(
+    value: torch.Tensor,
+    dtype: np.dtype[Any] | type[np.generic] | None = None,
+) -> np.ndarray:
+    """Detach a tensor and materialize its NumPy representation on the host.
+
+    :param value: Tensor stored on any supported compute device.
+    :type value: torch.Tensor
+    :param dtype: Optional NumPy dtype applied without copying when possible.
+    :type dtype: numpy.dtype | type[numpy.generic] | None
+    :return: Host-resident NumPy array.
+    :rtype: numpy.ndarray
+    """
+    array = value.detach().cpu().numpy()
+    return array.astype(dtype, copy=False) if dtype is not None else array
+
+
 @dataclass(frozen=True)
 class ModelAnalysisContext:
     """Runtime state captured for one named model.
@@ -290,7 +307,7 @@ class BaseAutoencoderAnalysis:
                 }
                 input_array = spectra.detach().cpu().numpy()
                 reconstruction_array = reconstruction.detach().cpu().numpy()
-                ids.append(np.asarray(batch_ids, dtype=np.int64))
+                ids.append(_tensor_to_host_array(batch_ids, np.int64))
                 batch_count = len(input_array)
                 processed += batch_count
                 for metric_name in (

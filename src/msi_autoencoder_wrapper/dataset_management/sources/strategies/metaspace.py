@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import numpy as np
 import requests
+from tqdm.auto import tqdm
 
 from ....utils.exceptions import (
     raise_download_limit_error,
@@ -18,6 +19,14 @@ from ....utils.exceptions import (
 )
 from ....utils.logger import get_custom_logger
 from .metaspace_authentication import metaspace_client_options
+from .metaspace_metadata import attach_api_metadata, summarise_records
+from .metaspace_parameters import (
+    FREE_TEXT_FILTER_FIELDS,
+    FREE_TEXT_VALUE_GROUPS,
+    canonical_free_text,
+    filter_schema,
+    split_filters,
+)
 from ..base import DatasetSource
 from ..source_manager import DatasetSourceManager
 
@@ -25,6 +34,7 @@ from ..source_manager import DatasetSourceManager
 logger = get_custom_logger(__name__)
 
 
+# Catalogue cache
 _CACHE_SCHEMA_VERSION = 1
 _AVAILABLE_DATASETS_CACHE_FILE = "available-datasets.json"
 
@@ -79,51 +89,7 @@ class MetaspaceDatasetSource(DatasetSource):
     @staticmethod
     def get_available_filters() -> Dict[str, Any]:
         """Return notebook-friendly documentation for METASPACE filters."""
-        return {
-            "name": {"type": "string", "api_field": "nameMask"},
-            "dataset_ids": {"type": "string | list[string]", "api_field": "idMask"},
-            "submitter_id": {"type": "string", "api_field": "submitter"},
-            "group_id": {"type": "string", "api_field": "group"},
-            "project_id": {"type": "string", "api_field": "project"},
-            "molecule": {
-                "type": "string",
-                "api_field": "hasAnnotationMatching.compoundQuery",
-            },
-            "polarity": {
-                "type": "Positive | Negative",
-                "api_field": "polarity",
-                "choices": ["Positive", "Negative"],
-            },
-            "organism": {"type": "string", "api_field": "organism"},
-            "organism_part": {"type": "string", "api_field": "organismPart"},
-            "condition": {"type": "string", "api_field": "condition"},
-            "growth_conditions": {"type": "string", "api_field": "growthConditions"},
-            "analyzer_type": {"type": "string", "api_field": "analyzerType"},
-            "ionisation_source": {"type": "string", "api_field": "ionisationSource"},
-            "maldi_matrix": {"type": "string", "api_field": "maldiMatrix"},
-            "has_optical_image": {
-                "type": "boolean",
-                "local": True,
-                "choices": [True, False],
-                "description": "Applied to the optical-image field returned by GraphQL.",
-            },
-            "status": {"type": "string", "default": "FINISHED"},
-            "annotation_fdr": {"type": "float", "default": 0.1},
-            "min_annotation_count": {"type": "integer | null", "local": True},
-            "max_annotation_count": {"type": "integer | null", "local": True},
-            "include_molecule_stats": {"type": "boolean", "default": False},
-            "include_spatial_annotation_stats": {
-                "type": "boolean",
-                "default": False,
-                "local": True,
-            },
-            "min_molecule_count": {"type": "integer | null", "local": True},
-            "min_unique_molecule_count": {"type": "integer | null", "local": True},
-            "exclude_dataset_ids": {
-                "type": "list[string]",
-                "description": "Local exclusions applied after provider discovery.",
-            },
-        }
+        return filter_schema()
 
     def get_available_values(self, filter_key: str) -> List[Dict[str, Any]]:
         """Return values currently present in accessible METASPACE datasets.
@@ -197,21 +163,96 @@ class MetaspaceDatasetSource(DatasetSource):
 
     def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
         """Filter METASPACE datasets and attach review-oriented statistics."""
-        native_filters, local_filters = _split_filters(filters)
-        datasets = self.client.datasets(**native_filters)
-        records = [self._dataset_record(dataset) for dataset in datasets]
-        fdr = float(local_filters.get("annotation_fdr", 0.1))
-        _attach_annotation_counts(self.client, records, fdr)
-        if bool(local_filters.get("include_spatial_annotation_stats")):
-            _attach_spatial_annotation_statistics(self.client, records, fdr)
-        if bool(local_filters.get("include_molecule_stats")) or any(
+        native_filters, local_filters = split_filters(filters)
+        native_filters, cache_rejected = _restrict_to_cached_free_text_matches(
+            native_filters,
+            local_filters,
+            self._available_values_cache,
+        )
+        molecule_statistics_enabled = bool(
+            local_filters.get("include_molecule_stats")
+        ) or any(
             local_filters.get(key) is not None
             for key in ("min_molecule_count", "min_unique_molecule_count")
-        ):
-            _attach_molecule_statistics(self.client, records, fdr)
-        self._accepted_records, self._rejected_records = _apply_local_filters(
-            records, local_filters
         )
+        query_progress = tqdm(
+            total=1,
+            desc="Query METASPACE dataset catalogue",
+            unit="operation",
+            leave=False,
+            dynamic_ncols=True,
+        )
+        try:
+            datasets = (
+                []
+                if native_filters.get("idMask") == []
+                else self.client.datasets(**native_filters)
+            )
+        finally:
+            query_progress.update(1)
+            query_progress.close()
+        records = [self._dataset_record(dataset) for dataset in datasets]
+        spatial_statistics_enabled = bool(
+            local_filters.get("include_spatial_annotation_stats")
+        )
+        overall = tqdm(
+            total=(
+                3
+                + int(molecule_statistics_enabled)
+                + (len(records) if spatial_statistics_enabled else 0)
+            ),
+            initial=1,
+            desc="METASPACE discovery",
+            unit="operation",
+            dynamic_ncols=True,
+        )
+        with _current_operation(overall, "Retrieve metadata and m/z ranges"):
+            attach_api_metadata(self.client, records)
+        records, free_text_rejected = _apply_free_text_filters(records, local_filters)
+        fdr = float(local_filters.get("annotation_fdr", 0.1))
+        with _current_operation(overall, "Retrieve annotation counts"):
+            _attach_annotation_counts(self.client, records, fdr)
+        if spatial_statistics_enabled:
+            image_count = sum(
+                int(record["metadata"].get("annotation_count") or 0)
+                for record in records
+            )
+            overall.set_postfix(
+                datasets=len(records),
+                ion_images=image_count,
+            )
+            logger.info(
+                "METASPACE spatial plan contains %s datasets and %s annotation images",
+                len(records),
+                image_count,
+            )
+            for record in records:
+                dataset_id = str(record["dataset_id"])
+                dataset_image_count = int(
+                    record["metadata"].get("annotation_count") or 0
+                )
+                with _current_operation(
+                    overall,
+                    f"Retrieve {dataset_image_count} ion images for {dataset_id}",
+                ):
+                    _attach_spatial_annotation_statistics(
+                        self.client,
+                        [record],
+                        fdr,
+                    )
+        if molecule_statistics_enabled:
+            with _current_operation(overall, "Retrieve molecular identities"):
+                _attach_molecule_statistics(self.client, records, fdr)
+        accepted, quantitative_rejected = _apply_local_filters(records, local_filters)
+        overall.close()
+        self._accepted_records = accepted
+        rejected_by_id = {
+            str(record["dataset_id"]): record
+            for record in (
+                cache_rejected + free_text_rejected + quantitative_rejected
+            )
+        }
+        self._rejected_records = list(rejected_by_id.values())
         logger.info(
             "METASPACE discovery accepted %s datasets and rejected %s datasets",
             len(self._accepted_records),
@@ -266,7 +307,14 @@ class MetaspaceDatasetSource(DatasetSource):
 
     def get_dataset_metadata(self, dataset_id: str) -> Dict[str, Any]:
         """Return source metadata and stable summary fields for one dataset."""
-        return self._dataset_record(self.client.dataset(id=dataset_id))
+        record = self._dataset_record(self.client.dataset(id=dataset_id))
+        attach_api_metadata(self.client, [record])
+        return record
+
+    @staticmethod
+    def summarise(records: List[Mapping[str, Any]]) -> Dict[str, Any]:
+        """Return aggregate storage, m/z intersection and analysis methods."""
+        return summarise_records(records)
 
     def get_annotations(
         self,
@@ -341,11 +389,14 @@ class MetaspaceDatasetSource(DatasetSource):
         return records
 
     def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
-        """Download a dataset's source imzML/ibd pair into a local directory."""
+        """Download an imzML/ibd pair with the official METASPACE client."""
         target = Path(destination)
         target.mkdir(parents=True, exist_ok=True)
         expected = target / f"{dataset_id}.imzML"
         expected_ibd = expected.with_suffix(".ibd")
+
+        # Dataset download
+        ## Local cache
         if (
             expected.is_file()
             and expected.stat().st_size > 0
@@ -358,6 +409,8 @@ class MetaspaceDatasetSource(DatasetSource):
                 target,
             )
             return target
+
+        ## Remote response validation
         dataset = self.client.dataset(id=dataset_id)
         if hasattr(dataset, "download_links"):
             download = dataset.download_links()
@@ -371,23 +424,19 @@ class MetaspaceDatasetSource(DatasetSource):
                     message=f"Cannot download dataset '{dataset_id}': {message}",
                 )
             _validate_download_files(files, dataset_id)
-            try:
-                with ThreadPoolExecutor(max_workers=min(2, len(files))) as executor:
-                    list(
-                        executor.map(
-                            lambda file_record: _download_file(
-                                file_record, target, dataset_id
-                            ),
-                            files,
-                        )
-                    )
-            except (requests.RequestException, ValueError) as error:
-                raise_external_service_error(
-                    context_name="METASPACE",
-                    message=f"Download failed for dataset '{dataset_id}': {error}",
-                )
-        else:
+
+        ## Official client transfer
+        ### Delegate signed-link handling, parallel transfer, and file naming to
+        ### SMDataset instead of maintaining a second downloader in this adapter.
+        try:
             dataset.download_to_dir(target, base_name=dataset_id)
+        except (OSError, ValueError, requests.RequestException) as error:
+            raise_external_service_error(
+                context_name="METASPACE",
+                message=f"Download failed for dataset '{dataset_id}': {error}",
+            )
+
+        ## Output verification
         if not expected.is_file() or not expected.with_suffix(".ibd").is_file():
             raise_project_config_error(
                 context_name="MetaspaceSource",
@@ -459,6 +508,111 @@ def _object_mapping(value: Any) -> Dict[str, Any]:
     return {"value": value} if value is not None else {}
 
 
+def _restrict_to_cached_free_text_matches(
+    native_filters: Mapping[str, Any],
+    local_filters: Mapping[str, Any],
+    cached_records: List[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Use the cached catalogue to avoid retrieving known local mismatches."""
+    if not cached_records or not any(
+        local_filters.get(key) is not None for key in _FREE_TEXT_FILTER_FIELDS
+    ):
+        return dict(native_filters), []
+    scoped_records = _cached_native_scope(cached_records, native_filters)
+    matches, rejected = _apply_free_text_filters(scoped_records, local_filters)
+    matched_ids = {str(record["dataset_id"]) for record in matches}
+    requested_ids = native_filters.get("idMask")
+    if requested_ids is not None:
+        values = (
+            requested_ids.split("|")
+            if isinstance(requested_ids, str)
+            else requested_ids
+        )
+        matched_ids.intersection_update(str(value) for value in values)
+    restricted = dict(native_filters)
+    restricted["idMask"] = sorted(matched_ids)
+    logger.info(
+        "METASPACE cache reduced discovery to %s candidate datasets",
+        len(matched_ids),
+    )
+    return restricted, rejected
+
+
+def _cached_native_scope(
+    records: List[Dict[str, Any]],
+    native_filters: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    """Apply exact cached fields before producing local rejection diagnostics."""
+    requested_ids = native_filters.get("idMask")
+    id_values = None
+    if requested_ids is not None:
+        values = (
+            requested_ids.split("|")
+            if isinstance(requested_ids, str)
+            else requested_ids
+        )
+        id_values = {str(value) for value in values}
+    field_filters = {
+        "polarity": native_filters.get("polarity"),
+        "status": native_filters.get("status"),
+        "ionisation_source": native_filters.get("ionisation_source"),
+        "maldi_matrix": native_filters.get("maldi_matrix"),
+    }
+    scoped: List[Dict[str, Any]] = []
+    for record in records:
+        if id_values is not None and str(record["dataset_id"]) not in id_values:
+            continue
+        metadata = record["metadata"]
+        if any(
+            expected is not None
+            and str(metadata.get(field, "")).casefold()
+            != str(expected).casefold()
+            for field, expected in field_filters.items()
+        ):
+            continue
+        analyzer_type = native_filters.get("analyzer_type")
+        if analyzer_type is not None and str(
+            _object_mapping(metadata.get("analyzer")).get("type", "")
+        ).casefold() != str(analyzer_type).casefold():
+            continue
+        scoped.append(record)
+    return scoped
+
+
+@contextmanager
+def _current_operation(overall: Any, description: str) -> Iterable[None]:
+    """Display one transient operation below the persistent overall progress."""
+    current = tqdm(
+        total=1,
+        desc=description,
+        unit="operation",
+        leave=False,
+        dynamic_ncols=True,
+    )
+    try:
+        yield
+    finally:
+        current.update(1)
+        current.close()
+        overall.update(1)
+
+
+@contextmanager
+def _hide_client_progress() -> Iterable[None]:
+    """Suppress the official client's nested bar beneath wrapper progress."""
+    try:
+        from metaspace import sm_annotation_utils
+    except ImportError:
+        yield
+        return
+    original = sm_annotation_utils.tqdm
+    sm_annotation_utils.tqdm = lambda iterable, *args, **kwargs: iterable
+    try:
+        yield
+    finally:
+        sm_annotation_utils.tqdm = original
+
+
 def _available_values(
     records: List[Dict[str, Any]],
     filter_key: str,
@@ -496,6 +650,8 @@ def _available_values(
             if value not in {None, ""}:
                 values.append((value, str(value)))
     counts = Counter(values)
+    if filter_key in _FREE_TEXT_FILTER_FIELDS:
+        return _group_free_text_values(counts)
     return [
         {"value": value, "label": label, "count": count}
         for (value, label), count in sorted(
@@ -505,47 +661,49 @@ def _available_values(
     ]
 
 
-_METASPACE_FILTER_ALIASES = {
-    "name": "nameMask",
-    "dataset_ids": "idMask",
-    "organism_part": "organismPart",
-    "growth_conditions": "growthConditions",
-}
-_LOCAL_FILTERS = {
-    "annotation_fdr",
-    "include_molecule_stats",
-    "include_spatial_annotation_stats",
-    "min_annotation_count",
-    "max_annotation_count",
-    "min_molecule_count",
-    "min_unique_molecule_count",
-    "has_optical_image",
-}
+def _group_free_text_values(
+    counts: "Counter[Tuple[Any, str]]",
+) -> List[Dict[str, Any]]:
+    """Collapse spelling/formatting variants of a free-text field into one row.
+
+    :param counts: Occurrence count per raw ``(value, label)`` pair, as
+        collected in :func:`_available_values`.
+    :type counts: Counter[Tuple[Any, str]]
+    :return: One row per group with a summed ``count`` and a ``variants``
+        string listing every raw spelling folded into it.
+    :rtype: List[Dict[str, Any]]
+
+    Grouping is keyed by :func:`_canonical_free_text` -- the same declared
+    alias table used by ``filter()`` (:func:`_free_text_matches`) -- so
+    this view always agrees with what a filter query will actually match.
+    Only spelling variants listed in ``FREE_TEXT_VALUE_GROUPS`` are merged;
+    anything not reviewed there stays on its own row.
+    """
+    groups: Dict[str, List[Tuple[Any, str, int]]] = defaultdict(list)
+    for (value, label), count in counts.items():
+        groups[_canonical_free_text(label)].append((value, label, count))
+
+    rows: List[Dict[str, Any]] = []
+    for canonical, members in groups.items():
+        members.sort(key=lambda member: -member[2])
+        canonical_value, canonical_label, _ = members[0]
+        if canonical in FREE_TEXT_VALUE_GROUPS:
+            canonical_value = canonical_label = canonical
+        rows.append(
+            {
+                "value": canonical_value,
+                "label": canonical_label,
+                "count": sum(count for _, _, count in members),
+                "variants": ", ".join(
+                    f"{label} ({count})" for _, label, count in members
+                ),
+            }
+        )
+    rows.sort(key=lambda row: (-row["count"], row["label"].casefold()))
+    return rows
 
 
-def _split_filters(filters: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Separate METASPACE GraphQL filters from local aggregate constraints."""
-    options = dict(filters)
-    local = {
-        key: options.pop(key)
-        for key in list(options)
-        if key in _LOCAL_FILTERS
-    }
-    fdr = float(local.get("annotation_fdr", 0.1))
-    molecule = options.pop("molecule", None)
-    native = {
-        _METASPACE_FILTER_ALIASES.get(key, key): value
-        for key, value in options.items()
-        if value is not None
-    }
-    native.setdefault("status", "FINISHED")
-    if molecule:
-        native["hasAnnotationMatching"] = {
-            "compoundQuery": str(molecule),
-            "fdrLevel": fdr,
-        }
-    local.setdefault("annotation_fdr", fdr)
-    return native, local
+_FREE_TEXT_FILTER_FIELDS = FREE_TEXT_FILTER_FIELDS
 
 
 def _attach_annotation_counts(
@@ -665,12 +823,13 @@ def _attach_spatial_annotation_statistics(
         database_count = 0
 
         for database in getattr(dataset, "database_details", []):
-            annotation_images = dataset.all_annotation_images(
-                database=(database.name, database.version),
-                fdr=fdr,
-                only_first_isotope=True,
-                scale_intensity=False,
-            )
+            with _hide_client_progress():
+                annotation_images = dataset.all_annotation_images(
+                    database=(database.name, database.version),
+                    fdr=fdr,
+                    only_first_isotope=True,
+                    scale_intensity=False,
+                )
             database_has_images = False
             for images_for_annotation in annotation_images:
                 if (
@@ -737,6 +896,91 @@ def _attach_spatial_annotation_statistics(
                 "spatial_stats_status": "complete",
             }
         )
+
+
+def _canonical_free_text(value: Any) -> str:
+    """Return the canonical group key for one free-text metadata value.
+
+    The explicit groups live in :mod:`metaspace_parameters`. Unreviewed values
+    remain separate instead of being merged heuristically.
+    """
+    return canonical_free_text(value)
+
+
+def _free_text_matches(field_value: Any, query_value: str) -> bool:
+    """Check one submitter free-text field against one query term.
+
+    Both sides are reduced to their canonical group via
+    :func:`_canonical_free_text` before comparison, so a filter query
+    always agrees with the grouping shown by ``get_available_values`` --
+    both are driven by the same declared alias table.
+    """
+    canonical_query = _canonical_free_text(query_value)
+    if not canonical_query:
+        return True
+    return _canonical_free_text(field_value) == canonical_query
+
+
+def _free_text_filter_matches(field_value: Any, query: Any) -> bool:
+    """Check a free-text field against a query string or an iterable of OR'd queries."""
+    queries = [query] if isinstance(query, str) else list(query)
+    return any(_free_text_matches(field_value, str(term)) for term in queries)
+
+
+def _apply_free_text_filters(
+    records: List[Dict[str, Any]],
+    filters: Mapping[str, Any],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Apply tolerant local matching for unstructured METASPACE metadata fields.
+
+    :param records: Dataset records fetched from METASPACE, before annotation
+        or molecule statistics are attached.
+    :type records: List[Dict[str, Any]]
+    :param filters: Local filter mapping; only keys in
+        :data:`_FREE_TEXT_FILTER_FIELDS` are consulted.
+    :type filters: Mapping[str, Any]
+    :return: Accepted records and rejection diagnostics, in the same shape as
+        :func:`_apply_local_filters`.
+    :rtype: Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
+
+    Run before the annotation/molecule/spatial enrichment steps so that
+    expensive per-dataset METASPACE queries are not spent on datasets that
+    are rejected here anyway.
+    """
+    accepted: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for record in records:
+        metadata = record["metadata"]
+        reason = None
+        for filter_key, field in _FREE_TEXT_FILTER_FIELDS.items():
+            query = filters.get(filter_key)
+            if query is None:
+                continue
+            if not _free_text_filter_matches(metadata.get(field), query):
+                reason = (
+                    f"{field} does not match {query!r}; observed "
+                    f"{metadata.get(field)!r}"
+                )
+                break
+        if reason is None:
+            accepted.append(record)
+        else:
+            rejected.append(
+                {
+                    "dataset_id": record["dataset_id"],
+                    "name": record["name"],
+                    "reason": reason,
+                    "project_url": metadata.get("project_url"),
+                }
+            )
+    if rejected:
+        logger.debug(
+            "METASPACE free-text filters rejected %s datasets before enrichment",
+            len(rejected),
+        )
+    return accepted, rejected
+
+
 def _apply_local_filters(
     records: List[Dict[str, Any]],
     filters: Mapping[str, Any],
@@ -835,59 +1079,7 @@ def _database_parts(database: Any) -> tuple[Optional[str], Optional[str]]:
     return str(database), None
 
 
-def _download_file(
-    file_record: Mapping[str, Any],
-    destination: Path,
-    dataset_id: str,
-) -> Path:
-    """Download one signed METASPACE file safely and atomically.
-
-    :param file_record: METASPACE file record containing ``filename`` and
-        signed ``link`` fields.
-    :type file_record: Mapping[str, Any]
-    :param destination: Dataset output directory.
-    :type destination: pathlib.Path
-    :param dataset_id: Stable dataset ID used as the local file stem.
-    :type dataset_id: str
-    :return: Completed local path.
-    :rtype: pathlib.Path
-    :raises ValueError: If the record is malformed or has an unsupported file
-        extension.
-    :raises requests.RequestException: If the HTTP request fails.
-    """
-    filename = str(file_record.get("filename", ""))
-    link = file_record.get("link")
-    suffix = Path(filename).suffix
-    if suffix.lower() not in {".imzml", ".ibd"}:
-        raise ValueError(f"Unsupported METASPACE download file: '{filename}'.")
-    if not isinstance(link, str) or not link:
-        raise ValueError(f"METASPACE returned no link for '{filename}'.")
-    canonical_suffix = ".imzML" if suffix.lower() == ".imzml" else ".ibd"
-    output = destination / f"{dataset_id}{canonical_suffix}"
-    partial = output.with_name(f"{output.name}.part")
-    if output.is_file() and output.stat().st_size > 0:
-        logger.info("METASPACE file already exists: %s", output)
-        return output
-
-    logger.info("Downloading METASPACE file %s", filename)
-    partial.unlink(missing_ok=True)
-    try:
-        with requests.get(link, stream=True, timeout=(15, 120)) as response:
-            response.raise_for_status()
-            with partial.open("wb") as stream:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        stream.write(chunk)
-        if partial.stat().st_size == 0:
-            raise ValueError(f"METASPACE returned an empty file for '{filename}'.")
-        partial.replace(output)
-    except Exception:
-        partial.unlink(missing_ok=True)
-        raise
-    logger.info("Downloaded METASPACE file to %s", output)
-    return output
-
-
+# Dataset download response validation
 def _validate_download_files(
     files: List[Mapping[str, Any]],
     dataset_id: str,

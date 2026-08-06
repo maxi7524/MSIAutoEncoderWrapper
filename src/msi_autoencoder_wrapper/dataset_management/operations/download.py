@@ -69,7 +69,14 @@ def materialize_selection(
             continue
         destination = output_root / dataset_id
         logger.info("Materializing dataset %s", dataset_id)
-        source.download_dataset(dataset_id, destination)
+        if _has_complete_pair(destination, dataset_id):
+            logger.info(
+                "Reusing downloaded dataset %s from %s",
+                dataset_id,
+                destination,
+            )
+        else:
+            source.download_dataset(dataset_id, destination)
         validate_imzml_pair(destination, dataset_id)
         metadata_record = source.get_dataset_metadata(dataset_id)
         metadata = dict(metadata_record.get("metadata", {}))
@@ -188,10 +195,31 @@ def materialize_and_merge_selection(
         with ImzMLWriter(str(temporary), mode="processed") as writer:
             for record in records:
                 dataset_id = str(record["dataset_id"])
-                destination = staging_root / dataset_id
-                if destination.exists():
-                    shutil.rmtree(destination)
-                source.download_dataset(dataset_id, destination)
+                retained = retained_root / dataset_id
+                staging = staging_root / dataset_id
+
+                # Dataset-level resume
+                ## Prefer the canonical workspace copy before contacting the provider.
+                if _has_complete_pair(retained, dataset_id):
+                    destination = retained
+                    uses_retained_source = True
+                    logger.info(
+                        "Reusing downloaded dataset %s from %s",
+                        dataset_id,
+                        destination,
+                    )
+                elif retained.exists():
+                    # Complete an existing canonical directory in place so the
+                    # provider can skip either source file that is already present.
+                    destination = retained
+                    uses_retained_source = True
+                    source.download_dataset(dataset_id, destination)
+                else:
+                    destination = staging
+                    uses_retained_source = False
+                    # Keep partial staging contents: the provider client can skip
+                    # an existing member of the imzML/ibd pair and fetch its companion.
+                    source.download_dataset(dataset_id, destination)
                 validate_imzml_pair(destination, dataset_id)
                 metadata_record = source.get_dataset_metadata(dataset_id)
                 imzml_path = validate_imzml_pair(destination, dataset_id)
@@ -259,13 +287,12 @@ def materialize_and_merge_selection(
                         }
                     )
                     merged_index += 1
-                if keep_downloads:
-                    retained = retained_root / dataset_id
+                if keep_downloads and not uses_retained_source:
                     retained.parent.mkdir(parents=True, exist_ok=True)
                     if retained.exists():
                         shutil.rmtree(retained)
                     destination.replace(retained)
-                else:
+                elif not uses_retained_source:
                     shutil.rmtree(destination)
         if merged_index == 0:
             raise_validation_error("DownloadMerge", "Selected datasets contain no spectra.")
@@ -285,6 +312,18 @@ def materialize_and_merge_selection(
         output,
     )
     return output
+
+
+def _has_complete_pair(directory: Path, dataset_id: str) -> bool:
+    """Return whether a non-empty canonical imzML/ibd pair exists locally."""
+    imzml_path = directory / f"{dataset_id}.imzML"
+    ibd_path = directory / f"{dataset_id}.ibd"
+    return (
+        imzml_path.is_file()
+        and imzml_path.stat().st_size > 0
+        and ibd_path.is_file()
+        and ibd_path.stat().st_size > 0
+    )
 
 
 def _resolve_annotation_options(

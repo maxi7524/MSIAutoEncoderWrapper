@@ -1,40 +1,173 @@
 # Discover external datasets
 
-Dataset discovery queries a registered provider and returns accepted and
-rejected records without downloading MSI files.
+Dataset discovery queries a registered provider, normalizes provider metadata,
+and returns accepted and rejected records without downloading imzML or ibd
+files. This guide documents the user-facing discovery interface. The internal
+METASPACE request and normalization flow is described in
+[METASPACE provider internals](../../library-internals/dataset-management/metaspace-provider.md).
 
-## Purpose and available operations
+## Create an explorer
 
-### Providers
-
-The built-in provider strategies are METASPACE and PRIDE. Each implements the
-shared dataset-source contract but exposes provider-specific filter keys and
-download behavior.
-
-### Discovery outputs
-
-`DatasetExplorer` retains active filters, accepted records, rejected records,
-and source diagnostics so the user can review results before materialization.
-
-## Detailed instructions
-
-### Explore through Python
+`DatasetExplorer` stores the active filters, accepted records, manual
+exclusions, and rejection diagnostics for one provider.
 
 ```python
 from msi_autoencoder_wrapper.dataset_management.exploration import DatasetExplorer
 
-explorer = DatasetExplorer(source="metaspace")
-available = explorer.get_available_filters()
-values = explorer.get_available_values("organism")
-explorer.set_filters({"organism": "Mus musculus"})
-records = explorer.search()
-rejected = explorer.rejected()
+explorer = DatasetExplorer(
+    source="metaspace",
+    cache_dir="assets/local/datasets/metaspace",
+    refresh_cache=False,
+)
 ```
 
-Use `available_filters()` as an alias returning filter metadata. Filter keys and
-values are validated by the selected provider.
+`cache_dir` stores the METASPACE catalogue as `available-datasets.json`. The
+catalogue supplies available-value tables and preselects dataset IDs for local
+biological filters. `filter()` still contacts METASPACE for the selected IDs so
+that annotation counts, current configuration, file sizes, and diagnostics are
+not read from a stale catalogue.
 
-### Query through the dataset CLI
+Set `refresh_cache=True` to replace the catalogue before discovery. Leave it
+disabled for repeated searches over the same catalogue.
+
+## Inspect supported filters
+
+```python
+available = explorer.get_available_filters()
+values = explorer.get_available_values("condition")
+```
+
+The filter schema identifies the expected type, default, exact argument passed
+to the official client, and whether the wrapper applies the filter locally.
+Unknown keys raise `ValueError` instead of being forwarded as arbitrary GraphQL
+fields.
+
+`get_available_values()` returns `value`, `label`, `count`, and `variants`.
+The `variants` column lists raw METASPACE spellings combined into one declared
+value. Canonical values use PascalCase. For example, `Mouse`, `Mus musculus`,
+and `Mus musculus (mouse)` select the complete `Mouse` group. The mappings are
+explicit; unlisted values are not merged by fuzzy or substring matching.
+
+The filters `organism`, `organism_part`, `condition`, and
+`growth_conditions` are applied locally because submitters enter these fields
+as free text. A string selects one declared group. A list combines groups with
+logical OR.
+
+## Filter datasets
+
+```python
+filters = {
+    "organism": "Mouse",
+    "organism_part": "Kidney",
+    "polarity": "Negative",
+    "condition": "Wildtype",
+    "annotation_fdr": 0.1,
+    "min_annotation_count": 1,
+    "include_molecule_stats": True,
+    "exclude_dataset_ids": [],
+}
+
+results = explorer.filter(filters, summarise=True)
+```
+
+METASPACE-native filters such as `polarity`, `ionisation_source`, and
+`analyzer_type` are passed to `SMInstance.datasets()`. Local free-text filters
+first restrict the cached catalogue. The resulting IDs are then sent to
+METASPACE together with the native filters. This avoids retrieving the full
+provider catalogue for every search.
+
+Discovery always requests current annotation counts and the following public
+METASPACE metadata:
+
+- annotation tolerance from `configJson.image_generation.ppm`;
+- analysis version from `configJson.analysis_version`;
+- acquired pixel count from `acquisitionGeometry.pixel_count`;
+- imzML and ibd sizes from `sizeHash`;
+- minimum and maximum observed m/z from the `IMZML_METADATA` diagnostic;
+- instrument, analyzer, resolving power, ionization source, polarity, sample
+  condition, and biological metadata.
+
+The returned table contains separate `condition` and `diseases` columns.
+`condition` is the submitter-provided experimental or biological condition and
+may contain values such as `Wildtype`, `Control`, or `Frozen`. `diseases` is
+reserved for explicit disease metadata and is not inferred from `condition`.
+
+## Calculate molecular statistics
+
+Set `include_molecule_stats=True` to populate:
+
+- `molecule_count`: distinct `(sumFormula, adduct)` identities in one dataset;
+- `unique_molecule_count`: identities occurring only in that dataset within
+  the current accepted cohort;
+- `unique_molecules`: the corresponding formula-adduct labels.
+
+The calculation retrieves annotation identities at `annotation_fdr`. It does
+not download ion images. `min_molecule_count` and
+`min_unique_molecule_count` enable the same calculation automatically before
+applying their thresholds.
+
+Set `include_spatial_annotation_stats=True` to download the first-isotope ion
+images for annotations satisfying `annotation_fdr`. A pixel is counted once if
+at least one selected image contains a finite, non-zero value at that position.
+The result includes annotated and unannotated pixel counts, their fraction, the
+number of contributing annotation images and databases, and a completion
+status.
+
+During discovery, one persistent progress bar reports all planned wrapper
+operations. A transient second bar names the current operation. For spatial
+retrieval, the persistent bar also reports the number of datasets and ion
+images to retrieve. The official client's additional nested progress bar is
+suppressed.
+
+## Interpret the result table
+
+Each ordinary row represents one accepted dataset. Relevant column groups are:
+
+- identity: `dataset_id`, `name`, `project_url`, `submitter`, `group`,
+  `projects`;
+- biology: `organisms`, `organism_parts`, `condition`,
+  `growth_conditions`, `diseases`;
+- acquisition: `instruments`, `ionisation_source`, `analyzer_type`,
+  `analyzer_resolving_power`, `polarity`, `image_size`, `pixel_count`;
+- source size and range: `total_size_bytes`, `download_size_bytes`, `mz_min`,
+  `mz_max`, `mz_tolerance_ppm`, `analysis_method`;
+- annotations: `databases`, `annotation_count`, `molecule_count`,
+  `unique_molecule_count`, `unique_molecules`;
+- spatial annotations: `annotated_pixel_count`, `unannotated_pixel_count`,
+  `annotated_pixel_fraction`, `spatial_annotation_count`,
+  `spatial_annotation_database_count`, `spatial_stats_status`.
+
+Missing values mean that METASPACE did not expose the field or that the
+corresponding optional calculation was not requested. A zero molecular count
+is different from a missing molecular count.
+
+With `summarise=True`, the final row has `dataset_id == "SUMMARY"`. It reports:
+
+- the sum of known dataset sizes and whether size coverage is complete;
+- the intersection of all dataset m/z ranges;
+- the union of METASPACE analysis methods;
+- the union of ionization sources and analyzer types.
+
+The m/z intersection is defined only when every selected dataset provides
+`mz_min` and `mz_max` and the ranges overlap.
+
+## Inspect rejections and full metadata
+
+```python
+rejected = explorer.rejected()
+
+dataset_id = results.loc[results["dataset_id"] != "SUMMARY", "dataset_id"].iloc[0]
+record = explorer.source.get_dataset_metadata(dataset_id)
+```
+
+`rejected()` explains local free-text and quantitative rejections. Datasets
+removed directly by a native METASPACE filter are not returned by the provider
+and therefore cannot have wrapper-generated rejection reasons.
+
+`get_dataset_metadata()` returns the normalized source record together with
+the original METASPACE metadata and current GraphQL enrichment fields.
+
+## Query through the dataset CLI
 
 ```bash
 .venv/bin/python assets/scripts/datasets/manage_datasets.py query \
@@ -44,5 +177,25 @@ values are validated by the selected provider.
   --selection data/tutorial_workspace/datasets/selections/query.json
 ```
 
-The query writes discovery records into the catalog and exports a selection
-snapshot. It does not download image pairs.
+The query stores accepted discovery records in the catalogue and writes a
+selection snapshot. Download and annotation materialization are separate
+operations described in [Download datasets](downloading-datasets.md) and
+[Retrieve dataset annotations](retrieving-annotations.md).
+
+## Diagnose common failures
+
+- `Unknown METASPACE filters` indicates a misspelled or unsupported public
+  filter key.
+- A GraphQL error occurs before local filtering and means the installed client
+  and deployed schema disagree or access to a requested field was denied.
+- Empty `mz_min` and `mz_max` values mean the dataset has no accessible
+  `IMZML_METADATA` diagnostic; they must not be inferred from annotation m/z.
+- Spatial statistics can fail when ion-image dimensions disagree, an
+  annotation has no matching ion image, or annotated pixels exceed acquisition
+  geometry.
+- Private datasets require credentials configured for the official METASPACE
+  client.
+
+The official interfaces used by the adapter are documented in the
+[METASPACE Python client API](https://metaspace2020.readthedocs.io/en/latest/content/apireference/sm_annotation_utils.html)
+and the [dataset metadata example](https://metaspace2020.readthedocs.io/en/latest/content/examples/fetch-dataset-metadata.html).

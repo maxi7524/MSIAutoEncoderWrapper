@@ -25,6 +25,7 @@ dependencies = [
     "seaborn",
     "statsmodels",
     "tabulate",
+    "tqdm",
 ]
 
 [project.scripts]

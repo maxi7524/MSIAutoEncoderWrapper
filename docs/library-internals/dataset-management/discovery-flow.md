@@ -24,6 +24,13 @@ files.
 retains filters, accepted IDs, exclusions, and rejected diagnostics while
 delegating query execution to the source.
 
+> Remark:
+> For METASPACE, the reusable catalogue first restricts local free-text matches.
+> The adapter then requests current provider records for those IDs, enriches them
+> with configuration, size, acquisition, m/z-range, and annotation-count data,
+> and optionally calculates molecular or spatial statistics. See
+> [METASPACE provider](metaspace-provider.md) for the field-level flow.
+
 ### Persist selection
 
 [`query_to_selection()`](../../../src/msi_autoencoder_wrapper/dataset_management/operations/query.py)
