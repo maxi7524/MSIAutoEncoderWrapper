@@ -64,7 +64,7 @@ def _normalise_detail(detail: Mapping[str, Any]) -> Dict[str, Any]:
         ),
         {},
     )
-    diagnostic_data = _mapping(diagnostic.get("data"))
+    diagnostic_data = _json_mapping(diagnostic.get("data"))
     image_generation = _mapping(config.get("image_generation"))
     analysis_version = config.get("analysis_version")
     imzml_size = _optional_int(size_hash.get("imzml_size"))

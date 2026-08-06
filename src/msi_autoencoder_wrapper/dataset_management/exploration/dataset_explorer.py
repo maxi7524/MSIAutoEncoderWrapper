@@ -229,6 +229,9 @@ _RESULT_COLUMNS = [
     "growth_conditions",
     "diseases",
     "instruments",
+    "ionisation_source",
+    "analyzer_type",
+    "analyzer_resolving_power",
     "submitter",
     "group",
     "projects",
@@ -267,6 +270,8 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
     metadata = dict(record.get("metadata", {}))
     project = dict(metadata.get("project", {}))
     sample_information = _mapping(metadata.get("Sample_Information"))
+    analyzer = _mapping(metadata.get("analyzer"))
+    ms_analysis = _mapping(metadata.get("MS_Analysis"))
     return {
         "dataset_id": str(record["dataset_id"]),
         "name": str(record.get("name", record["dataset_id"])),
@@ -307,7 +312,27 @@ def _summary_row(record: Mapping[str, Any], excluded: bool) -> Dict[str, Any]:
         ),
         "diseases": _names(project.get("diseases", metadata.get("diseases"))),
         "instruments": _names(
-            project.get("instruments", metadata.get("instruments"))
+            project.get(
+                "instruments",
+                metadata.get(
+                    "instruments",
+                    analyzer.get(
+                        "type",
+                        ms_analysis.get("Analyzer"),
+                    ),
+                ),
+            )
+        ),
+        "ionisation_source": metadata.get(
+            "ionisation_source",
+            ms_analysis.get("Ionisation_Source"),
+        ),
+        "analyzer_type": analyzer.get("type", ms_analysis.get("Analyzer")),
+        "analyzer_resolving_power": analyzer.get(
+            "resolvingPower",
+            _mapping(ms_analysis.get("Detector_Resolving_Power")).get(
+                "Resolving_Power"
+            ),
         ),
         "submitter": _display_identity(metadata.get("submitter")),
         "group": _display_identity(metadata.get("group")),

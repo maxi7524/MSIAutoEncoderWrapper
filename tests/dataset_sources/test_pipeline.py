@@ -30,6 +30,7 @@ class FakeDatasetSource(DatasetSource):
         self.seen_filters: Dict[str, Any] = {}
         self._accepted: List[Dict[str, Any]] = []
         self.annotation_options: Optional[Mapping[str, Any]] = None
+        self.download_calls: List[tuple[str, Path]] = []
         self._config = {}
 
     def get_available_filters(self) -> Dict[str, Any]:
@@ -68,6 +69,7 @@ class FakeDatasetSource(DatasetSource):
 
     def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
         target = Path(destination)
+        self.download_calls.append((dataset_id, target))
         target.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.fixture_path, target / f"{dataset_id}.imzML")
         shutil.copy2(self.fixture_path.with_suffix(".ibd"), target / f"{dataset_id}.ibd")
@@ -103,6 +105,36 @@ def test_discovery_and_download_are_separate_stages(
     assert (materialized[0] / "one.imzML").is_file()
     assert len(catalog.get_annotations(source="fake", dataset_id="one")) == 1
     assert source.annotation_options == {"annotation_fdr": 0.1}
+
+
+def test_materialization_reuses_workspace_source_before_provider_request(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A canonical source pair bypasses the provider download operation."""
+    source = FakeDatasetSource(msi_fixture_path)
+    datasets_dir = tmp_path / "datasets"
+    catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
+    selection = datasets_dir / "selections" / "candidate.json"
+    query_to_selection(
+        source=source,
+        filters={"organism": "mouse"},
+        catalog=catalog,
+        selection_path=selection,
+    )
+    retained = datasets_dir / "sources" / "fake" / "one"
+    retained.mkdir(parents=True)
+    shutil.copy2(msi_fixture_path, retained / "one.imzML")
+    shutil.copy2(msi_fixture_path.with_suffix(".ibd"), retained / "one.ibd")
+
+    materialize_selection(
+        source=source,
+        selection_path=selection,
+        datasets_dir=datasets_dir,
+        catalog=catalog,
+    )
+
+    assert source.download_calls == []
 
 
 def test_query_applies_generic_dataset_exclusions_outside_provider(
@@ -195,3 +227,72 @@ def test_low_disk_mode_downloads_merges_and_releases_staging_data(
     merged_annotations = annotation_reader.get_spectrum_annotations(5)
     assert merged_annotations[0]["sumFormula"] == "C6H12O6"
     assert merged_annotations[0]["source_spectrum_id"] == 5
+
+
+def test_download_merge_reuses_workspace_source_before_provider_request(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A canonical source pair bypasses provider download during merge."""
+    source = FakeDatasetSource(msi_fixture_path)
+    datasets_dir = tmp_path / "datasets"
+    catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
+    selection = datasets_dir / "selections" / "candidate.json"
+    query_to_selection(
+        source=source,
+        filters={"organism": "mouse"},
+        catalog=catalog,
+        selection_path=selection,
+    )
+    retained = datasets_dir / "sources" / "fake" / "one"
+    retained.mkdir(parents=True)
+    shutil.copy2(msi_fixture_path, retained / "one.imzML")
+    shutil.copy2(msi_fixture_path.with_suffix(".ibd"), retained / "one.ibd")
+
+    materialize_and_merge_selection(
+        source=source,
+        selection_path=selection,
+        datasets_dir=datasets_dir,
+        catalog=catalog,
+        output_path=datasets_dir / "merged" / "pilot" / "dataset.imzML",
+        merged_dataset_id="pilot",
+        row_width=3,
+    )
+
+    assert source.download_calls == []
+    assert (retained / "one.imzML").is_file()
+    assert (retained / "one.ibd").is_file()
+
+
+def test_download_merge_completes_partial_workspace_source_in_place(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """An incomplete canonical pair is passed alone to the provider adapter."""
+    source = FakeDatasetSource(msi_fixture_path)
+    datasets_dir = tmp_path / "datasets"
+    catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
+    selection = datasets_dir / "selections" / "candidate.json"
+    query_to_selection(
+        source=source,
+        filters={"organism": "mouse"},
+        catalog=catalog,
+        selection_path=selection,
+    )
+    retained = datasets_dir / "sources" / "fake" / "one"
+    retained.mkdir(parents=True)
+    shutil.copy2(msi_fixture_path, retained / "one.imzML")
+
+    materialize_and_merge_selection(
+        source=source,
+        selection_path=selection,
+        datasets_dir=datasets_dir,
+        catalog=catalog,
+        output_path=datasets_dir / "merged" / "pilot" / "dataset.imzML",
+        merged_dataset_id="pilot",
+        row_width=3,
+    )
+
+    assert source.download_calls == [("one", retained)]
+    assert (retained / "one.imzML").is_file()
+    assert (retained / "one.ibd").is_file()
