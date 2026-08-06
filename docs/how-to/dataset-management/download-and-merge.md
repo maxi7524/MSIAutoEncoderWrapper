@@ -2,6 +2,10 @@
 
 The combined operation downloads one selected source at a time, stores canonical
 metadata and annotations, appends selected spectra, and removes staging files.
+Standalone download reuse behavior is documented in
+[Download selected datasets](downloading-datasets.md); output geometry and
+reversible source mappings are described in
+[Merge and provenance internals](../../library-internals/dataset-management/merge-and-provenance.md).
 
 ## Purpose and available operations
 

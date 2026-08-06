@@ -1,7 +1,9 @@
 # Import a local METASPACE dataset
 
 Local import adds one imzML/ibd pair and paired METASPACE CSV exports to the
-canonical SQLite catalog.
+canonical SQLite catalog. The shared CSV-to-canonical normalization is
+described in
+[Annotation normalization internals](../../library-internals/dataset-management/annotation-normalization.md).
 
 ## Purpose and available operations
 
