@@ -23,7 +23,9 @@ one database operation so readers do not observe mixed generations.
 
 [`DatasetCatalog`](../../../src/msi_autoencoder_wrapper/dataset_management/catalog/sqlite_catalog.py)
 initializes schema and lookup indexes on construction. Dataset paths resolve to
-source or merged identity after normalization.
+source or merged identity after normalization. The METASPACE adapter's
+selection- and materialization-time writes to this catalog are described in
+[METASPACE provider](metaspace-provider.md).
 
 ### Filter annotations
 

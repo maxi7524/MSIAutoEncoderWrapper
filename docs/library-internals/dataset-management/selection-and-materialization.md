@@ -23,6 +23,8 @@ pair is reusable; a partial pair is not a valid final state.
 [`materialize_selection()`](../../../src/msi_autoencoder_wrapper/dataset_management/operations/download.py)
 validates the selection, optionally restricts IDs, calls the adapter, validates
 the imzML pair, retrieves annotations, and replaces canonical catalog state.
+The METASPACE adapter's source-download and annotation-persistence flow is
+detailed in [METASPACE provider](metaspace-provider.md).
 
 ### Preserve failures
 
