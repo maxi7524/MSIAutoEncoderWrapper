@@ -5,19 +5,19 @@ from __future__ import annotations
 from typing import Any, Dict, Mapping, Tuple
 
 
-# Public wrapper name -> exact ``SMInstance.datasets`` argument.  Keeping every
+# Public wrapper name -> exact ``SMInstance.datasets`` argument. Keeping every
 # translation here makes the provider boundary reviewable and prevents an
 # unknown wrapper option from being passed to METASPACE by accident.
 API_FILTER_FIELDS = {
     "name": "nameMask",
     "dataset_ids": "idMask",
-    "submitter_id": "submitter",
-    "group_id": "group",
-    "project_id": "project",
+    "submitter_id": "submitter_id",
+    "group_id": "group_id",
+    "project_id": "project_id",
     "polarity": "polarity",
-    "analyzer_type": "analyzerType",
-    "ionisation_source": "ionisationSource",
-    "maldi_matrix": "maldiMatrix",
+    "analyzer_type": "analyzer_type",
+    "ionisation_source": "ionisation_source",
+    "maldi_matrix": "maldi_matrix",
     "status": "status",
 }
 

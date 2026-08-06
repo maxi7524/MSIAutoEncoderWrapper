@@ -7,6 +7,7 @@ artifact provenance.
 
 - [Discovery flow](discovery-flow.md) — explorer, source filters, diagnostics, and selection artifacts.
 - [Provider boundary](provider-boundary.md) — shared adapter contract and provider-specific responsibilities.
+- [METASPACE provider](metaspace-provider.md) — METASPACE API capabilities, wrapper enrichment, statistics, progress, and persistence flow.
 - [Selection and materialization](selection-and-materialization.md) — lifecycle transitions from reviewed IDs to local pairs.
 - [Annotation normalization](annotation-normalization.md) — provider and CSV records to canonical molecular and spatial links.
 - [SQLite catalog](sqlite-catalog.md) — canonical tables, transactions, filters, and path identity.
@@ -18,6 +19,7 @@ artifact provenance.
 
 discovery-flow
 provider-boundary
+metaspace-provider
 selection-and-materialization
 annotation-normalization
 sqlite-catalog
