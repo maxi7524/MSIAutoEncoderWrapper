@@ -1,7 +1,9 @@
 # Inspect the dataset catalog
 
 `DatasetCatalog` is the canonical SQLite store for source datasets, molecular
-annotations, spectrum links, merged datasets, and source-index mappings.
+annotations, spectrum links, merged datasets, and source-index mappings. Table
+responsibilities, transactions, and path identity are described in
+[SQLite catalog internals](../../library-internals/dataset-management/sqlite-catalog.md).
 
 ## Purpose and available operations
 

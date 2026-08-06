@@ -1,7 +1,9 @@
 # Download selected datasets
 
 Materialization downloads imzML/ibd files for accepted selection records and
-updates their canonical catalog entries.
+updates their canonical catalog entries. The METASPACE source-download and
+reuse flow is described in
+[METASPACE provider internals](../../library-internals/dataset-management/metaspace-provider.md).
 
 ## Purpose and available operations
 
