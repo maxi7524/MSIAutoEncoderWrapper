@@ -33,4 +33,6 @@ and replaces mappings after successful writing.
 
 The combined operation stages one source, normalizes annotations, appends its
 selection, and cleans staging. Partial merged files are removed on failure;
-canonical source annotations remain in SQLite.
+canonical source annotations remain in SQLite. For METASPACE, source download
+and annotation retrieval within this stream are described in
+[METASPACE provider](metaspace-provider.md).

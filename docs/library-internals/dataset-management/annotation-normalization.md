@@ -22,7 +22,8 @@ METASPACE or PRIDE API logic.
 
 [`normalize_spectrum_annotations()`](../../../src/msi_autoencoder_wrapper/dataset_management/normalization/spatial_annotations.py)
 maps one-based imzML coordinates to zero-based provider image indices. Finite
-positive pixels create spectrum links.
+positive pixels create spectrum links. Provider ion images are retrieved as
+described in [METASPACE provider](metaspace-provider.md#ion-images).
 
 ### Normalize paired CSV
 
