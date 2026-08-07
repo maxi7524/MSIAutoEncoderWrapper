@@ -15,6 +15,7 @@ def plot_class_maps(
     model_maps: Mapping[str, Mapping[str, np.ndarray]],
     class_label: str,
     theme: VisualizationTheme | str | None,
+    metrics_by_model: Mapping[str, Mapping[str, float]] | None = None,
 ):
     """Plot ground truth, probability, and signed correctness per model."""
     resolved = resolve_theme(theme)
@@ -36,6 +37,14 @@ def plot_class_maps(
             value_range=(0.0, 1.0),
             theme=resolved,
         )
+        metrics = (metrics_by_model or {}).get(model_name)
+        if metrics:
+            summary = " | ".join(
+                f"{name}={value:.3f}"
+                for name, value in metrics.items()
+                if name not in {"class_index", "positive_samples"}
+            )
+            axes[row, 2].set_xlabel(summary, fontsize=resolved.tick_font_size)
         plot_spatial_image(
             maps["probability"],
             title=f"{model_name}: probability",
@@ -46,7 +55,7 @@ def plot_class_maps(
         )
         plot_spatial_image(
             maps["signed_assignment"],
-            title=f"{model_name}: green=true region, red=false region",
+            title=f"{model_name}: green=correct, red=incorrect confidence",
             ax=axes[row, 2],
             cmap=resolved.correctness_colormap,
             value_range=(-1.0, 1.0),

@@ -57,7 +57,8 @@ class HeadAnalysis:
             target_field, target_type = self._target_binding(model_name, head_name)
             if target_type != "multi_label":
                 raise_validation_error(
-                    "HeadAnalysis", "Per-class maps currently require multi_label targets."
+                    "HeadAnalysis",
+                    "Per-class maps currently require multi_label targets.",
                 )
             probabilities = probabilities_from_logits(
                 prepared.head_outputs[head_name], target_type
@@ -66,8 +67,11 @@ class HeadAnalysis:
                 probabilities,
                 prepared.targets[target_field],
                 threshold,
+                prepared.target_masks.get(target_field),
             )
-        return results if self.owner.is_multi else results[self.owner.default_model_name]
+        return (
+            results if self.owner.is_multi else results[self.owner.default_model_name]
+        )
 
     def class_maps(
         self,
@@ -88,11 +92,29 @@ class HeadAnalysis:
                 if targets.ndim > 1
                 else targets == class_index
             )
+            available = np.asarray(
+                prepared.target_masks.get(
+                    target_field,
+                    np.ones(len(truth), dtype=bool),
+                ),
+                dtype=bool,
+            ).reshape(-1)
             predicted = probabilities >= threshold
-            signed = np.where(truth, probabilities, -probabilities)
+            # Signed correctness confidence
+            ## Correct positive and correct negative decisions are green. False
+            ## positives and false negatives are red, with color magnitude equal
+            ## to the confidence assigned to the predicted decision.
+            correct = predicted == truth
+            decision_confidence = np.where(
+                predicted, probabilities, 1.0 - probabilities
+            )
+            signed = np.where(correct, decision_confidence, -decision_confidence)
+            ground_truth_values = truth.astype(float)
+            ground_truth_values[~available] = np.nan
+            signed[~available] = np.nan
             maps[model_name] = {
                 "ground_truth": self.owner.map_prepared_rows(
-                    prepared, truth.astype(float)
+                    prepared, ground_truth_values
                 ).values,
                 "probability": self.owner.map_prepared_rows(
                     prepared, probabilities
@@ -145,11 +167,17 @@ class HeadAnalysis:
             int(class_index): self.class_maps(head_name, int(class_index), threshold)
             for class_index in class_indices
         }
+        metrics_by_model = self.class_metrics(head_name, threshold)
+        if not self.owner.is_multi:
+            metrics_by_model = {
+                self.owner.default_model_name: metrics_by_model,
+            }
         return plot_class_overviews(
             maps,
             labels,
             class_indices,
             self.owner.theme,
+            metrics_by_model,
         )
 
     def overview(
@@ -169,12 +197,12 @@ class HeadAnalysis:
 
     def _target_binding(self, model_name: str, head_name: str) -> tuple[str, str]:
         runtime = self.owner.models[model_name]
-        target_field = getattr(runtime.model, "head_specs", {}).get(
-            head_name, {}
-        ).get("target_field")
-        target_spec = getattr(runtime.dataset, "target_specs", {}).get(
-            target_field, {}
+        target_field = (
+            getattr(runtime.model, "head_specs", {})
+            .get(head_name, {})
+            .get("target_field")
         )
+        target_spec = getattr(runtime.dataset, "target_specs", {}).get(target_field, {})
         if not target_field or "type" not in target_spec:
             raise_validation_error(
                 "HeadAnalysis", f"Head '{head_name}' has no valid target binding."

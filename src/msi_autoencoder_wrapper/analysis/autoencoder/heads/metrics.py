@@ -38,7 +38,9 @@ def evaluate_head(
 ) -> Dict[str, Any]:
     """Evaluate one single-label or multi-label classification head."""
     if not 0.0 <= threshold <= 1.0:
-        raise_validation_error("HeadAnalysis", "threshold must be between zero and one.")
+        raise_validation_error(
+            "HeadAnalysis", "threshold must be between zero and one."
+        )
     available = (
         np.ones(len(targets), dtype=bool)
         if mask is None
@@ -56,10 +58,14 @@ def evaluate_head(
                 balanced_accuracy_score(selected_targets, predicted)
             ),
             "macro_precision": float(
-                precision_score(selected_targets, predicted, average="macro", zero_division=0)
+                precision_score(
+                    selected_targets, predicted, average="macro", zero_division=0
+                )
             ),
             "macro_recall": float(
-                recall_score(selected_targets, predicted, average="macro", zero_division=0)
+                recall_score(
+                    selected_targets, predicted, average="macro", zero_division=0
+                )
             ),
             "macro_f1": float(
                 f1_score(selected_targets, predicted, average="macro", zero_division=0)
@@ -74,8 +80,12 @@ def evaluate_head(
     predicted = probabilities >= threshold
     binary_targets = selected_targets.astype(bool)
     return {
-        "micro_f1": float(f1_score(binary_targets, predicted, average="micro", zero_division=0)),
-        "macro_f1": float(f1_score(binary_targets, predicted, average="macro", zero_division=0)),
+        "micro_f1": float(
+            f1_score(binary_targets, predicted, average="micro", zero_division=0)
+        ),
+        "macro_f1": float(
+            f1_score(binary_targets, predicted, average="macro", zero_division=0)
+        ),
         "micro_precision": float(
             precision_score(binary_targets, predicted, average="micro", zero_division=0)
         ),
@@ -93,10 +103,17 @@ def per_class_metrics(
     probabilities: np.ndarray,
     targets: np.ndarray,
     threshold: float,
+    mask: np.ndarray | None = None,
 ) -> list[Dict[str, float]]:
     """Return multi-label metrics for every output class."""
-    truth = np.asarray(targets).astype(bool)
-    predicted = np.asarray(probabilities) >= threshold
+    available = (
+        np.ones(len(targets), dtype=bool)
+        if mask is None
+        else np.asarray(mask, dtype=bool).reshape(-1)
+    )
+    truth = np.asarray(targets)[available].astype(bool)
+    selected_probabilities = np.asarray(probabilities)[available]
+    predicted = selected_probabilities >= threshold
     records: list[Dict[str, float]] = []
     for class_index in range(truth.shape[1]):
         class_truth = truth[:, class_index]
@@ -113,7 +130,9 @@ def per_class_metrics(
                 ),
                 "f1": float(f1_score(class_truth, class_prediction, zero_division=0)),
                 "average_precision": float(
-                    average_precision_score(class_truth, probabilities[:, class_index])
+                    average_precision_score(
+                        class_truth, selected_probabilities[:, class_index]
+                    )
                 ),
             }
         )

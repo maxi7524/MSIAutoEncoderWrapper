@@ -1,6 +1,6 @@
 {
   "merged_dataset_id": "metaspace-pilot",
-  "output_path": "../../../workspace/datasets/merged/metaspace-pilot/dataset.imzML",
+  "output_path": "../../../data/tutorial_workspace/datasets/merged/metaspace-pilot/dataset.imzML",
   "row_width": 128,
   "unannotated_ratio": null,
   "unannotated_amount": null,
@@ -9,7 +9,7 @@
     {
       "source": "metaspace",
       "dataset_id": "replace-with-dataset-id",
-      "imzml_path": "../../../workspace/datasets/sources/metaspace/replace-with-dataset-id/replace-with-dataset-id.imzML",
+      "imzml_path": "../../../data/tutorial_workspace/datasets/sources/metaspace/replace-with-dataset-id/replace-with-dataset-id.imzML",
       "spectrum_ids": [0, 1, 2]
     }
   ]

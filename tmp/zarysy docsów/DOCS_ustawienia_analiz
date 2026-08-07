@@ -1,0 +1,104 @@
+
+Najwięcej pamięci zajmują pełne macierze `inputs`, `reconstructions`, `latents` i `head_outputs`. Samo zmniejszenie `batch_size` ogranicza VRAM podczas inferencji, ale nie RAM zajmowany przez końcowy cache.
+
+Dla większości analiz użyj:
+
+```python
+prepared = analysis.prepare(
+    retain={
+        'inputs',
+        'reconstructions',
+        'targets',
+    },
+    batch_size=2,
+    loader_options={
+        'num_workers': 0,
+        'pin_memory': False,
+    },
+)
+```
+
+To pomija:
+
+```python
+'latents'
+'head_outputs'
+```
+
+Jeżeli analizujesz tylko rekonstrukcję:
+
+```python
+prepared = analysis.prepare(
+    retain={
+        'inputs',
+        'reconstructions',
+    },
+    batch_size=2,
+    loader_options={
+        'num_workers': 0,
+        'pin_memory': False,
+    },
+)
+```
+
+Do analizy latentu wykonaj osobne przygotowanie:
+
+```python
+prepared = analysis.prepare(
+    retain={
+        'latents',
+        'targets',
+    },
+    batch_size=2,
+    loader_options={
+        'num_workers': 0,
+        'pin_memory': False,
+    },
+)
+```
+
+Do analizy headów:
+
+```python
+prepared = analysis.prepare(
+    retain={
+        'head_outputs',
+        'targets',
+    },
+    batch_size=2,
+    loader_options={
+        'num_workers': 0,
+        'pin_memory': False,
+    },
+)
+```
+
+Przed uruchomieniem możesz sprawdzić szacowane zużycie:
+
+```python
+retain = {
+    'inputs',
+    'reconstructions',
+    'targets',
+}
+
+estimate = analysis.estimate_prepare_size(retain=retain)
+
+print(f'Estimated cache: {estimate.total_mebibytes:.2f} MiB')
+print(estimate.retained_bytes)
+```
+
+Ważne: obecne analizy widm, obrazów jonowych i rozkładu błędu po m/z wymagają jednocześnie `inputs` i `reconstructions`. Nie są jeszcze liczone strumieniowo. Najbezpieczniejsza konfiguracja dla aktualnego notebooka to:
+
+```python
+prepared = analysis.prepare(
+    retain={'inputs', 'reconstructions', 'targets'},
+    batch_size=2,
+    loader_options={
+        'num_workers': 0,
+        'pin_memory': False,
+    },
+)
+```
+
+Nie używaj domyślnego zestawu `retain`, ponieważ zachowuje wszystkie duże wyniki jednocześnie.

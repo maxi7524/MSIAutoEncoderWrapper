@@ -1,0 +1,638 @@
+#TODO - to jest odpoweidź na promta któy to tłumaczy, trzeba by to odpowiednio przepisać.
+
+
+
+
+Nie. Model nie dostaje całego `batch`. To kluczowe rozróżnienie.
+
+W aktualnej pętli:
+
+```python
+spectra_tensor = batch[1].to(device)
+model_outputs = model(spectra_tensor)
+loss = composite_loss(model_outputs, batch)
+```
+
+Czyli:
+
+- model dostaje tylko `batch[1]`, czyli tensor widm;
+- funkcje kosztu dostają cały `batch`, więc mają dostęp do targetów;
+- head jest częścią modelu i dostaje latent;
+- head nie widzi targetów;
+- konkretny loss łączy wyjście konkretnego heada z konkretnym targetem.
+
+## Dokładny przebieg wykonania
+
+### 1. DataLoader wywołuje `PixelDataset.__getitem__`
+
+Podczas:
+
+```python
+for step_idx, batch in enumerate(dataloader):
+```
+
+PyTorch dla każdego indeksu w batchu wykonuje:
+
+```python
+dataset.__getitem__(index)
+```
+
+Implementacja znajduje się w [pixel_dataset.py](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/models/datasets/strategies/pixel_dataset.py:105).
+
+Na końcu `__getitem__` wywołuje:
+
+```python
+return self._sample(
+    idx,
+    torch.from_numpy(self._normalize(mapped_values)),
+)
+```
+
+[pixel_dataset.py:140](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/models/datasets/strategies/pixel_dataset.py:140)
+
+Jeśli skonfigurowano targety, `_sample()` zwraca:
+
+```python
+return spectrum_id, spectrum, targets
+```
+
+[pixel_dataset.py:202](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/models/datasets/strategies/pixel_dataset.py:202)
+
+Dla:
+
+```python
+target_fields=["molecule", "disease"]
+```
+
+pojedynczy sample powinien wyglądać tak:
+
+```python
+(
+    spectrum_id,
+    spectrum,
+    {
+        "molecule": molecule_multi_hot,
+        "disease": disease_class_index,
+    },
+)
+```
+
+### 2. DataLoader składa sample w batch
+
+PyTorch wykonuje standardowy `default_collate`.
+
+Z wielu próbek:
+
+```python
+(
+    0,
+    spectrum_0,
+    {
+        "molecule": molecule_target_0,
+        "disease": disease_target_0,
+    },
+)
+```
+
+powstaje:
+
+```python
+batch = (
+    spectrum_ids,
+    spectra,
+    {
+        "molecule": molecule_targets,
+        "disease": disease_targets,
+    },
+)
+```
+
+Przy `batch_size=16`:
+
+```python
+batch[0].shape
+# [16]
+
+batch[1].shape
+# [16, number_of_bins]
+
+batch[2]["molecule"].shape
+# [16, molecule_class_count]
+
+batch[2]["disease"].shape
+# [16]
+```
+
+### 3. Trainer wyciąga tylko widma
+
+To jest konkretnie tutaj:
+
+[base_trainer.py:166](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/engine/base_trainer.py:166)
+
+```python
+for step_idx, batch in enumerate(dataloader):
+```
+
+Następnie:
+
+[base_trainer.py:182](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/engine/base_trainer.py:182)
+
+```python
+spectra_tensor = batch[1].to(global_device)
+```
+
+I dopiero:
+
+[base_trainer.py:188](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/engine/base_trainer.py:188)
+
+```python
+model_outputs = model(spectra_tensor)
+```
+
+Zatem model dostaje:
+
+```python
+spectra_tensor
+```
+
+Nie dostaje:
+
+```python
+batch[0]
+batch[2]
+```
+
+To funkcje kosztu dostają cały batch:
+
+[base_trainer.py:198](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/engine/base_trainer.py:198)
+
+```python
+loss, loss_logs = composite_loss(
+    model_outputs=model_outputs,
+    batch_data=batch,
+)
+```
+
+## Gdzie wywoływane są heady
+
+Model dostaje widma:
+
+```python
+model_outputs = model(spectra_tensor)
+```
+
+W `forward()` encoder tworzy latent:
+
+[base_architecture_autoencoder.py:66](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/models/architectures/types/autoencoders/base_architecture_autoencoder.py:66)
+
+```python
+z = self.encoder(x)
+outputs["latent_space"] = z
+```
+
+Następnie model iteruje po wszystkich headach:
+
+```python
+for head_name, head_module in self.heads.items():
+    outputs[f"head_{head_name}"] = head_module(z)
+```
+
+[base_architecture_autoencoder.py:79](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/models/architectures/types/autoencoders/base_architecture_autoencoder.py:79)
+
+Gdyby model miał dwa heady:
+
+```python
+self.heads = nn.ModuleDict({
+    "molecule": molecule_head,
+    "disease": disease_head,
+})
+```
+
+to forward zwróciłby:
+
+```python
+{
+    "latent_space": z,
+    "reconstruction": reconstruction,
+    "projection": projection,
+    "head_molecule": molecule_head(z),
+    "head_disease": disease_head(z),
+}
+```
+
+To jest miejsce, w którym heady faktycznie są wykonywane.
+
+## Gdzie loss wybiera konkretny head
+
+Dla molekuł konfiguracja zawiera:
+
+```python
+"params": {
+    "head_name": "molecule",
+    "target_field": "molecule",
+}
+```
+
+Konstruktor `MultiLabelBCELoss` zapisuje oba identyfikatory.
+
+Następnie:
+
+```python
+self.output_key
+```
+
+dla:
+
+```python
+head_name="molecule"
+```
+
+zwraca:
+
+```text
+head_molecule
+```
+
+W `forward()` lossu:
+
+[multilabel_bce_loss.py:66](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/criterions/autoencoder/head/multilabel_bce_loss.py:66)
+
+wykonywane jest:
+
+```python
+logits = model_outputs[self.output_key]
+```
+
+czyli:
+
+```python
+logits = model_outputs["head_molecule"]
+```
+
+Target jest pobierany tutaj:
+
+```python
+targets = batch_data[2][self.target_field]
+```
+
+czyli:
+
+```python
+targets = batch[2]["molecule"]
+```
+
+Potem:
+
+```python
+BCEWithLogitsLoss(
+    model_outputs["head_molecule"],
+    batch[2]["molecule"],
+)
+```
+
+To właśnie parametry:
+
+```python
+head_name
+target_field
+```
+
+spinają konkretny head z konkretnym targetem.
+
+## Jak konfiguracja lossów trafia do pętli
+
+W konfiguracji treningowej masz:
+
+```python
+"criterions": {
+    "head": {
+        "molecule_bce": {
+            "target": "MultiLabelBCELoss",
+            "weight": 0.25,
+            "params": {
+                "head_name": "molecule",
+                "target_field": "molecule",
+            },
+        }
+    }
+}
+```
+
+Trainer pobiera ten fragment:
+
+[base_trainer.py:107](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/engine/base_trainer.py:107)
+
+```python
+criterions_setup = phase_config.get("criterions", {})
+```
+
+Następnie manager buduje obiekty lossów:
+
+[criterions_manager.py:203](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/criterions/criterions_manager.py:203)
+
+```python
+for criterion_type, typed_setup in ...:
+```
+
+Dla każdego wpisu wykonuje:
+
+```python
+_build_loss_component(...)
+```
+
+[criterions_manager.py:217](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/criterions/criterions_manager.py:217)
+
+Tutaj pobiera:
+
+```python
+target = config_ledger["target"]
+weight = config_ledger["weight"]
+params = config_ledger["params"]
+```
+
+[criterions_manager.py:241](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/criterions/criterions_manager.py:241)
+
+A następnie tworzy:
+
+```python
+MultiLabelBCELoss(
+    head_name="molecule",
+    target_field="molecule",
+)
+```
+
+[criterions_manager.py:259](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/training/criterions/criterions_manager.py:259)
+
+## Co się dzieje przy wielu targetach
+
+Dataset już obsługuje wiele targetów:
+
+```python
+target_fields=["molecule", "disease"]
+```
+
+Pętla znajduje się tutaj:
+
+[pixel_dataset.py:179](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/models/datasets/strategies/pixel_dataset.py:179)
+
+```python
+for field in self.target_fields:
+```
+
+Dla molekuł tworzy multi-hot:
+
+```python
+targets["molecule"] = tensor([0., 1., 0., ...])
+```
+
+Dla `disease` tworzy pojedynczy indeks:
+
+```python
+targets["disease"] = tensor(2, dtype=torch.long)
+```
+
+DataLoader automatycznie składa:
+
+```python
+batch[2] = {
+    "molecule": tensor shape [batch, molecule_classes],
+    "disease": tensor shape [batch],
+}
+```
+
+To działa już teraz na poziomie datasetu.
+
+## Czego obecna implementacja jeszcze nie obsługuje
+
+Aktualna konfiguracja modelu nie obsługuje poprawnie wielu nazwanych headów.
+
+Obecnie konfigurujemy:
+
+```python
+wrapper.models_manager.set_component(
+    "head",
+    "LinearClassificationHead",
+    ...
+)
+```
+
+`set_component()` zapisuje komponent pod:
+
+```python
+self._building_buffer[category]
+```
+
+czyli:
+
+```python
+self._building_buffer["head"]
+```
+
+[architecture_proxy.py:240](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/core/mixins/models_manager/proxies/architecture_proxy.py:240)
+
+Jeśli wywołasz drugi raz:
+
+```python
+set_component("head", ...)
+```
+
+to drugi head nadpisze pierwszy.
+
+Dodatkowo podczas kompilacji pobierany jest tylko singular:
+
+```python
+for key in ["encoder", "decoder", "head", "projector"]:
+```
+
+[architecture_proxy.py:363](/home/maxi7524/repositories/MSIAutoEncoderWrapper/src/msi_autoencoder_wrapper/core/mixins/models_manager/proxies/architecture_proxy.py:363)
+
+A potem obecny compatibility hack zamienia pojedynczy `head` na:
+
+```python
+{"molecule": resolved_components["head"]}
+```
+
+Czyli nazwa `molecule` jest obecnie zaszyta na stałe.
+
+Wniosek: obecna implementacja działa dla jednego heada molekularnego, ale nie jest jeszcze poprawnym API dla:
+
+```text
+molecule head
++
+disease head
+```
+
+## Jak powinno to zostać zaimplementowane
+
+Potrzebujemy publicznej metody:
+
+```python
+wrapper.models_manager.set_head(
+    name="molecule",
+    strategy="LinearClassificationHead",
+    latent_dim=128,
+    output_dim=22,
+)
+```
+
+oraz:
+
+```python
+wrapper.models_manager.set_head(
+    name="disease",
+    strategy="LinearClassificationHead",
+    latent_dim=128,
+    output_dim=4,
+)
+```
+
+Building buffer powinien wtedy przechowywać:
+
+```python
+self._building_buffer["heads"] = {
+    "molecule": {
+        "target": "LinearClassificationHead",
+        "kwargs": {
+            "latent_dim": 128,
+            "output_dim": 22,
+        },
+    },
+    "disease": {
+        "target": "LinearClassificationHead",
+        "kwargs": {
+            "latent_dim": 128,
+            "output_dim": 4,
+        },
+    },
+}
+```
+
+Po kompilacji:
+
+```python
+model.heads = nn.ModuleDict({
+    "molecule": ...,
+    "disease": ...,
+})
+```
+
+Model zwracałby:
+
+```python
+model_outputs["head_molecule"]
+model_outputs["head_disease"]
+```
+
+Lossy powinny wyglądać tak:
+
+```python
+"head": {
+    "molecule_bce": {
+        "target": "MultiLabelBCELoss",
+        "weight": 0.25,
+        "params": {
+            "head_name": "molecule",
+            "target_field": "molecule",
+        },
+    },
+    "disease_ce": {
+        "target": "ClassificationCrossEntropyLoss",
+        "weight": 0.5,
+        "params": {
+            "head_name": "disease",
+            "target_field": "disease",
+        },
+    },
+}
+```
+
+Wtedy:
+
+```text
+MultiLabelBCELoss
+    head_molecule ↔ batch[2]["molecule"]
+
+ClassificationCrossEntropyLoss
+    head_disease ↔ batch[2]["disease"]
+```
+
+Obecnie drugiego lossu `ClassificationCrossEntropyLoss` też jeszcze nie ma.
+
+## Jak analizy identyfikują klasy
+
+Model przechowuje heady:
+
+```python
+model.heads["molecule"]
+model.heads["disease"]
+```
+
+Dataset przechowuje mapowania:
+
+```python
+dataset.get_class_mappings()
+```
+
+Przykład:
+
+```python
+class_mappings = dataset.get_class_mappings()
+
+molecule_mapping = class_mappings["molecule"]
+disease_mapping = class_mappings["disease"]
+```
+
+Odwrócenie mapowania:
+
+```python
+molecule_labels = {
+    class_index: label
+    for label, class_index in molecule_mapping.items()
+}
+
+disease_labels = {
+    class_index: label
+    for label, class_index in disease_mapping.items()
+}
+```
+
+Podczas analizy:
+
+```python
+outputs = model(spectra)
+
+molecule_probabilities = torch.sigmoid(
+    outputs["head_molecule"]
+)
+
+disease_probabilities = torch.softmax(
+    outputs["head_disease"],
+    dim=1,
+)
+```
+
+To, którą mapę klas należy zastosować, wynika z tej samej nazwy:
+
+```text
+head_molecule → class_mappings["molecule"]
+head_disease  → class_mappings["disease"]
+```
+
+## Odpowiedź wprost
+
+Aktualnie miejsca zarządzające tym są następujące:
+
+| Odpowiedzialność | Miejsce |
+|---|---|
+| Jakie targety tworzyć | `PixelDataset(target_fields=...)` |
+| Tekst → indeks klasy | `PixelDataset.class_mappings` |
+| Target konkretnego piksela | `PixelDataset._sample()` |
+| Składanie batcha | PyTorch `DataLoader/default_collate` |
+| Wejście do modelu | `batch[1]` w `BaseTrainer` |
+| Wykonanie headów | `MSIBaseAutoencoderArchitecture.forward()` |
+| Wybór wyjścia heada | `head_name` w head lossie |
+| Wybór targetu | `target_field` w head lossie |
+| Sumowanie lossów | `CompositeLoss` |
+| Powiązanie nazw z analizą | `dataset.get_class_mappings()` |
+
+I najważniejsze: obecny kod ma tylko jeden konfigurowalny head, nazwany na sztywno `molecule`. Żeby naprawdę obsłużyć molekuły i `disease`, trzeba teraz przebudować konfigurację z pojedynczego `head` na kolekcję `heads` oraz dodać klasyfikacyjny loss typu cross-entropy dla targetów jednoklasowych.

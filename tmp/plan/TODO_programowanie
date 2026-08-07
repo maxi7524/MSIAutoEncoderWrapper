@@ -1,0 +1,45 @@
+
+
+## Do implementacji
+
+#ROBIONE 
+### Moduł od ładowna iwelu zdjęc i zarżadzania nimi !!! 
+#ROBIONE 
+### Dodatkowe model które działąja na wielu zdjęciach 
+zrobić jaiś prosty model dyfuzyjny który na tym latencie działa, żeby już miec to zrobione 
+
+### analizy latetnu - tego brakue 
+
+### moduł do zarządzania runnami !!!!
+(tak ajk w pepcompasie) że twtdy yaml'ami te model byśmy definioalo bez notebooków (wiem że są notebooki i to jest wygądne, alezby na serwerze to zautoamtyzować do testów potrzeubjemy moduł od runnów. Noteboki i tak są pomocne jak chemy coś tymi modelami robić. 
+
+### Dokumetnacja - zrobić dobra kdokumetnaje  
+
+## Do poprawienia
+
+#ROBIONE 
+### Config module
+
+Trzeba zrobić ogólny moduł od konkfiugrajci tesztyskrtie i zmieniac zbieranei tych configów zebyto miało sens, inaczej to jest bardzo kolizyjne
+- WAŻNe - trzeba to zrobić przed większymi testami
+
+### Optymalność !!!!
+- czy z m2aia można to jeszzce przyspieszyć (aktuialny pipeline jest optymalny) 
+
+### Analizy  !!!!
+Jak dokładnie t eanalizy zrobić, żęby to ładnei gląało .. (teraz jest bardzio brzko) 
+- brakuje jeszcze analiz zachowania latentu) 
+- #TODO - analiza tych binerów i inverse binnerów (to jest wazne pod bibliotek)
+
+
+### Tutorial 
+poprawić tutoriale 
+
+
+### Docsy z dataset mangera - tam jest problem z brakiek dore kontesktu, nie opisuej fragmenty z filtrami ...
+Progamistycznie powinien wylapywąc wszystko 
+
+
+
+### Spójność !!! 
+trzeba sprawdzi wszystkie 

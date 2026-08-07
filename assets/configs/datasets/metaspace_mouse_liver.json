@@ -1,0 +1,12 @@
+{
+  "organism": "Mouse",
+  "name": "liver",
+  "organism_part": "Liver",
+  "polarity": "Negative",
+  "condition": "Wild type",
+  "annotation_fdr": 0.1,
+  "min_annotation_count": 1,
+  "include_molecule_stats": true,
+  "include_spatial_annotation_stats": true,
+  "exclude_dataset_ids": []
+}

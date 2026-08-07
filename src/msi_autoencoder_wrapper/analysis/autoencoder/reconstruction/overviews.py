@@ -9,7 +9,6 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from ....visualization import VisualizationTheme, resolve_theme
-from ....visualization.spectra import plot_spectrum_comparison
 
 
 def plot_selected_spectra(
@@ -21,8 +20,9 @@ def plot_selected_spectra(
     selection_name: str,
     clip_reconstruction: bool,
     theme: VisualizationTheme | str | None,
+    labels: Mapping[int, str] | None = None,
 ) -> tuple[Figure, np.ndarray]:
-    """Create aligned signal/residual panels for selected spectra.
+    """Create one mirrored reconstruction panel per model and spectrum.
 
     :param mass_axis: Shared binner m/z axis.
     :type mass_axis: numpy.ndarray
@@ -44,32 +44,78 @@ def plot_selected_spectra(
     :rtype: tuple[matplotlib.figure.Figure, numpy.ndarray]
     """
     resolved = resolve_theme(theme)
+    model_names = list(reconstructions)
     figure, axes = plt.subplots(
-        2,
+        2 * len(model_names),
         len(spectrum_ids),
-        figsize=(6 * len(spectrum_ids), 8),
+        figsize=(6 * len(spectrum_ids), 6 * len(model_names)),
         dpi=resolved.figure_dpi,
         sharex="col",
         squeeze=False,
-        gridspec_kw={"height_ratios": (2.0, 1.0)},
+        gridspec_kw={"height_ratios": tuple((2.0, 1.0) * len(model_names))},
     )
-    for column, spectrum_id in enumerate(spectrum_ids):
-        model_values = {
-            model_name: values[int(spectrum_id)]
-            for model_name, values in reconstructions.items()
-        }
-        plot_spectrum_comparison(
-            mass_axis,
-            input_spectra[int(spectrum_id)],
-            model_values,
-            axes=(axes[0, column], axes[1, column]),
-            clip_reconstruction=clip_reconstruction,
-            theme=resolved,
-        )
-        axes[0, column].set_title(
-            f"{selection_name}: spectrum {spectrum_id}\n"
-            f"score={metric_values[int(spectrum_id)]:.3e}",
-            loc=resolved.title_location,
-        )
+    for model_index, model_name in enumerate(model_names):
+        color = resolved.color_for_model(model_name, model_index)
+        signal_row = 2 * model_index
+        residual_row = signal_row + 1
+        for column, spectrum_id in enumerate(spectrum_ids):
+            original = np.asarray(input_spectra[int(spectrum_id)])
+            reconstruction = np.asarray(reconstructions[model_name][int(spectrum_id)])
+            displayed = (
+                np.clip(reconstruction, 0.0, None)
+                if clip_reconstruction
+                else reconstruction
+            )
+            residual = original - reconstruction
+
+            # Mirrored spectrum comparison
+            ## Negation is an intentional display operation: both physical
+            ## spectra remain non-negative while upper/lower placement removes
+            ## the need for competing colors inside one model panel.
+            signal_axis = axes[signal_row, column]
+            residual_axis = axes[residual_row, column]
+            signal_axis.plot(
+                mass_axis,
+                original,
+                color=color,
+                alpha=resolved.overlapping_signal_alpha,
+                linewidth=resolved.input_line_width,
+                label="input (+)",
+            )
+            signal_axis.plot(
+                mass_axis,
+                -displayed,
+                color=color,
+                alpha=resolved.overlapping_signal_alpha,
+                linewidth=resolved.reconstruction_line_width,
+                label="mirrored reconstruction (-)",
+            )
+            residual_axis.plot(
+                mass_axis,
+                residual,
+                color=color,
+                alpha=resolved.residual_alpha,
+                linewidth=resolved.residual_line_width,
+                label="input - reconstruction",
+            )
+            residual_limit = float(np.max(np.abs(residual), initial=0.0))
+            if residual_limit > 0.0:
+                residual_axis.set_ylim(-residual_limit, residual_limit)
+            for axis in (signal_axis, residual_axis):
+                axis.axhline(
+                    0.0,
+                    color=resolved.baseline_color,
+                    linewidth=resolved.reference_line_width,
+                )
+                axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
+                axis.legend(fontsize=resolved.tick_font_size)
+            signal_axis.set_ylabel(f"{model_name}\nintensity")
+            residual_axis.set(xlabel="m/z", ylabel="residual")
+            label_text = f"\n{labels[int(spectrum_id)]}" if labels else ""
+            signal_axis.set_title(
+                f"{selection_name}: spectrum {spectrum_id}\n"
+                f"score={metric_values[int(spectrum_id)]:.3e}{label_text}",
+                loc=resolved.title_location,
+            )
     figure.tight_layout()
     return figure, axes
