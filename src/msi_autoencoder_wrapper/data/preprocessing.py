@@ -47,7 +47,7 @@ class BatchPreprocessor:
                 intensities=raw_values,
                 normalization_trace=raw_trace,
             )
-        dense = self.binner.transform_batch(prepared)
+        dense = self.binner.transform(prepared)
         trace = raw_trace
         if normalization is not None and normalization.stage == "binned":
             spectra, trace = normalization.transform(dense.spectra)

@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from scipy.stats import binned_statistic
 from ..base_binner import MSIBaseBinner
 from ..binners_manager import BinnerManager
 from typing import Any, Optional
@@ -18,7 +17,7 @@ class LinearBinning(MSIBaseBinner):
 
     # Binner configuration and axis construction
     ## __init__ setup and validation
-    def __init__(self, bin_step: float, x_min: Optional[float] = None, x_max: Optional[float] = None, active_context: Optional[Any] = None) -> None:
+    def __init__(self, bin_step: float, x_min: Optional[float] = None, x_max: Optional[float] = None, aggregation: str = "sum", active_context: Optional[Any] = None) -> None:
         """Initialize the binning interval and construct the shared output axis.
 
         Explicit boundaries take precedence over boundaries exposed by the active
@@ -69,9 +68,16 @@ class LinearBinning(MSIBaseBinner):
         self.x_min = float(resolved_x_min)
         self.x_max = float(resolved_x_max)
         self.bin_step = float(bin_step)
+        if not np.isfinite(self.bin_step) or self.bin_step <= 0:
+            raise_validation_error("LinearBinning", "bin_step must be finite and positive.")
+        if not np.isfinite(self.x_min) or not np.isfinite(self.x_max) or self.x_min >= self.x_max:
+            raise_validation_error("LinearBinning", "x_min and x_max must be finite and x_min < x_max.")
+        if aggregation not in {"sum", "mean"}:
+            raise_validation_error("LinearBinning", "aggregation must be 'sum' or 'mean'.")
+        self.aggregation = aggregation
 
         #### Preserve the effective configuration for reconstruction or serialization
-        self._config = {"x_min": self.x_min, "x_max": self.x_max, "bin_step": self.bin_step}
+        self._config = {"x_min": self.x_min, "x_max": self.x_max, "bin_step": self.bin_step, "aggregation": self.aggregation}
 
         ### Construct the regular binning axis
 
@@ -82,46 +88,8 @@ class LinearBinning(MSIBaseBinner):
         self.grid = (self.bin_edges[:-1] + self.bin_edges[1:]) / 2.0
 
     # Spectrum transformation
-    ## Transform one spectrum represented by NumPy arrays
-    def __call__(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        """Bin one irregular spectrum onto the configured regular axis.
-
-        :param xs: One-dimensional m/z coordinates.
-        :type xs: numpy.ndarray
-        :param ys: Intensities corresponding to ``xs``.
-        :type ys: numpy.ndarray
-        :return: Summed intensity for every configured bin.
-        :rtype: numpy.ndarray
-        """
-        ### Handle spectra without points
-
-        #### Preserve the fixed output dimensionality even for an empty input
-        if xs.size == 0 or ys.size == 0:
-            return np.zeros(self.GetXAxisDepth(), dtype=np.float32)
-
-        ### Accumulate raw intensities in mass intervals
-
-        #### Bin assignment rule (scipy.stats.binned_statistic / numpy.histogram
-        #### semantics): every interval is half-open ``[bin_edges[i], bin_edges[i+1])``,
-        #### except the last one, which is closed on both ends
-        #### ``[bin_edges[-2], bin_edges[-1]]``. Consequently a raw point falls into
-        #### **exactly one** bin, never split across two and never duplicated — a point
-        #### that lands precisely on a shared edge value belongs to the bin that starts
-        #### there (its right neighbor), not the one that ends there, except at the very
-        #### last edge. Points strictly outside ``[bin_edges[0], bin_edges[-1]]`` are
-        #### silently dropped from every bin (not an error, not counted anywhere) — this
-        #### is why ``crop_spectrum`` in the analysis package re-crops the raw reference
-        #### to a restricted binner's own ``[x_min, x_max]`` before comparing: otherwise
-        #### raw points outside that window would show up as "unmatched" even though the
-        #### binner itself never saw them in the first place.
-        #### All points assigned to the same interval contribute to one output bin
-        intensities, _, _ = binned_statistic(
-            xs, ys, statistic="sum", bins=self.bin_edges
-        )
-        return intensities
-
     ## Transform a batch of spectra
-    def transform_batch(
+    def transform(
         self, batch: RawSpectrumBatch | SharedAxisRawBatch
     ) -> SpectrumBatch:
         """Bin every packed raw point with one vectorized Torch aggregation.
@@ -190,6 +158,12 @@ class LinearBinning(MSIBaseBinner):
 
         #### Intensities assigned to the same sample and bin are summed in place
         dense.scatter_add_(0, flat_indices, intensity[valid])
+
+        #### Mean aggregation divides the accumulated signal by the contributing count
+        if self.aggregation == "mean":
+            counts = torch.zeros_like(dense)
+            counts.scatter_add_(0, flat_indices, torch.ones_like(intensity[valid]))
+            dense = torch.where(counts > 0, dense / counts.clamp_min(1), dense)
 
         #### Restore the matrix layout `[number of spectra, number of bins]`
         spectra = dense.view(batch.batch_size, self.GetXAxisDepth())
@@ -271,6 +245,13 @@ class LinearBinning(MSIBaseBinner):
 
         #### Expand the shared bin indices across rows and sum intensities per bin
         spectra.scatter_add_(1, safe_indices.unsqueeze(0).expand_as(source), source)
+
+        #### Mean aggregation uses one validity count per row and destination bin
+        if self.aggregation == "mean":
+            counts = torch.zeros_like(spectra)
+            valid_source = (valid.unsqueeze(0) & torch.isfinite(batch.intensities)).to(spectra.dtype)
+            counts.scatter_add_(1, safe_indices.unsqueeze(0).expand_as(valid_source), valid_source)
+            spectra = torch.where(counts > 0, spectra / counts.clamp_min(1), spectra)
 
         ### Construct the transformed batch
 

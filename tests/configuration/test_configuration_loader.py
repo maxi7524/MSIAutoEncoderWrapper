@@ -36,7 +36,7 @@ def _configuration() -> dict:
                     },
                     "inverse_binner": {
                         "type": "TopPeaksInverseBinner",
-                        "parameters": {"max_bins": 20, "window_size": 1},
+                        "parameters": {"max_peaks": 20},
                     },
                 },
             },

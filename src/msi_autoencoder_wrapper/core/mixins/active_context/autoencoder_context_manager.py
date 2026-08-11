@@ -15,6 +15,7 @@ from ....data import (
     RawSpectrumCollator,
     LatentBatch,
     SpectrumBatch,
+    SpectrumSpace,
 )
 from ....normalization import OutputSpace
 
@@ -169,7 +170,28 @@ class AutoencoderContextInterface:
             return x_hat_arr
 
         inverse_binner = self._context.inverse_binner
-        inverse_rows = [inverse_binner(row) for row in np.atleast_2d(x_hat_arr)]
+        dense_values = x_hat if x_hat.ndim == 2 else x_hat.unsqueeze(0)  # (B, F)
+        dense_batch = SpectrumBatch(
+            sample_ids=torch.arange(dense_values.shape[0], device=dense_values.device),
+            spectra=dense_values,
+            space=SpectrumSpace(
+                mass_axis=torch.as_tensor(
+                    self._context.binner.GetXAxis(),
+                    device=dense_values.device,
+                    dtype=dense_values.dtype,
+                )
+            ),
+            normalization_trace=trace,
+        )
+        inverse_result = inverse_binner(dense_batch)
+        inverse_rows = []
+        for index in range(dense_values.shape[0]):
+            start = int(inverse_result.offsets[index])
+            end = int(inverse_result.offsets[index + 1])
+            inverse_rows.append((
+                inverse_result.mass_values[start:end].cpu().numpy(),
+                inverse_result.intensities[start:end].cpu().numpy(),
+            ))
         if resolved_space == "source" and normalization is not None and normalization.reconstruction.denormalization_stage == "after_inverse_binning":
             restored_rows = []
             for index, (mass_axis, values) in enumerate(inverse_rows):

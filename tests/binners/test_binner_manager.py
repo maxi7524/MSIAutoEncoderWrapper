@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
 
 from msi_autoencoder_wrapper.binners.binners_manager import BinnerManager
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
+from msi_autoencoder_wrapper.data import RawSpectrumCollator, RawSpectrumSample, TargetSample, SpectrumBatch, SpectrumSpace
 
 
 def test_binner_discovery_and_manager_factories() -> None:
@@ -16,11 +18,11 @@ def test_binner_discovery_and_manager_factories() -> None:
         "LinearBinning", bin_step=1.0, x_min=100.0, x_max=110.0
     )
     inverse = BinnerManager.get_inverse_binner(
-        "TopPeaksInverseBinner", binner=binner, max_bins=3, window_size=1
+        "TopPeaksInverseBinner", binner=binner, max_peaks=3
     )
 
     assert binner.GetXAxisDepth() == 10
-    assert inverse.get_config() == {"max_bins": 3, "window_size": 1, "track_diagnostics": False}
+    assert inverse.get_config() == {"max_peaks": 3, "min_peak_distance": 1}
 
 
 def test_binner_manager_accepts_classes_and_ready_instances() -> None:
@@ -40,10 +42,13 @@ def test_linear_binner_sums_values_on_a_regular_grid() -> None:
     binner = BinnerManager.get_binner(
         "LinearBinning", bin_step=1.0, x_min=100.0, x_max=110.0
     )
-    result = binner(
-        np.array([100.2, 100.8, 105.2, 111.0]),
-        np.array([10.0, 20.0, 5.0, 100.0]),
-    )
+    raw = RawSpectrumCollator()([RawSpectrumSample(
+        sample_id=0,
+        mass_values=torch.tensor([100.2, 100.8, 105.2, 111.0]),
+        intensities=torch.tensor([10.0, 20.0, 5.0, 100.0]),
+        targets=TargetSample.empty(),
+    )])
+    result = binner(raw).spectra[0]
 
     assert result.shape == (10,)
     assert result[0] == pytest.approx(30.0)
@@ -57,15 +62,21 @@ def test_top_peaks_inverse_binner_preserves_peak_neighborhood() -> None:
         "LinearBinning", bin_step=1.0, x_min=100.0, x_max=110.0
     )
     inverse = BinnerManager.get_inverse_binner(
-        "TopPeaksInverseBinner", binner=binner, max_bins=3, window_size=1
+        "TopPeaksNeighbourhoodInverseBinner", binner=binner, max_peaks=1,
+        region_options={"window_size": 1},
     )
     intensities = np.zeros(10)
     intensities[5] = 10.0
 
-    mass_axis, selected_intensities = inverse(intensities)
+    batch = SpectrumBatch(
+        sample_ids=torch.tensor([0]),
+        spectra=torch.as_tensor(intensities).unsqueeze(0),
+        space=SpectrumSpace(mass_axis=torch.as_tensor(binner.GetXAxis())),
+    )
+    result = inverse(batch)
 
-    assert len(mass_axis) == 3
-    assert selected_intensities.max() == pytest.approx(10.0)
+    assert result.mass_values.numel() == 3
+    assert result.intensities.max() == pytest.approx(10.0)
 
 
 def test_binner_selects_inclusive_mass_ranges() -> None:

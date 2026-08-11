@@ -361,6 +361,7 @@ class InverseSpectrumBatch:
     intensities: torch.Tensor
     offsets: torch.Tensor
     source_space: SpectrumSpace
+    reconstruction_space: SpectrumSpace | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     normalization_trace: NormalizationTrace | None = None
 
@@ -374,6 +375,8 @@ class InverseSpectrumBatch:
             raise_validation_error(
                 "InverseSpectrumBatch", "offsets must contain B + 1 boundaries."
             )
+        if self.reconstruction_space is None:
+            object.__setattr__(self, "reconstruction_space", self.source_space.as_reconstruction())
 
     def to(
         self,
@@ -389,6 +392,7 @@ class InverseSpectrumBatch:
             intensities=self.intensities.to(resolved, non_blocking=non_blocking),
             offsets=self.offsets.to(resolved, non_blocking=non_blocking),
             source_space=self.source_space.to(resolved, non_blocking=non_blocking),
+            reconstruction_space=self.reconstruction_space.to(resolved, non_blocking=non_blocking),
             metadata=self.metadata,
             normalization_trace=(
                 self.normalization_trace.to(resolved, non_blocking=non_blocking)

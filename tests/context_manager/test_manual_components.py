@@ -30,7 +30,7 @@ def test_context_setters_accept_ready_reader_and_binners(
     inverse_binner = BinnerManager.get_inverse_binner(
         "TopPeaksInverseBinner",
         binner=binner,
-        max_bins=5,
+        max_peaks=5,
     )
 
     wrapper.context_manager.set_reader(reader, str(msi_fixture_path))

@@ -21,7 +21,7 @@ the conservative intersection.
 
 ### Vectorized binning
 
-[`LinearBinning.transform_batch()`](../../../src/msi_autoencoder_wrapper/binners/binners_strategies/linear_binner.py)
+[`LinearBinning.transform()`](../../../src/msi_autoencoder_wrapper/binners/binners_strategies/linear_binner.py)
 calculates integer bin indices and uses Torch scatter aggregation. Shared-axis
 batches map the axis once and scatter all rows.
 

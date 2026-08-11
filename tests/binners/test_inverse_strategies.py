@@ -1,17 +1,12 @@
-"""Synthetic inverse-binner and coordinate-aware metric tests."""
+"""Tests for the canonical vectorized inverse-binner API."""
 
-import numpy as np
+from __future__ import annotations
+
 import pytest
-from types import SimpleNamespace
+import torch
 
-from msi_autoencoder_wrapper.analysis.autoencoder.binning.analysis import BinningAnalysis
-from msi_autoencoder_wrapper.binners.binners_manager import BinnerManager
-from msi_autoencoder_wrapper.metrics import (
-    match_spectral_points,
-    peak_collision_rate,
-    signal_retention_by_quantile,
-    spectral_point_metrics,
-)
+from msi_autoencoder_wrapper.binners import BinnerManager
+from msi_autoencoder_wrapper.data import SpectrumBatch, SpectrumSpace
 
 
 @pytest.fixture
@@ -20,144 +15,136 @@ def binner():
     return BinnerManager.get_binner("LinearBinning", bin_step=1.0, x_min=100.0, x_max=110.0)
 
 
-def test_threshold_strategies_and_limit(binner) -> None:
-    inverse = BinnerManager.get_inverse_binner("ThresholdInverseBinner", binner=binner, threshold_strategy="relative_to_max", threshold_options={"scale": 0.25}, max_bins=2, track_diagnostics=True)
-    x, y = inverse(np.asarray([np.nan, 1, 5, 2, 0, -1, 3, 0, 0, 0]))
-    np.testing.assert_array_equal(y, [5, 3]); assert x.size == 2; assert inverse.last_diagnostics["valid_bin_count"] == 4
+def _batch(binner, values: torch.Tensor) -> SpectrumBatch:
+    return SpectrumBatch(
+        sample_ids=torch.arange(values.shape[0]),
+        spectra=values,
+        space=SpectrumSpace(mass_axis=torch.as_tensor(binner.GetXAxis(), dtype=values.dtype)),
+    )
 
 
-def test_threshold_diagnostics_are_opt_in(binner) -> None:
-    inverse = BinnerManager.get_inverse_binner("ThresholdInverseBinner", binner=binner, threshold_strategy="relative_to_max", threshold_options={"scale": 0.25}, max_bins=2)
-    inverse(np.asarray([np.nan, 1, 5, 2, 0, -1, 3, 0, 0, 0]))
-    assert inverse.last_diagnostics == {}
+def _row(result, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+    start, end = int(result.offsets[index]), int(result.offsets[index + 1])
+    return result.mass_values[start:end], result.intensities[start:end]
 
 
-def test_cumulative_mass_limit_reports_unreached_target(binner) -> None:
-    inverse = BinnerManager.get_inverse_binner("CumulativeMassInverseBinner", binner=binner, retained_fraction=.95, max_bins=1, track_diagnostics=True)
-    _, y = inverse(np.asarray([5, 4, 3, 0, 0, 0, 0, 0, 0, 0]))
-    np.testing.assert_array_equal(y, [5]); assert inverse.last_diagnostics["target_fraction_reached"] is False
+def test_quantile_projects_selected_points_to_irregular_axis(binner) -> None:
+    axis = torch.tensor([100.1, 100.6, 101.7, 104.6, 109.7], dtype=torch.float64)
+    inverse = BinnerManager.get_inverse_binner(
+        "QuantileInverseBinner", binner=binner, quantile=0.75,
+        reconstruction_mass_axis=axis,
+    )
+    batch = _batch(binner, torch.tensor([[0.0, 1.0, 2.0, 3.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=torch.float64))
+
+    result = inverse(batch)
+    masses, intensities = _row(result, 0)
+
+    assert torch.equal(masses, torch.tensor([101.7, 104.6], dtype=torch.float64))
+    assert torch.equal(intensities, torch.tensor([2.0, 13.0], dtype=torch.float64))
+    assert torch.equal(result.reconstruction_space.mass_axis, axis)
 
 
-def test_peak_region_centroid_preserves_region_mass(binner) -> None:
-    inverse = BinnerManager.get_inverse_binner("PeakRegionInverseBinner", binner=binner, region_strategy="fixed_window", region_options={"window_size": 1}, reduction_strategy="centroid", max_peaks=1, track_diagnostics=True)
-    x, y = inverse(np.asarray([0, 1, 5, 2, 0, 0, 0, 0, 0, 0]))
-    assert x == pytest.approx([102.625]); assert y == pytest.approx([8]); assert inverse.last_diagnostics["output_peak_count"] == 1
+def test_top_peaks_none_and_oversized_limit_keep_all_peaks(binner) -> None:
+    values = torch.tensor([[0.0, 5.0, 0.0, 4.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0]])
+    batch = _batch(binner, values)
+    target_axis = torch.linspace(100.0, 110.0, 101)
+    all_peaks = BinnerManager.get_inverse_binner(
+        "TopPeaksInverseBinner", binner=binner, max_peaks=None,
+        reconstruction_mass_axis=target_axis,
+    )(batch)
+    oversized = BinnerManager.get_inverse_binner(
+        "TopPeaksInverseBinner", binner=binner, max_peaks=1000,
+        reconstruction_mass_axis=target_axis,
+    )(batch)
+
+    assert torch.equal(all_peaks.mass_values, oversized.mass_values)
+    assert torch.equal(all_peaks.intensities, torch.tensor([5.0, 4.0, 3.0]))
 
 
-def test_top_peaks_diagnostics_are_opt_in(binner) -> None:
-    inverse = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner, max_bins=3, window_size=1)
-    inverse(np.asarray([0, 1, 5, 2, 0, 0, 0, 0, 0, 0], dtype=float))
-    assert inverse.last_diagnostics == {}
-    inverse_tracked = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner, max_bins=3, window_size=1, track_diagnostics=True)
-    inverse_tracked(np.asarray([0, 1, 5, 2, 0, 0, 0, 0, 0, 0], dtype=float))
-    assert inverse_tracked.last_diagnostics["output_peak_count"] > 0
+def test_top_peaks_limit_selects_strongest_maxima(binner) -> None:
+    values = torch.tensor([[0.0, 5.0, 0.0, 4.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0]])
+    inverse = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner, max_peaks=2)
+
+    result = inverse(_batch(binner, values))
+
+    assert torch.equal(result.intensities, torch.tensor([5.0, 4.0]))
 
 
-def test_one_to_one_and_local_mass_matching() -> None:
-    reference_x = np.asarray([100.0, 101.0]); reference_y = np.asarray([3.0, 2.0]); candidate_x = np.asarray([99.995, 100.005, 101.005]); candidate_y = np.asarray([1.0, 2.0, 2.0])
-    one = match_spectral_points(reference_x, reference_y, candidate_x, candidate_y, .01, "Da", "one_to_one")
-    local = match_spectral_points(reference_x, reference_y, candidate_x, candidate_y, 100, "ppm", "local_mass")
-    assert one.matched_reference_indices.size == 2; assert local.matched_candidate_intensity[0] == pytest.approx(3)
-    metrics = spectral_point_metrics(reference_x, reference_y, candidate_x, candidate_y, local)
-    assert metrics["peak_recall"] == 1; assert metrics["tic_relative_error"] == pytest.approx(0)
+def test_top_peaks_collapses_plateau_to_lower_middle_index(binner) -> None:
+    values = torch.tensor([[0.0, 5.0, 5.0, 5.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+    inverse = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner)
+
+    result = inverse(_batch(binner, values))
+
+    assert torch.equal(result.mass_values, torch.tensor([102.5]))
 
 
-def test_one_to_one_matches_both_points_when_left_to_right_would_starve_one() -> None:
-    # r1=0.000 sees two admissible candidates (c2 at -0.005, c1 at 0.001); r2=0.011 only
-    # sees c1. A fixed left-to-right-by-m/z greedy sweep lets r1 (processed first, lower
-    # m/z) take its nearest candidate c1, leaving r2 — which had no other option — with
-    # nothing, even though assigning r1->c2 and r2->c1 would have matched both. The
-    # most-constrained-first algorithm must resolve r2 (1 option) before r1 (2 options)
-    # and therefore match both.
-    reference_x = np.asarray([0.000, 0.011]); reference_y = np.asarray([1.0, 1.0])
-    candidate_x = np.asarray([-0.005, 0.001]); candidate_y = np.asarray([1.0, 1.0])
-    match = match_spectral_points(reference_x, reference_y, candidate_x, candidate_y, tolerance=0.012, tolerance_unit="Da", matching_strategy="one_to_one")
-    assert match.matched_reference_indices.size == 2
-    assert set(zip(match.matched_reference_indices.tolist(), match.matched_candidate_indices.tolist())) == {(0, 0), (1, 1)}
+def test_neighbourhood_expands_union_on_reconstruction_axis(binner) -> None:
+    values = torch.tensor([[0.0, 5.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+    target_axis = torch.linspace(100.0, 110.0, 101)
+    inverse = BinnerManager.get_inverse_binner(
+        "TopPeaksNeighbourhoodInverseBinner", binner=binner, max_peaks=None,
+        region_strategy="fixed_window", region_options={"window_size": 1},
+        reconstruction_mass_axis=target_axis,
+    )
+
+    result = inverse(_batch(binner, values))
+
+    assert result.mass_values.numel() > 3
+    assert torch.unique(result.mass_values).numel() == result.mass_values.numel()
 
 
-def test_empty_spectra_are_supported() -> None:
-    match = match_spectral_points(np.asarray([]), np.asarray([]), np.asarray([]), np.asarray([]), .01)
-    metrics = spectral_point_metrics(np.asarray([]), np.asarray([]), np.asarray([]), np.asarray([]), match)
-    assert metrics["peak_recall"] == 1; assert metrics["peak_precision"] == 1
+def test_batch_transform_equals_concatenated_single_row_transforms(binner) -> None:
+    values = torch.tensor([
+        [0.0, 5.0, 0.0, 4.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 8.0, 0.0, 2.0, 0.0, 7.0, 0.0, 0.0],
+    ])
+    inverse = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner)
+
+    combined = inverse(_batch(binner, values))
+    separate = [inverse(_batch(binner, row.unsqueeze(0))) for row in values]
+
+    for index, expected in enumerate(separate):
+        masses, intensities = _row(combined, index)
+        assert torch.equal(masses, expected.mass_values)
+        assert torch.equal(intensities, expected.intensities)
 
 
-def test_coordinate_metrics_include_cosine_and_spectral_angle() -> None:
-    reference_x = np.asarray([100.0, 101.0]); values = np.asarray([3.0, 4.0])
-    match = match_spectral_points(reference_x, values, reference_x + 0.001, values, .01)
-    metrics = spectral_point_metrics(reference_x, values, reference_x + 0.001, values, match)
-    assert metrics["cosine_similarity"] == pytest.approx(1.0)
-    assert metrics["spectral_angle"] == pytest.approx(0.0)
+def test_empty_batch_is_supported(binner) -> None:
+    inverse = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner)
+    result = inverse(_batch(binner, torch.empty((0, binner.GetXAxisDepth()))))
+
+    assert result.offsets.tolist() == [0]
+    assert result.mass_values.numel() == 0
 
 
-def test_peak_collision_rate_flags_separately_resolvable_peaks() -> None:
-    # Two source peaks 0.07 Da apart both land within 0.05 Da of one candidate bin:
-    # they are close enough to be merged but far enough apart to be distinct peaks.
-    reference_x = np.asarray([99.97, 100.04, 105.0]); reference_y = np.asarray([10.0, 5.0, 1.0])
-    candidate_x = np.asarray([100.0, 105.0]); candidate_y = np.asarray([15.0, 1.0])
-    rate = peak_collision_rate(reference_x, reference_y, candidate_x, candidate_y, tolerance=0.05, tolerance_unit="Da")
-    assert rate == pytest.approx(0.5)
+def test_shared_reader_axis_is_the_default_reconstruction_axis(binner) -> None:
+    expected = torch.tensor([100.0, 100.4, 101.3, 109.9], dtype=torch.float64)
 
-
-def test_peak_collision_rate_ignores_peaks_within_one_tolerance_of_each_other() -> None:
-    # Two source peaks only 0.02 Da apart: closer together than the tolerance itself,
-    # so they are not "separately resolvable" and must not count as a collision.
-    reference_x = np.asarray([100.0, 100.02]); reference_y = np.asarray([10.0, 5.0])
-    candidate_x = np.asarray([100.01]); candidate_y = np.asarray([15.0])
-    rate = peak_collision_rate(reference_x, reference_y, candidate_x, candidate_y, tolerance=0.05, tolerance_unit="Da")
-    assert rate == pytest.approx(0.0)
-
-
-def test_peak_collision_rate_min_relative_height_drops_minor_contributors() -> None:
-    reference_x = np.asarray([99.97, 100.04]); reference_y = np.asarray([10.0, 1.0])
-    candidate_x = np.asarray([100.0]); candidate_y = np.asarray([11.0])
-    rate = peak_collision_rate(reference_x, reference_y, candidate_x, candidate_y, tolerance=0.05, tolerance_unit="Da", min_relative_height=0.5)
-    assert rate == pytest.approx(0.0)
-
-
-def test_unmatched_candidate_intensity_fraction_reports_extra_candidate_mass() -> None:
-    reference_x = np.asarray([100.0]); reference_y = np.asarray([5.0])
-    candidate_x = np.asarray([100.0, 110.0]); candidate_y = np.asarray([5.0, 5.0])
-    match = match_spectral_points(reference_x, reference_y, candidate_x, candidate_y, tolerance=0.01, tolerance_unit="Da", matching_strategy="one_to_one")
-    metrics = spectral_point_metrics(reference_x, reference_y, candidate_x, candidate_y, match)
-    assert metrics["unmatched_candidate_intensity_fraction"] == pytest.approx(0.5)
-
-
-def test_signal_retention_by_quantile_separates_dominant_peak_loss_from_noise_loss() -> None:
-    # One dominant peak (90) plus a long tail of small peaks (1 each); only the tail matches.
-    reference_y = np.asarray([90.0] + [1.0] * 10)
-    reference_x = np.arange(len(reference_y), dtype=float) * 10.0
-    matched_indices = np.arange(1, len(reference_y))  # every point except the dominant one
-    match = match_spectral_points(reference_x, reference_y, reference_x[matched_indices], reference_y[matched_indices], tolerance=0.01, tolerance_unit="Da", matching_strategy="one_to_one")
-    retention = signal_retention_by_quantile(reference_y, match, quantiles=(0.5, 0.99))
-    assert retention["q50"]["k_peaks"] == 1
-    assert retention["q50"]["recall_at_quantile"] == pytest.approx(0.0)  # the dominant peak itself is lost
-    assert retention["q99"]["recall_at_quantile"] >= 0.9  # almost everything else is retained
-
-
-def test_signal_retention_by_quantile_handles_empty_reference() -> None:
-    match = match_spectral_points(np.asarray([]), np.asarray([]), np.asarray([]), np.asarray([]), 0.01)
-    retention = signal_retention_by_quantile(np.asarray([]), match, quantiles=(0.5,))
-    assert retention["q50"]["k_peaks"] == 0
-    assert np.isnan(retention["q50"]["recall_at_quantile"])
-
-
-def test_forward_sweep_never_invokes_context_inverse_binner(binner) -> None:
     class Reader:
-        def GetSpectrum(self, _: int):
-            return np.asarray([100.2, 101.2]), np.asarray([3.0, 2.0])
+        capabilities = type("Capabilities", (), {"shared_mass_axis": True})()
 
-    class ForbiddenInverse:
-        def __call__(self, _: np.ndarray):
-            raise AssertionError("Forward sweep must not invoke an inverse binner")
+        @staticmethod
+        def GetXAxis():
+            return expected.numpy()
 
-    owner = SimpleNamespace(
-        reader=Reader(), binner=binner, context=SimpleNamespace(inverse_binner=ForbiddenInverse()),
-        default_model_name="model", models={"model": SimpleNamespace(dataset=range(1))},
-        selected_ids=lambda ids, dataset: np.asarray([0]),
+    context = type("Context", (), {"reader": Reader(), "binner": binner})()
+    inverse = BinnerManager.get_inverse_binner(
+        "TopPeaksInverseBinner", binner=binner, active_context=context
     )
-    records = BinningAnalysis(owner).forward_sweep(
-        [0.5, 1.0], tolerance=0.5, normalizations=("raw",)
-    )
-    assert {record["bin_step"] for record in records} == {0.5, 1.0}
-    assert all(record["comparison"] == "binned_original" for record in records)
+
+    assert torch.equal(inverse.reconstruction_mass_axis, expected)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_inverse_transform_matches_between_cpu_and_cuda(binner) -> None:
+    values = torch.tensor([[0.0, 5.0, 0.0, 4.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0]])
+    inverse = BinnerManager.get_inverse_binner("TopPeaksInverseBinner", binner=binner)
+    batch = _batch(binner, values)
+
+    cpu = inverse(batch)
+    cuda = inverse(batch.to("cuda"))
+
+    assert torch.equal(cpu.offsets, cuda.offsets.cpu())
+    assert torch.equal(cpu.mass_values, cuda.mass_values.cpu())
+    assert torch.equal(cpu.intensities, cuda.intensities.cpu())
