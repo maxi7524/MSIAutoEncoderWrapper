@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import numpy as np
+import torch
 from typing import Any, Optional
 
 from ..configuration import ConfigurableComponent
@@ -21,33 +22,34 @@ class MSIBaseBinner(ConfigurableComponent, ABC):
         self._config: dict[str, Any] = {}
         self.active_context = active_context
 
-    @abstractmethod
-    def __call__(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        """
-        Projects irregular mass-to-charge spectrometry arrays onto the uniform grid coordinates.
+    def __call__(self, batch: Any) -> Any:
+        """Apply the canonical batched Torch transformation."""
+        return self.transform(batch)
 
-        :param xs: One-dimensional array containing raw experimental mass-to-charge (m/z) positions.
-        :type xs: np.ndarray
-        :param ys: One-dimensional array containing corresponding raw empirical peak intensity metrics.
-        :type ys: np.ndarray
-        :return: Evenly mapped normalized intensity response vector.
-        :rtype: np.ndarray
-        """
+    @abstractmethod
+    def transform(self, batch: Any) -> Any:
+        """Transform a Torch batch without a separate single-spectrum backend."""
         pass
 
-    def transform_batch(self, batch: Any) -> Any:
-        """Transform a packed raw batch on its current Torch device.
+    def transform_spectrum(
+        self,
+        mass_values: torch.Tensor | np.ndarray,
+        intensities: torch.Tensor | np.ndarray,
+    ) -> torch.Tensor:
+        """Transform one spectrum through the canonical ``B=1`` batch path."""
+        from ..data import RawSpectrumBatch
 
-        :param batch: Packed raw spectrum batch.
-        :type batch: RawSpectrumBatch
-        :return: Dense spectrum batch on the same device.
-        :rtype: SpectrumBatch
-        :raises NotImplementedError: If the binner has no Torch batch backend.
-        """
-        del batch
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement batch Torch binning."
+        mass_tensor = mass_values if isinstance(mass_values, torch.Tensor) else torch.tensor(np.asarray(mass_values))
+        intensity_tensor = intensities if isinstance(intensities, torch.Tensor) else torch.tensor(np.asarray(intensities))
+        point_count = int(mass_tensor.numel())
+        batch = RawSpectrumBatch(
+            sample_ids=torch.zeros(1, dtype=torch.long, device=intensity_tensor.device),
+            mass_values=mass_tensor.to(device=intensity_tensor.device),
+            intensities=intensity_tensor,
+            offsets=torch.tensor([0, point_count], dtype=torch.long, device=intensity_tensor.device),
+            sample_indices=torch.zeros(point_count, dtype=torch.long, device=intensity_tensor.device),
         )
+        return self.transform(batch).spectra[0]
 
     @abstractmethod
     def GetXMin(self) -> float:

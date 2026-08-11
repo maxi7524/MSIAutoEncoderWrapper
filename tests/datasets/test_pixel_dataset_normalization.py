@@ -57,7 +57,13 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
 
     class Context:
         annotation_reader = AnnotationReader()
-        binner = staticmethod(lambda xs, ys: ys)
+
+        class Binner:
+            @staticmethod
+            def transform_spectrum(xs, ys):
+                return torch.as_tensor(ys)
+
+        binner = Binner()
 
         @staticmethod
         def get_data_reader(source):

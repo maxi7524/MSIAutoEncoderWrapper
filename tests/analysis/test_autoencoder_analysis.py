@@ -114,13 +114,13 @@ class _Reader:
 
 
 class _Binner:
-    def __call__(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    def transform_spectrum(self, xs: np.ndarray, ys: np.ndarray) -> torch.Tensor:
         result = np.zeros(3, dtype=np.float32)
         for mz, intensity in zip(xs, ys):
             matches = np.flatnonzero(self.GetXAxis() == mz)
             if len(matches):
                 result[matches[0]] += intensity
-        return result
+        return torch.from_numpy(result)
 
     def GetXAxis(self) -> np.ndarray:
         return np.asarray([100.0, 101.0, 102.0])
@@ -131,9 +131,13 @@ class _Binner:
 
 
 class _InverseBinner:
-    def __call__(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def transform_spectra(self, values: np.ndarray):
         selected = np.flatnonzero(values > 0.5)
-        return np.asarray([100.0, 101.0, 102.0])[selected], values[selected]
+        return SimpleNamespace(
+            mass_values=torch.as_tensor(np.asarray([100.0, 101.0, 102.0])[selected]),
+            intensities=torch.as_tensor(values[selected]),
+            offsets=torch.tensor([0, selected.size]),
+        )
 
 
 def _wrapper(trained: bool = True):
@@ -443,7 +447,7 @@ def test_ion_image_browser_range_is_separate_from_indexed_browser() -> None:
         reader=SimpleNamespace(),
         precompute=precompute,
         delta_m=0.2,
-        method_grid_point={"label": "selected", "method": "ThresholdInverseBinner"},
+        method_grid_point={"label": "selected", "method": "QuantileInverseBinner"},
     )
 
     assert isinstance(viewer, ContinuousIonImageViewer)
@@ -468,7 +472,7 @@ def test_existing_tradeoff_plots_draw_requested_quantile_ranges() -> None:
     inverse_summary = [
         {
             "label": label,
-            "method": "ThresholdInverseBinner",
+            "method": "QuantileInverseBinner",
             "comparison": comparison,
             "normalization": "raw",
             "metric": "wasserstein",

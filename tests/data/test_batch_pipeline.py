@@ -62,24 +62,19 @@ def test_raw_collator_packs_variable_length_spectra_and_targets() -> None:
     assert torch.equal(batch.targets.masks["condition"], torch.tensor([True, False]))
 
 
-def test_torch_linear_batch_binning_matches_single_spectrum_scipy() -> None:
-    """The packed Torch backend preserves existing linear-bin semantics."""
+def test_torch_linear_batch_binning_matches_single_spectrum_batches() -> None:
+    """One batched transform matches concatenated one-row Torch transforms."""
     binner = LinearBinning(bin_step=1.0, x_min=0.0, x_max=2.0)
     raw = RawSpectrumCollator()(_samples())
 
-    dense = binner.transform_batch(raw)
-    expected = np.stack(
-        [
-            binner(
-                sample.mass_values.numpy(),
-                sample.intensities.numpy(),
-            )
-            for sample in _samples()
-        ]
-    )
+    dense = binner.transform(raw)
+    expected = torch.cat([
+        binner.transform(RawSpectrumCollator()([sample])).spectra
+        for sample in _samples()
+    ])
 
     assert dense.spectra.shape == (2, 2)
-    assert torch.allclose(dense.spectra, torch.from_numpy(expected).float())
+    assert torch.allclose(dense.spectra, expected)
     assert torch.allclose(dense.space.mass_axis, torch.tensor([0.5, 1.5], dtype=torch.float64))
     assert dense.targets is raw.targets
 
@@ -104,11 +99,26 @@ def test_shared_axis_batch_binning_matches_packed_fallback() -> None:
         ]
     )
 
-    native_result = binner.transform_batch(shared)
-    fallback_result = binner.transform_batch(packed)
+    native_result = binner.transform(shared)
+    fallback_result = binner.transform(packed)
 
     assert torch.equal(native_result.sample_ids, fallback_result.sample_ids)
     assert torch.allclose(native_result.spectra, fallback_result.spectra)
+
+
+def test_linear_binner_supports_sum_and_mean_aggregation() -> None:
+    """Aggregation semantics are identical for packed and shared-axis batches."""
+    shared = SharedAxisRawBatch(
+        sample_ids=torch.tensor([0]),
+        mass_axis=torch.tensor([0.1, 0.8, 1.2]),
+        intensities=torch.tensor([[2.0, 4.0, 9.0]]),
+    )
+
+    summed = LinearBinning(1.0, 0.0, 2.0, aggregation="sum")(shared)
+    averaged = LinearBinning(1.0, 0.0, 2.0, aggregation="mean")(shared)
+
+    assert torch.equal(summed.spectra, torch.tensor([[6.0, 9.0]]))
+    assert torch.equal(averaged.spectra, torch.tensor([[3.0, 9.0]]))
 
 
 def test_raw_collator_passes_prebatched_reader_results_without_copy() -> None:
@@ -151,8 +161,8 @@ def test_linear_batch_binning_matches_between_cpu_and_cuda() -> None:
     binner = LinearBinning(bin_step=1.0, x_min=0.0, x_max=2.0)
     raw = RawSpectrumCollator()(_samples())
 
-    cpu = binner.transform_batch(raw)
-    cuda = binner.transform_batch(raw.to("cuda"))
+    cpu = binner.transform(raw)
+    cuda = binner.transform(raw.to("cuda"))
 
     assert torch.allclose(cpu.spectra, cuda.spectra.cpu())
     assert torch.allclose(cpu.space.mass_axis, cuda.space.mass_axis.cpu())
