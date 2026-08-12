@@ -150,6 +150,16 @@ def test_declared_filter_mapping_is_explicit_and_rejects_unknown_keys() -> None:
         split_filters({"typo": "value"})
 
 
+def test_mz_bounds_are_normalized_to_an_early_coverage_filter() -> None:
+    """Notebook-friendly bounds produce the canonical range configuration."""
+    native, local = split_filters({"mz_min": 200, "mz_max": 900})
+
+    assert native == {"status": "FINISHED"}
+    assert local["mz_range"] == {"min": 200.0, "max": 900.0, "mode": "covers"}
+    with pytest.raises(ValueError, match="provided together"):
+        split_filters({"mz_min": 200})
+
+
 def test_api_metadata_contains_sizes_settings_pixels_and_mass_range() -> None:
     """Public GraphQL fields reproduce the annotation-settings panel and m/z range."""
     class MetadataGraph:
@@ -265,6 +275,20 @@ def test_metaspace_dataframe_index_is_preserved_as_molecule_identity() -> None:
     assert _records_from_table(table) == [
         {"formula": "C6H12O6", "adduct": "+H", "fdr": 0.1, "intensity": 2.0}
     ]
+
+
+def test_download_only_source_does_not_load_discovery_catalogue() -> None:
+    """Frozen selections avoid a full catalogue query for every API key."""
+    class DownloadOnlyClient:
+        def datasets(self, **filters: Any) -> List[Any]:
+            raise AssertionError("download-only construction queried the catalogue")
+
+    source = MetaspaceDatasetSource(
+        client=DownloadOnlyClient(),
+        load_catalog=False,
+    )
+
+    assert source._available_values_cache == []
 
 
 def test_spatial_statistics_count_each_annotated_pixel_once() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
@@ -56,6 +57,9 @@ class MetaspaceDatasetSource(DatasetSource):
     :param refresh_cache: Ignore an existing catalogue file, retrieve current
         metadata from METASPACE, and replace the file when ``cache_dir`` is set.
     :type refresh_cache: bool
+    :param load_catalog: Load discovery metadata during construction. Disable
+        this for download-only workflows whose dataset IDs are already frozen.
+    :type load_catalog: bool
 
     The external package is imported lazily, so the base library remains usable
     without METASPACE credentials or its optional client dependency.
@@ -69,6 +73,7 @@ class MetaspaceDatasetSource(DatasetSource):
         client_options: Optional[Mapping[str, Any]] = None,
         cache_dir: Optional[Path | str] = None,
         refresh_cache: bool = False,
+        load_catalog: bool = True,
     ) -> None:
         self._client_options = dict(client_options or {})
         self._client = client
@@ -76,6 +81,7 @@ class MetaspaceDatasetSource(DatasetSource):
         self._rejected_records: List[Dict[str, Any]] = []
         self._cache_dir = Path(cache_dir) if cache_dir is not None else None
         self._refresh_cache = refresh_cache
+        self.catalog_retrieved_at: Optional[str] = None
         self._config = {
             "client_options": {
                 key: "***" if key in {"api_key", "password"} else value
@@ -83,8 +89,11 @@ class MetaspaceDatasetSource(DatasetSource):
             },
             "cache_dir": str(self._cache_dir) if self._cache_dir else None,
             "refresh_cache": refresh_cache,
+            "load_catalog": load_catalog,
         }
-        self._available_values_cache = self._load_available_datasets()
+        self._available_values_cache = (
+            self._load_available_datasets() if load_catalog else []
+        )
 
     @staticmethod
     def get_available_filters() -> Dict[str, Any]:
@@ -175,81 +184,90 @@ class MetaspaceDatasetSource(DatasetSource):
             local_filters.get(key) is not None
             for key in ("min_molecule_count", "min_unique_molecule_count")
         )
-        query_progress = tqdm(
+        overall = tqdm(
+            total=3,
+            desc="METASPACE discovery",
+            unit="stage",
+            position=0,
+            dynamic_ncols=True,
+        )
+        current = tqdm(
             total=1,
-            desc="Query METASPACE dataset catalogue",
+            desc="Current operation",
             unit="operation",
+            position=1,
             leave=False,
             dynamic_ncols=True,
         )
         try:
-            datasets = (
-                []
-                if native_filters.get("idMask") == []
-                else self.client.datasets(**native_filters)
-            )
-        finally:
-            query_progress.update(1)
-            query_progress.close()
-        records = [self._dataset_record(dataset) for dataset in datasets]
-        spatial_statistics_enabled = bool(
-            local_filters.get("include_spatial_annotation_stats")
-        )
-        overall = tqdm(
-            total=(
-                3
-                + int(molecule_statistics_enabled)
-                + (len(records) if spatial_statistics_enabled else 0)
-            ),
-            initial=1,
-            desc="METASPACE discovery",
-            unit="operation",
-            dynamic_ncols=True,
-        )
-        with _current_operation(overall, "Retrieve metadata and m/z ranges"):
-            attach_api_metadata(self.client, records)
-        records, free_text_rejected = _apply_free_text_filters(records, local_filters)
-        fdr = float(local_filters.get("annotation_fdr", 0.1))
-        with _current_operation(overall, "Retrieve annotation counts"):
-            _attach_annotation_counts(self.client, records, fdr)
-        if spatial_statistics_enabled:
-            image_count = sum(
-                int(record["metadata"].get("annotation_count") or 0)
-                for record in records
-            )
-            overall.set_postfix(
-                datasets=len(records),
-                ion_images=image_count,
-            )
-            logger.info(
-                "METASPACE spatial plan contains %s datasets and %s annotation images",
-                len(records),
-                image_count,
-            )
-            for record in records:
-                dataset_id = str(record["dataset_id"])
-                dataset_image_count = int(
-                    record["metadata"].get("annotation_count") or 0
+            with _current_operation(overall, current, "Query dataset catalogue"):
+                datasets = (
+                    []
+                    if native_filters.get("idMask") == []
+                    else self.client.datasets(**native_filters)
                 )
+            records = [self._dataset_record(dataset) for dataset in datasets]
+            spatial_statistics_enabled = bool(
+                local_filters.get("include_spatial_annotation_stats")
+            )
+            with _current_operation(overall, current, "Retrieve metadata and m/z ranges"):
+                attach_api_metadata(self.client, records)
+            records, early_rejected = _apply_early_filters(records, local_filters)
+            records, free_text_rejected = _apply_free_text_filters(records, local_filters)
+            fdr = float(local_filters.get("annotation_fdr", 0.1))
+            with _current_operation(overall, current, "Retrieve annotation counts"):
+                _attach_annotation_counts(self.client, records, fdr)
+            if spatial_statistics_enabled:
+                overall.total += len(records)
+                overall.refresh()
+                image_count = sum(
+                    int(record["metadata"].get("annotation_count") or 0)
+                    for record in records
+                )
+                overall.set_postfix(datasets=len(records), ion_images=image_count)
+                logger.info(
+                    "METASPACE spatial plan contains %s datasets and %s annotation images",
+                    len(records),
+                    image_count,
+                )
+                for record in records:
+                    dataset_id = str(record["dataset_id"])
+                    dataset_image_count = int(
+                        record["metadata"].get("annotation_count") or 0
+                    )
+                    with _current_operation(
+                        overall,
+                        current,
+                        f"Spatial annotations: {dataset_id}",
+                        total=max(dataset_image_count, 1),
+                        unit="image",
+                    ):
+                        _attach_spatial_annotation_statistics(
+                            self.client, [record], fdr, progress=current
+                        )
+            if molecule_statistics_enabled:
+                overall.total += 1
+                overall.refresh()
+                batch_count = max(1, (len(records) + 99) // 100)
                 with _current_operation(
                     overall,
-                    f"Retrieve {dataset_image_count} ion images for {dataset_id}",
+                    current,
+                    "Retrieve molecular identities",
+                    total=batch_count,
+                    unit="batch",
                 ):
-                    _attach_spatial_annotation_statistics(
-                        self.client,
-                        [record],
-                        fdr,
+                    _attach_molecule_statistics(
+                        self.client, records, fdr, progress=current
                     )
-        if molecule_statistics_enabled:
-            with _current_operation(overall, "Retrieve molecular identities"):
-                _attach_molecule_statistics(self.client, records, fdr)
-        accepted, quantitative_rejected = _apply_local_filters(records, local_filters)
-        overall.close()
+            accepted, quantitative_rejected = _apply_local_filters(records, local_filters)
+        finally:
+            current.close()
+            overall.close()
         self._accepted_records = accepted
         rejected_by_id = {
             str(record["dataset_id"]): record
             for record in (
-                cache_rejected + free_text_rejected + quantitative_rejected
+                cache_rejected + early_rejected + free_text_rejected + quantitative_rejected
             )
         }
         self._rejected_records = list(rejected_by_id.values())
@@ -273,6 +291,10 @@ class MetaspaceDatasetSource(DatasetSource):
                 if payload.get("schema_version") == _CACHE_SCHEMA_VERSION:
                     records = payload.get("records")
                     if isinstance(records, list):
+                        self.catalog_retrieved_at = datetime.fromtimestamp(
+                            path.stat().st_mtime,
+                            timezone.utc,
+                        ).isoformat()
                         logger.info(
                             "Loaded %s METASPACE catalogue records from %s",
                             len(records),
@@ -283,6 +305,7 @@ class MetaspaceDatasetSource(DatasetSource):
                 logger.warning("Ignoring invalid METASPACE catalogue %s: %s", path, error)
 
         datasets = self.client.datasets(status="FINISHED")
+        self.catalog_retrieved_at = datetime.now(timezone.utc).isoformat()
         records = [self._dataset_record(dataset) for dataset in datasets]
         logger.info("Loaded %s METASPACE catalogue records from API", len(records))
         if path is not None:
@@ -580,20 +603,24 @@ def _cached_native_scope(
 
 
 @contextmanager
-def _current_operation(overall: Any, description: str) -> Iterable[None]:
-    """Display one transient operation below the persistent overall progress."""
-    current = tqdm(
-        total=1,
-        desc=description,
-        unit="operation",
-        leave=False,
-        dynamic_ncols=True,
-    )
+def _current_operation(
+    overall: Any,
+    current: Any,
+    description: str,
+    *,
+    total: int = 1,
+    unit: str = "operation",
+) -> Iterable[None]:
+    """Reset one reusable current-operation bar below overall progress."""
+    current.reset(total=total)
+    current.set_description(description)
+    current.unit = unit
+    current.refresh()
     try:
         yield
     finally:
-        current.update(1)
-        current.close()
+        if current.n < current.total:
+            current.update(current.total - current.n)
         overall.update(1)
 
 
@@ -759,6 +786,7 @@ def _attach_molecule_statistics(
     client: Any,
     records: List[Dict[str, Any]],
     fdr: float,
+    progress: Optional[Any] = None,
 ) -> None:
     """Attach per-dataset molecule counts without downloading ion images."""
     graph = getattr(client, "_gqclient", None)
@@ -773,6 +801,8 @@ def _attach_molecule_statistics(
                 datasetFilter={"ids": dataset_ids},
             )
         )
+        if progress is not None:
+            progress.update(1)
     identities: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)
     for annotation in annotations:
         dataset = _object_mapping(annotation.get("dataset"))
@@ -800,6 +830,7 @@ def _attach_spatial_annotation_statistics(
     client: Any,
     records: List[Dict[str, Any]],
     fdr: float,
+    progress: Optional[Any] = None,
 ) -> None:
     """Attach unique annotated-pixel counts from METASPACE ion images.
 
@@ -832,6 +863,8 @@ def _attach_spatial_annotation_statistics(
                 )
             database_has_images = False
             for images_for_annotation in annotation_images:
+                if progress is not None:
+                    progress.update(1)
                 if (
                     len(images_for_annotation) == 0
                     or images_for_annotation[0] is None
@@ -978,6 +1011,52 @@ def _apply_free_text_filters(
             "METASPACE free-text filters rejected %s datasets before enrichment",
             len(rejected),
         )
+    return accepted, rejected
+
+
+def _apply_early_filters(
+    records: List[Dict[str, Any]],
+    filters: Mapping[str, Any],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Apply exclusions and m/z coverage before annotation API operations."""
+    excluded_ids = {str(value) for value in filters.get("exclude_dataset_ids", ())}
+    mz_range = filters.get("mz_range")
+    if mz_range is not None:
+        if not isinstance(mz_range, Mapping):
+            raise ValueError("mz_range must be an object with min and max values")
+        lower = float(mz_range["min"])
+        upper = float(mz_range["max"])
+        if lower < 0 or lower >= upper:
+            raise ValueError("m/z range requires 0 <= min < max")
+        if mz_range.get("mode", "covers") != "covers":
+            raise ValueError("mz_range mode must be 'covers'")
+    accepted: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for record in records:
+        dataset_id = str(record["dataset_id"])
+        reason = None
+        if dataset_id in excluded_ids:
+            reason = "dataset_id is listed in exclude_dataset_ids"
+        elif mz_range is not None:
+            metadata = record["metadata"]
+            dataset_min = metadata.get("mz_min")
+            dataset_max = metadata.get("mz_max")
+            if (
+                dataset_min is None
+                or dataset_max is None
+                or float(dataset_min) > lower
+                or float(dataset_max) < upper
+            ):
+                reason = (
+                    f"m/z range [{dataset_min}, {dataset_max}] does not cover "
+                    f"[{lower}, {upper}]"
+                )
+        if reason is None:
+            accepted.append(record)
+        else:
+            rejected.append(
+                {"dataset_id": dataset_id, "name": record["name"], "reason": reason}
+            )
     return accepted, rejected
 
 

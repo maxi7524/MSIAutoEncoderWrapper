@@ -291,6 +291,73 @@ class DatasetCatalog:
             rows = connection.execute(query, parameters).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]
 
+    def get_annotation_materialization(
+        self,
+        *,
+        source: str,
+        dataset_id: str,
+        options: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Return the completed annotation import matching retrieval options."""
+        options_json = _json_dump(options)
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT status, annotation_count, completed_at
+                FROM annotation_materializations
+                WHERE source = ? AND dataset_id = ? AND options_json = ?
+                """,
+                (source, dataset_id, options_json),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def record_annotation_materialization(
+        self,
+        *,
+        source: str,
+        dataset_id: str,
+        options: Mapping[str, Any],
+        annotation_count: int,
+    ) -> None:
+        """Record a successful, complete annotation materialization."""
+        completed_at = datetime.now(timezone.utc).isoformat()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO annotation_materializations (
+                    source, dataset_id, options_json, status,
+                    annotation_count, completed_at
+                ) VALUES (?, ?, ?, 'complete', ?, ?)
+                ON CONFLICT(source, dataset_id, options_json) DO UPDATE SET
+                    status = excluded.status,
+                    annotation_count = excluded.annotation_count,
+                    completed_at = excluded.completed_at
+                """,
+                (
+                    source,
+                    dataset_id,
+                    _json_dump(options),
+                    int(annotation_count),
+                    completed_at,
+                ),
+            )
+
+    def clear_annotation_materializations(
+        self,
+        *,
+        source: str,
+        dataset_id: str,
+    ) -> None:
+        """Invalidate completion markers before replacing canonical annotations."""
+        with self.connection() as connection:
+            connection.execute(
+                """
+                DELETE FROM annotation_materializations
+                WHERE source = ? AND dataset_id = ?
+                """,
+                (source, dataset_id),
+            )
+
     def get_spectrum_annotations(
         self,
         *,
@@ -516,6 +583,18 @@ class DatasetCatalog:
                     FOREIGN KEY (source, dataset_id, annotation_id)
                         REFERENCES annotations(source, dataset_id, annotation_id)
                         ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS annotation_materializations (
+                    source TEXT NOT NULL,
+                    dataset_id TEXT NOT NULL,
+                    options_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    annotation_count INTEGER NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    PRIMARY KEY (source, dataset_id, options_json),
+                    FOREIGN KEY (source, dataset_id)
+                        REFERENCES datasets(source, dataset_id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS merged_datasets (

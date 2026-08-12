@@ -5,18 +5,25 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from pyimzml.ImzMLWriter import ImzMLWriter
 
 from ...readers.strategies.pyimzml_reader import PyImzMLReader
-from ...utils.exceptions import raise_validation_error, raise_workspace_error
+from ...utils.exceptions import DownloadLimitError, raise_validation_error, raise_workspace_error
 from ...utils.logger import get_custom_logger
 from ..catalog.sqlite_catalog import DatasetCatalog
 from ..normalization import normalize_spectrum_annotations
 from ..sources.base import DatasetSource
+from ..sources.profiles import RotatingDatasetSource, read_source_profiles
 from ..validators import validate_imzml_pair, validate_selection
 from .spectrum_selection import select_merge_spectrum_ids
+from .annotation_csv import (
+    annotation_csv_paths,
+    has_complete_annotation_csv,
+    write_annotation_csv_pair,
+)
+from .import_local import import_local_dataset
 
 
 logger = get_custom_logger(__name__)
@@ -30,6 +37,11 @@ def materialize_selection(
     catalog: DatasetCatalog,
     annotation_options: Optional[Mapping[str, Any]] = None,
     dataset_ids: Optional[Sequence[str]] = None,
+    profiles_path: Optional[Path | str] = None,
+    source_factory: Optional[
+        Callable[[str, Mapping[str, str]], DatasetSource]
+    ] = None,
+    manifest_path: Optional[Path | str] = None,
 ) -> List[Path]:
     """Download selected datasets and import their complete annotations.
 
@@ -46,11 +58,19 @@ def materialize_selection(
     :type annotation_options: Mapping[str, Any] | None
     :param dataset_ids: Optional explicit subset of selected IDs.
     :type dataset_ids: Sequence[str] | None
+    :param profiles_path: Optional CSV with a mandatory ``key`` column.
+    :type profiles_path: pathlib.Path | str | None
+    :param source_factory: Factory used to create a source after rotating to a
+        new key. ``source`` must use the first CSV key.
+    :type source_factory: Callable[[str, Mapping[str, str]], DatasetSource] | None
+    :param manifest_path: Optional output path for the materialization report.
+    :type manifest_path: pathlib.Path | str | None
     :return: Materialized dataset directories.
     :rtype: List[pathlib.Path]
     :raises ValueError: If the selection belongs to another source.
     """
-    selection = json.loads(Path(selection_path).read_text(encoding="utf-8"))
+    selection_file = Path(selection_path)
+    selection = json.loads(selection_file.read_text(encoding="utf-8"))
     validate_selection(selection)
     if selection.get("source") != source.source_name:
         raise ValueError(
@@ -62,11 +82,40 @@ def materialize_selection(
     )
     selected_ids = set(dataset_ids or [])
     output_root = Path(datasets_dir) / "sources" / source.source_name
+    rotating_source = None
+    if profiles_path is not None:
+        if source_factory is None:
+            raise_validation_error(
+                "DatasetMaterialization",
+                "source_factory is required when profiles_path is provided.",
+            )
+        rotating_source = RotatingDatasetSource(
+            read_source_profiles(profiles_path),
+            source_factory,
+            initial_source=source,
+        )
+    call = (
+        rotating_source.call
+        if rotating_source is not None
+        else lambda method_name, *args, **kwargs: getattr(source, method_name)(
+            *args, **kwargs
+        )
+    )
+    records = [
+        record
+        for record in selection.get("datasets", [])
+        if not selected_ids or str(record["dataset_id"]) in selected_ids
+    ]
     materialized: List[Path] = []
-    for record in selection.get("datasets", []):
+    materialized_records: List[tuple[Mapping[str, Any], Path]] = []
+    file_statuses: Dict[str, str] = {}
+    annotation_statuses: Dict[str, str] = {}
+    file_limit_reached = False
+
+    # Dataset file materialization
+    ## Download or reuse every imzML/ibd pair before requesting annotations.
+    for record in records:
         dataset_id = str(record["dataset_id"])
-        if selected_ids and dataset_id not in selected_ids:
-            continue
         destination = output_root / dataset_id
         logger.info("Materializing dataset %s", dataset_id)
         if _has_complete_pair(destination, dataset_id):
@@ -75,15 +124,23 @@ def materialize_selection(
                 dataset_id,
                 destination,
             )
+            file_statuses[dataset_id] = "reused"
         else:
-            source.download_dataset(dataset_id, destination)
+            try:
+                call("download_dataset", dataset_id, destination)
+                file_statuses[dataset_id] = "downloaded"
+            except DownloadLimitError:
+                file_statuses[dataset_id] = "download_limit"
+                file_limit_reached = True
+                logger.warning(
+                    "Stopping the imzML phase at dataset %s and continuing with "
+                    "annotations for complete local pairs",
+                    dataset_id,
+                )
+                break
         validate_imzml_pair(destination, dataset_id)
-        metadata_record = source.get_dataset_metadata(dataset_id)
-        metadata = dict(metadata_record.get("metadata", {}))
-        reader = PyImzMLReader(validate_imzml_pair(destination, dataset_id))
-        annotations = normalize_spectrum_annotations(
-            source.get_annotations(dataset_id, resolved_annotation_options), reader
-        )
+        metadata_record = record
+        metadata = dict(record.get("metadata", {}))
         catalog.upsert_dataset(
             source=source.source_name,
             dataset_id=dataset_id,
@@ -92,12 +149,143 @@ def materialize_selection(
             local_path=destination,
             status="materialized",
         )
-        catalog.replace_annotations(
+        materialized.append(destination)
+        materialized_records.append((record, destination))
+
+    # Local-pair discovery after quota exhaustion
+    ## A failed early download must not hide complete pairs later in selection order.
+    if file_limit_reached:
+        known_ids = {str(record["dataset_id"]) for record, _ in materialized_records}
+        for record in records:
+            dataset_id = str(record["dataset_id"])
+            destination = output_root / dataset_id
+            if dataset_id in known_ids or not _has_complete_pair(destination, dataset_id):
+                continue
+            validate_imzml_pair(destination, dataset_id)
+            catalog.upsert_dataset(
+                source=source.source_name,
+                dataset_id=dataset_id,
+                name=str(record.get("name", dataset_id)),
+                metadata=dict(record.get("metadata", {})),
+                local_path=destination,
+                status="materialized",
+            )
+            file_statuses[dataset_id] = "reused"
+            materialized.append(destination)
+            materialized_records.append((record, destination))
+
+    # Annotation materialization
+    ## Import only configurations that have not completed successfully before.
+    annotation_counts: Dict[str, int] = {}
+    reused_annotations: List[str] = []
+    for record, destination in materialized_records:
+        dataset_id = str(record["dataset_id"])
+        annotations_path, intensities_path = annotation_csv_paths(destination, dataset_id)
+        state = catalog.get_annotation_materialization(
             source=source.source_name,
             dataset_id=dataset_id,
-            annotations=annotations,
+            options=resolved_annotation_options,
         )
-        materialized.append(destination)
+        if (
+            has_complete_annotation_csv(destination, dataset_id)
+            and state is not None
+            and state["status"] == "complete"
+        ):
+            annotation_counts[dataset_id] = int(state["annotation_count"])
+            reused_annotations.append(dataset_id)
+            annotation_statuses[dataset_id] = "reused"
+            logger.info("Reusing annotations for dataset %s", dataset_id)
+            continue
+        reader = PyImzMLReader(validate_imzml_pair(destination, dataset_id))
+        try:
+            provider_annotations = call(
+                "get_annotations", dataset_id, resolved_annotation_options
+            )
+            write_annotation_csv_pair(
+                directory=destination,
+                dataset_id=dataset_id,
+                dataset_name=str(record.get("name", dataset_id)),
+                annotations=provider_annotations,
+                reader=reader,
+            )
+            catalog.upsert_dataset(
+                source=source.source_name,
+                dataset_id=dataset_id,
+                name=str(record.get("name", dataset_id)),
+                metadata=dict(record.get("metadata", {})),
+                local_path=destination,
+                status="annotation_files_materialized",
+            )
+            imported = import_local_dataset(
+                catalog=catalog,
+                source=source.source_name,
+                dataset_id=dataset_id,
+                name=str(record.get("name", dataset_id)),
+                imzml_path=validate_imzml_pair(destination, dataset_id),
+                annotations_path=annotations_path,
+                pixel_intensities_path=intensities_path,
+                metadata=dict(record.get("metadata", {})),
+            )
+            annotation_count = imported["annotations"]
+        except Exception as error:
+            annotation_statuses[dataset_id] = f"failed: {type(error).__name__}: {error}"
+            logger.error(
+                "Annotation materialization failed for dataset %s: %s",
+                dataset_id,
+                error,
+            )
+            continue
+        # REMARK: Canonical annotations store one active retrieval configuration.
+        # Invalidate every prior completion marker before replacing those rows,
+        # so an interrupted replacement is safely retried on the next run.
+        catalog.clear_annotation_materializations(
+            source=source.source_name,
+            dataset_id=dataset_id,
+        )
+        catalog.record_annotation_materialization(
+            source=source.source_name,
+            dataset_id=dataset_id,
+            options=resolved_annotation_options,
+            annotation_count=annotation_count,
+        )
+        annotation_counts[dataset_id] = annotation_count
+        annotation_statuses[dataset_id] = "downloaded_and_imported"
+
+    target_manifest = Path(manifest_path) if manifest_path is not None else (
+        Path(datasets_dir) / "manifests" / f"{selection_file.stem}.materialization.json"
+    )
+    _write_json_atomic(
+        target_manifest,
+        {
+            "schema_version": 1,
+            "source": source.source_name,
+            "selection_path": str(selection_file.resolve()),
+            "selection": selection,
+            "annotation_options": resolved_annotation_options,
+            "dataset_ids": [str(record["dataset_id"]) for record in records],
+            "annotation_counts": annotation_counts,
+            "file_statuses": file_statuses,
+            "annotation_statuses": annotation_statuses,
+            "file_limit_reached": file_limit_reached,
+            "reused_annotations": reused_annotations,
+            "exhausted_profile_count": (
+                rotating_source.exhausted_profile_count
+                if rotating_source is not None
+                else 0
+            ),
+        },
+    )
+    logger.info(
+        "Materialization report: files downloaded=%s, reused=%s, annotations "
+        "imported=%s, reused=%s, failed=%s, remaining files=%s; manifest=%s",
+        sum(value == "downloaded" for value in file_statuses.values()),
+        sum(value == "reused" for value in file_statuses.values()),
+        sum(value == "downloaded_and_imported" for value in annotation_statuses.values()),
+        sum(value == "reused" for value in annotation_statuses.values()),
+        sum(value.startswith("failed:") for value in annotation_statuses.values()),
+        len(records) - len(materialized),
+        target_manifest,
+    )
     return materialized
 
 
@@ -364,3 +552,14 @@ def _resolve_annotation_options(
     if selection_fdr is not None:
         resolved["annotation_fdr"] = float(selection_fdr)
     return resolved
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    """Write a reproducibility manifest without exposing provider secrets."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
