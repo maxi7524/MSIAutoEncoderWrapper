@@ -1,7 +1,13 @@
 # Dataset management internals
 
-This section describes provider discovery through canonical storage and merged
-artifact provenance.
+`msi_dataset_manager` (`packages/msi_dataset_manager`) is an independent
+distribution: provider discovery through canonical storage and merged
+artifact provenance are implemented there, with no dependency on
+`msi_autoencoder_wrapper`. The wrapper depends on it and reads its SQLite
+catalog through `SQLiteAnnotationReader`
+(`src/msi_autoencoder_wrapper/annotations/strategies/sqlite_annotation_reader.py`);
+it does not implement any of the flows described in this section. Links below
+point into `packages/msi_dataset_manager/src/msi_dataset_manager`.
 
 ## Contents
 
@@ -12,7 +18,7 @@ artifact provenance.
 - [Annotation normalization](annotation-normalization.md) — provider and CSV records to canonical molecular and spatial links.
 - [SQLite catalog](sqlite-catalog.md) — canonical tables, transactions, filters, and path identity.
 - [Merge and provenance](merge-and-provenance.md) — deterministic spectrum selection, output geometry, and reversible mappings.
-- [Filesystem layout](filesystem-layout.md) — persistent, staging, selection, source, and merged artifact locations.
+- [Filesystem layout](filesystem-layout.md) — persistent, staging, cohort-config, and merged/composed artifact locations.
 
 ```{toctree}
 :hidden:

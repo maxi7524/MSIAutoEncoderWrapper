@@ -18,16 +18,12 @@ if [[ -z "${METASPACE_API_KEY}" ]]; then
 fi
 
 export METASPACE_API_KEY
-_MSI_REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
-if PYTHONPATH="${_MSI_REPOSITORY_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-    python -m msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace_authentication; then
+if python -m msi_dataset_manager.sources.strategies.metaspace_authentication; then
     echo "METASPACE commands can now use this session."
     echo "Run 'unset METASPACE_API_KEY' to end the session."
-    unset _MSI_REPOSITORY_ROOT
 else
     echo "The API key was removed from this shell because validation failed." >&2
     unset METASPACE_API_KEY
-    unset _MSI_REPOSITORY_ROOT
     return 1
 fi

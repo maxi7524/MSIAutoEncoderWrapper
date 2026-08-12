@@ -7,6 +7,22 @@ responsibilities, transactions, and path identity are described in
 
 ## Purpose and available operations
 
+### Two catalogs per cohort, different roles
+
+`query` and `download` write a **working catalog** at
+`workspace/configs/datasets/<cohort_id>/<cohort_id>.sqlite`. It tracks source
+dataset identity and file-materialization status only; it holds no imported
+annotations, because `download` writes annotations as CSV files instead (see
+[Download selected datasets](downloading-datasets.md)).
+
+`compose` writes a separate, self-contained **composed catalog** at
+`workspace/datasets/<cohort_id>/<cohort_id>.sqlite`, colocated with the merged
+image. This one holds the actually-imported annotations and merged-spectrum
+provenance, and is what `msi_autoencoder_wrapper` reads automatically (see
+[Compose a cohort dataset](composing-a-cohort.md)). Open the specific path
+that was written by the operation whose data you want to read — the two are
+never the same file.
+
 ### Source records
 
 Source datasets are identified by `(source, dataset_id)` and retain metadata,
@@ -22,9 +38,9 @@ to source spectrum identity.
 ### Query datasets and paths
 
 ```python
-from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
+from msi_dataset_manager.catalog import DatasetCatalog
 
-catalog = DatasetCatalog("data/tutorial_workspace/datasets/catalog.sqlite")
+catalog = DatasetCatalog("workspace/datasets/kidney/kidney.sqlite")  # composed catalog
 datasets = catalog.list_datasets(source="metaspace", status="materialized")
 record = catalog.get_dataset("metaspace", "dataset-id")
 identity = catalog.resolve_dataset_path("path/to/image.imzML")
@@ -51,5 +67,28 @@ source_index = catalog.get_source_index(
 )
 ```
 
-Catalog write methods replace annotations and mappings transactionally at the
-dataset or merged-dataset boundary.
+`get_annotations()` also accepts `database_name`, `database_version`,
+`formula`, and `adduct` filters. Catalog write methods
+(`replace_annotations()`, `replace_spectrum_mappings()`) replace annotations
+and mappings transactionally at the dataset or merged-dataset boundary, so
+readers never observe a partially replaced generation. These methods only
+return data from a **composed** catalog — a working catalog never has
+annotation rows to query.
+
+### Resolve merged provenance from either direction
+
+```python
+merged_index = catalog.get_merged_index(
+    merged_dataset_id="merged-id",
+    source="metaspace",
+    source_dataset_id="dataset-id",
+    source_spectrum_id=42,
+)
+contributing_sources = catalog.list_merged_sources("merged-id")
+```
+
+`get_merged_index()` is the inverse of `get_source_index()`. Prefer
+`msi_autoencoder_wrapper.annotations.SQLiteAnnotationReader` over these raw
+catalog methods for reading merged spectra during model training or analysis;
+it wraps them with the provider-independent reader contract used elsewhere in
+the wrapper. See [Retrieve dataset annotations](retrieving-annotations.md#read-normalized-annotations).

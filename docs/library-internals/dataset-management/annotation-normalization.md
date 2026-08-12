@@ -20,13 +20,25 @@ METASPACE or PRIDE API logic.
 
 ### Normalize provider ion images
 
-[`normalize_spectrum_annotations()`](../../../src/msi_autoencoder_wrapper/dataset_management/normalization/spatial_annotations.py)
+[`normalize_spectrum_annotations()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/normalization/spatial_annotations.py)
 maps one-based imzML coordinates to zero-based provider image indices. Finite
-positive pixels create spectrum links. Provider ion images are retrieved as
-described in [METASPACE provider](metaspace-provider.md#ion-images).
+positive pixels create spectrum links. It has no current caller in this
+package: `download`'s CSV writer performs the equivalent coordinate mapping
+inline (see
+[`write_annotation_csv_pair()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/annotation_csv.py))
+instead of calling it. Provider ion images are retrieved as described in
+[METASPACE provider](metaspace-provider.md#ion-images).
 
 ### Normalize paired CSV
 
-[`read_metaspace_csv_annotations()`](../../../src/msi_autoencoder_wrapper/annotations/strategies/metaspace_csv_annotation_reader.py)
-matches molecular and intensity rows by decimal m/z and maps `x*_y*` columns to
-reader spectrum positions. Local import and direct CSV reading share this path.
+[`read_canonical_csv_annotations()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/annotations/csv.py)
+matches molecular and intensity rows by decimal m/z, formula, and adduct, and
+maps `x*_y*` columns to reader spectrum positions. `import_local_dataset()`
+uses this function.
+
+`msi_autoencoder_wrapper` reads the same paired CSV layout directly — without
+importing it into a catalog — through
+[`read_metaspace_csv_annotations()`](../../../src/msi_autoencoder_wrapper/annotations/strategies/metaspace_csv_annotation_reader.py).
+The two functions apply the same matching algorithm but are separate
+implementations in separate, mutually independent distributions; they are not
+literally shared code, and a format change must be applied to both.

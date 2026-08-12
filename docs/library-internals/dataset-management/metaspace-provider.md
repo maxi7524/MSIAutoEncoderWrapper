@@ -10,10 +10,10 @@ materialization, annotation normalization, and cohort review.
 
 ### Provider boundary
 
-[`MetaspaceDatasetSource`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace.py)
+[`MetaspaceDatasetSource`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace.py)
 is the adapter entry point. Dataset-management operations depend on the
 provider-independent
-[`DatasetSource`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/base.py)
+[`DatasetSource`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/base.py)
 contract and do not call METASPACE directly.
 
 The adapter owns provider authentication, client argument names, GraphQL
@@ -21,7 +21,7 @@ payloads, pagination, annotation database iteration, ion-image interpretation,
 download-link validation, and translation of provider exceptions. 
 
 > Remark:
-> Credentials are resolved by [`metaspace_authentication.py`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace_authentication.py) and are not stored in records, cache files, filters, or selections.
+> Credentials are resolved by [`metaspace_authentication.py`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace_authentication.py) and are not stored in records, cache files, filters, or selections.
 
 ### Discovery and materialization boundary
 
@@ -85,7 +85,7 @@ searches datasets, and `SMInstance.dataset(id=...)` resolves one
 [`SMDataset`](https://metaspace2020.readthedocs.io/en/latest/content/apireference/sm_annotation_utils.html#metaspace.sm_annotation_utils.SMDataset).
 
 The exact public-wrapper-to-client argument mapping is declared in
-[`metaspace_parameters.py`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace_parameters.py).
+[`metaspace_parameters.py`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace_parameters.py).
 The distinction matters because Python arguments such as `ionisation_source`
 and `analyzer_type` differ from the underlying GraphQL fields
 `ionisationSource` and `analyzerType`.
@@ -110,7 +110,7 @@ pinned client exposes submitter, group, projects, analyzer, ionization source,
 acquisition geometry, and other dataset-list fields there.
 
 `_dataset_record()` in
-[`metaspace.py`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace.py)
+[`metaspace.py`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace.py)
 combines these sources. Sample fields fall back to the structured
 `Sample_Information` and `MS_Analysis` metadata sections when the dataset-list
 field is absent.
@@ -127,7 +127,7 @@ The METASPACE dataset GraphQL type exposes `configJson`,
 by the METASPACE web interface. Their upstream definitions are in the
 [`Dataset` GraphQL schema](https://github.com/metaspace2020/metaspace/blob/master/metaspace/graphql/schemas/dataset.graphql).
 
-[`attach_api_metadata()`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace_metadata.py)
+[`attach_api_metadata()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace_metadata.py)
 requests these fields in ID batches. It derives:
 
 - `mz_tolerance_ppm` from `configJson.image_generation.ppm`;
@@ -206,11 +206,11 @@ source pair, then delegates signed-link handling, concurrent transfer, and file
 naming to the official `SMDataset.download_to_dir()` method. The adapter checks
 the final pair before returning. Existing non-empty pairs are reused.
 
-The materialization layer supplies
-`datasets/sources/<source>/<dataset_id>/` as the destination and the stable
-dataset ID as `base_name`. The resulting filenames are therefore
-`<dataset_id>.imzML` and `<dataset_id>.ibd`. Annotation options do not
-participate in source-file naming.
+The materialization layer supplies `datasets/<dataset_id>/` (shared across
+every provider — see [Filesystem layout](filesystem-layout.md)) as the
+destination and the stable dataset ID as `base_name`. The resulting filenames
+are therefore `<dataset_id>.imzML` and `<dataset_id>.ibd`. Annotation options
+do not participate in source-file naming.
 
 Both materialization modes inspect the canonical workspace pair before calling
 the provider adapter. Selection records are processed sequentially, so one
@@ -227,10 +227,12 @@ updated.
 
 #### Explicit filtering
 
-[`filter_schema()` and `split_filters()`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace_parameters.py)
+[`filter_schema()` and `split_filters()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace_parameters.py)
 define every accepted public filter and exact client argument. Unknown keys
 raise `ValueError`. Defaults such as `status="FINISHED"` and
-`annotation_fdr=0.1` are inserted at this boundary.
+`annotation_fdr=0.1` are inserted at this boundary. The convenience pair
+`mz_min`/`mz_max` is folded into `mz_range: {"min", "max", "mode": "covers"}`
+at this same boundary; supplying both forms together raises `ValueError`.
 
 Free-text groups are declared as canonical PascalCase values with explicit raw
 variants. The same table drives available-value grouping and filtering, so the
@@ -240,6 +242,12 @@ Before a provider query, cached records are restricted by dataset IDs and
 exact cached native fields, then by local biological groups. The matched IDs
 are passed as `idMask`. Local filtering is repeated on the current provider
 records to protect against stale cache contents.
+
+`_apply_early_filters()` then applies `exclude_dataset_ids` and the `mz_range`
+coverage requirement together, immediately after metadata and m/z ranges are
+attached and before annotation counts, molecular statistics, or spatial
+statistics are requested — datasets rejected by either condition never reach
+those more expensive stages.
 
 #### Normalized acquisition and biological fields
 
@@ -289,7 +297,7 @@ total selected datasets and annotation images.
 
 #### Cohort summaries
 
-[`summarise_records()`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/strategies/metaspace_metadata.py)
+[`summarise_records()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies/metaspace_metadata.py)
 computes:
 
 - dataset count;
@@ -308,7 +316,6 @@ The interactive flow is:
 
 ```text
 DatasetExplorer.filter(filters)
-  -> remove exclude_dataset_ids from provider filters
   -> MetaspaceDatasetSource.filter(filters)
      -> split_filters()
      -> restrict cached catalogue and construct idMask
@@ -316,26 +323,36 @@ DatasetExplorer.filter(filters)
      -> _dataset_record() for each SMDataset
      -> attach_api_metadata()
      -> apply current free-text filters
+     -> _apply_early_filters(): exclude_dataset_ids and mz_range coverage
      -> attach annotation counts
      -> optionally retrieve spatial ion images
      -> optionally retrieve molecular identities
      -> apply quantitative constraints
      -> store accepted and rejected records
-  -> validate_source_record()
-  -> remove manual exclusions
+  -> validate_source_record() for each accepted record
   -> DatasetExplorer.results()
+     -> excludes IDs added through explorer.exclude(), independently of
+        exclude_dataset_ids already applied above
   -> optionally append SUMMARY
 ```
+
+`exclude_dataset_ids` in `filters` and IDs passed to `explorer.exclude()` are
+two independent exclusion paths. The former reaches the METASPACE adapter
+(non-METASPACE sources have it stripped before the provider call and rely on
+the explorer's own post-filtering instead) and is diagnosed by
+`_apply_early_filters()`; the latter never leaves the explorer and only
+affects `DatasetExplorer.results()`/`accepted()`, which is why
+`include_excluded=True` can still surface it.
 
 The cache reduces the provider candidate set but does not bypass current API
 metadata or annotation queries.
 
 ### Selection persistence
 
-[`query_to_selection()`](../../../src/msi_autoencoder_wrapper/dataset_management/operations/query.py)
+[`query_to_selection()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/query.py)
 executes the source query, validates accepted records, and upserts dataset
 identity and metadata into
-[`SQLiteDatasetCatalog`](../../../src/msi_autoencoder_wrapper/dataset_management/catalog/sqlite_catalog.py).
+[`DatasetCatalog`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/catalog/sqlite_catalog.py).
 It then writes a selection containing the source, effective filters, accepted
 records, and annotation threshold.
 
@@ -344,7 +361,7 @@ record's `metadata`. The `SUMMARY` presentation row is not persisted.
 
 ### Materialization and annotation persistence
 
-[`materialize_selection()`](../../../src/msi_autoencoder_wrapper/dataset_management/operations/download.py)
+[`materialize_selection()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/download.py)
 reads the fixed selection. For each accepted ID it:
 
 ```text
@@ -358,15 +375,21 @@ get_annotations(dataset_id, options)
   -> optional matching ion images
   -> canonical molecular rows and spatial links
 
-catalog transaction
-  -> local source path and materialization status
-  -> normalized molecules
-  -> spectrum-to-molecule links
+write_annotation_csv_pair()
+  -> annotations.csv, pixel_intensities.csv beside the imzML pair
+
+working-catalog upsert
+  -> local source path and materialization status only;
+     no annotation rows are written here
 ```
 
 Download does not repeat discovery and cannot silently change the reviewed
-cohort. Annotation normalization and SQLite table relationships are described
-in [Annotation normalization](annotation-normalization.md) and
+cohort. It also does not import annotations into any SQLite catalog — that
+happens only during
+[composition](../../how-to/dataset-management/composing-a-cohort.md), through
+`import_local_dataset()`. Annotation normalization and SQLite table
+relationships are described in
+[Annotation normalization](annotation-normalization.md) and
 [SQLite catalogue](sqlite-catalog.md).
 
 ### Compatibility constraints

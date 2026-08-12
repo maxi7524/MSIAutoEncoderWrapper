@@ -128,7 +128,7 @@ class ContextManagerProxy:
             registration nor a complete local METASPACE CSV pair is available.
         :rtype: MSIBaseAnnotationReader | None
         """
-        from ....dataset_management.catalog import DatasetCatalog
+        from msi_dataset_manager.catalog import DatasetCatalog
 
         workspace = self._wrapper.workspace
         if image_path is None:

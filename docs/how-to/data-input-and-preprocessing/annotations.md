@@ -24,18 +24,31 @@ The configured annotation reader is available as
 
 ### Supported sources and selection priority
 
-The library supports the canonical SQLite catalog and paired local METASPACE
-CSV exports. Automatic selection uses this order:
+The library supports paired local annotation CSV exports and the canonical
+SQLite catalog, in one of two locations. Automatic selection uses this order:
 
-1. Resolve the image in the workspace `datasets/catalog.sqlite` catalog.
-2. If the image is not registered, find a local METASPACE CSV pair beside the
-   imzML file.
-3. If neither source is complete, leave the annotation reader unset and log a
+1. Find a local annotation CSV pair beside the imzML file: canonical
+   `annotations.csv` + `pixel_intensities.csv` first (the files
+   `msi-datasets download` writes — see
+   [Download selected datasets](../dataset-management/downloading-datasets.md)),
+   or, if either canonical file is absent, the legacy pair
+   `metaspace_annotations.csv` + `<imzML-stem>_pixel_intensities.csv` (or
+   exactly one other `*_pixel_intensities.csv` file, if unambiguous).
+2. If no local CSV pair is complete, resolve the image in a same-named SQLite
+   catalog beside the imzML file — `<imzML-stem>.sqlite` — the **composed
+   catalog** that `msi-datasets compose` writes next to its merged output; see
+   [Compose a cohort dataset](../dataset-management/composing-a-cohort.md).
+3. If that sibling catalog does not exist or does not register the image,
+   fall back to the legacy single workspace catalog at
+   `<project_path>/datasets/catalog.sqlite`.
+4. If none of the above resolves, leave the annotation reader unset and log a
    warning.
 
-SQLite wins when both sources are present. Passing `annotation_catalog_path`
-makes that catalog mandatory: the library does not fall back to CSV when the
-explicit file is missing or does not contain the image.
+A local CSV pair wins over any SQLite catalog when both are present. Passing
+`annotation_catalog_path` makes that specific catalog mandatory and skips CSV
+detection entirely: the library does not fall back to CSV, the sibling
+catalog, or the legacy catalog when the explicit file is missing or does not
+contain the image.
 
 ## Detailed instructions
 
@@ -65,9 +78,11 @@ reader = wrapper.context_manager.set_reader(
   remaining keyword arguments as constructor parameters.
 - `img_name_or_path` selects the image context. It can be an image known to the
   workspace or an existing image path.
-- `annotation_catalog_path` selects an explicit SQLite catalog. `None` uses
-  `<project_path>/datasets/catalog.sqlite` when that file exists.
-- `auto_load_annotations=True` runs SQLite/CSV detection after the data reader
+- `annotation_catalog_path` selects an explicit SQLite catalog, skipping
+  automatic detection entirely. `None` runs the full automatic-detection order
+  described above (local CSV pair, then sibling composed catalog, then the
+  legacy workspace catalog).
+- `auto_load_annotations=True` runs that detection after the data reader
   is configured.
 - `auto_load_annotations=False` configures spectra without touching the
   annotation reader. This is required when annotations will be attached later
@@ -79,23 +94,21 @@ The returned value is the configured MSI data reader, not the annotation
 reader. Inspect the active context to obtain the automatically selected
 annotation reader.
 
-### Use the workspace SQLite catalog
+### Use an SQLite catalog
 
-The default catalog path is:
-
-```text
-<project_path>/datasets/catalog.sqlite
-```
-
-The catalog must map the configured imzML path to either one source dataset or
-one merged dataset. Automatic resolution supplies the corresponding SQLite
-reader parameters:
+A catalog must map the configured imzML path to either one source dataset or
+one merged dataset. Automatic resolution tries, in order, the composed catalog
+`<imzML-stem>.sqlite` beside the image — the file
+[`msi-datasets compose`](../dataset-management/composing-a-cohort.md) writes
+next to its merged output — then the legacy single workspace catalog at
+`<project_path>/datasets/catalog.sqlite`. Whichever one registers the image
+supplies the corresponding SQLite reader parameters:
 
 - source dataset: `catalog_path`, `source`, and `dataset_id`;
 - merged dataset: `catalog_path` and `merged_dataset_id`.
 
-Use another catalog explicitly when the image registration is outside the
-active workspace:
+Use another catalog explicitly when the image registration is outside both of
+those locations:
 
 ```python
 wrapper.context_manager.set_reader(
@@ -141,23 +154,27 @@ annotation_reader = SQLiteAnnotationReader(
 `database_name`, `database_version`, `formula`, `adduct`, and `max_fdr`.
 Filters passed to a read method override default values with the same keys.
 
-### Use paired local METASPACE CSV files
+### Use paired local annotation CSV files
 
-Automatic CSV detection requires `metaspace_annotations.csv` and one intensity
-table beside the imzML/ibd pair:
+Automatic CSV detection first looks for the canonical pair
+`annotations.csv` + `pixel_intensities.csv` beside the imzML/ibd pair — the
+files [`msi-datasets download`](../dataset-management/downloading-datasets.md)
+writes:
 
 ```text
 example_1/
 ├── example_1.imzML
 ├── example_1.ibd
-├── metaspace_annotations.csv
-└── example_1_pixel_intensities.csv
+├── annotations.csv
+└── pixel_intensities.csv
 ```
 
-The preferred intensity filename is
-`<imzML-stem>_pixel_intensities.csv`. If it is absent, exactly one
-`*_pixel_intensities.csv` file is accepted. Multiple fallback candidates raise
-`ValidationError` because the intended image association cannot be inferred.
+If either canonical file is absent, it falls back to the legacy METASPACE
+export names: `metaspace_annotations.csv` plus one intensity table. The
+preferred legacy intensity filename is `<imzML-stem>_pixel_intensities.csv`;
+if that is absent, exactly one other `*_pixel_intensities.csv` file is
+accepted. Multiple fallback candidates raise `ValidationError` because the
+intended image association cannot be inferred.
 
 #### Configure `MetaspaceCSVAnnotationReader` directly
 
