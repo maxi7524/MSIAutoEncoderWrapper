@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
-from msi_autoencoder_wrapper.dataset_management.operations import (
+from msi_dataset_manager.catalog import DatasetCatalog
+from msi_dataset_manager.operations import (
     build_cohort_annotation_index,
 )
 

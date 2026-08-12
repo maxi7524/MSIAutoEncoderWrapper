@@ -1,5 +1,3 @@
-"""Canonical normalization helpers for provider records."""
+"""Compatibility aliases for annotation normalization."""
 
-from .spatial_annotations import normalize_spectrum_annotations
-
-__all__ = ["normalize_spectrum_annotations"]
+from msi_dataset_manager.normalization import *

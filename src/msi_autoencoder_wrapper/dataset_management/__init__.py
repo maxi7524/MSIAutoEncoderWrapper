@@ -1,6 +1,6 @@
-"""External dataset discovery, import, normalization, and merge facilities."""
+"""Compatibility exports for the independent :mod:`msi_dataset_manager`."""
 
-from .catalog import DatasetCatalog
-from .operations import import_local_dataset
+from msi_dataset_manager.catalog import DatasetCatalog
+from msi_dataset_manager.operations import import_local_dataset
 
 __all__ = ["DatasetCatalog", "import_local_dataset"]

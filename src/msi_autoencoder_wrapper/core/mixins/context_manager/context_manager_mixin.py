@@ -194,8 +194,8 @@ class ContextManagerProxy:
 
         logger.warning(
             "No annotations were attached to image '%s'. Register the image in "
-            "the workspace catalog, place 'metaspace_annotations.csv' and a "
-            "matching '*_pixel_intensities.csv' beside the imzML file, or call "
+            "the workspace catalog, place canonical 'annotations.csv' and "
+            "'pixel_intensities.csv' beside the imzML file, or call "
             "set_annotation_reader(...) explicitly.",
             resolved_image_path,
         )
@@ -207,6 +207,10 @@ class ContextManagerProxy:
     ) -> Optional[tuple[Path, Path]]:
         """Find one unambiguous pair of local METASPACE CSV exports."""
         directory = image_path.parent
+        annotations_path = directory / "annotations.csv"
+        canonical_intensities = directory / "pixel_intensities.csv"
+        if annotations_path.is_file() and canonical_intensities.is_file():
+            return annotations_path, canonical_intensities
         annotations_path = directory / "metaspace_annotations.csv"
         if not annotations_path.is_file():
             return None

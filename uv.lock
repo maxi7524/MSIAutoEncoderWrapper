@@ -53,6 +53,12 @@ conflicts = [[
     { package = "msi-autoencoder-wrapper", extra = "mps" },
 ]]
 
+[manifest]
+members = [
+    "msi-autoencoder-wrapper",
+    "msi-dataset-manager",
+]
+
 [[package]]
 name = "accessible-pygments"
 version = "0.0.5"
@@ -2144,6 +2150,7 @@ dependencies = [
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
     { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
     { name = "metaspace2020" },
+    { name = "msi-dataset-manager" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
@@ -2162,6 +2169,7 @@ dependencies = [
     { name = "seaborn" },
     { name = "statsmodels" },
     { name = "tabulate" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -2201,6 +2209,7 @@ requires-dist = [
     { name = "m2aia", marker = "extra == 'cu118'" },
     { name = "matplotlib" },
     { name = "metaspace2020", specifier = "==2.0.9" },
+    { name = "msi-dataset-manager", editable = "packages/msi_dataset_manager" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "polars" },
@@ -2218,6 +2227,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'cpu'", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "msi-autoencoder-wrapper", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cu118'", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/cu118", conflict = { package = "msi-autoencoder-wrapper", extra = "cu118" } },
     { name = "torch", marker = "extra == 'mps'", specifier = "==2.7.1" },
+    { name = "tqdm" },
 ]
 provides-extras = ["cpu", "cu118", "mps"]
 
@@ -2232,6 +2242,49 @@ docs = [
     { name = "myst-nb" },
     { name = "sphinx" },
 ]
+
+[[package]]
+name = "msi-dataset-manager"
+version = "0.1.0"
+source = { editable = "packages/msi_dataset_manager" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
+    { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-cu118') or (extra == 'extra-23-msi-autoencoder-wrapper-cpu' and extra == 'extra-23-msi-autoencoder-wrapper-mps') or (extra == 'extra-23-msi-autoencoder-wrapper-cu118' and extra == 'extra-23-msi-autoencoder-wrapper-mps')" },
+    { name = "pyimzml" },
+    { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+metaspace = [
+    { name = "metaspace2020" },
+    { name = "requests" },
+]
+pride = [
+    { name = "pridepy" },
+]
+providers = [
+    { name = "metaspace2020" },
+    { name = "pridepy" },
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "metaspace2020", marker = "extra == 'metaspace'", specifier = "==2.0.9" },
+    { name = "metaspace2020", marker = "extra == 'providers'", specifier = "==2.0.9" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pridepy", marker = "extra == 'pride'", specifier = "==0.0.16" },
+    { name = "pridepy", marker = "extra == 'providers'", specifier = "==0.0.16" },
+    { name = "pyimzml" },
+    { name = "requests", marker = "extra == 'metaspace'" },
+    { name = "requests", marker = "extra == 'providers'" },
+    { name = "tqdm" },
+]
+provides-extras = ["metaspace", "pride", "providers"]
 
 [[package]]
 name = "myst-nb"

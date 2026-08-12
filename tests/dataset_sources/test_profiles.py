@@ -7,12 +7,12 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import pytest
 
-from msi_autoencoder_wrapper.dataset_management.sources.base import DatasetSource
-from msi_autoencoder_wrapper.dataset_management.sources.profiles import (
+from msi_dataset_manager.sources.base import DatasetSource
+from msi_dataset_manager.sources.profiles import (
     RotatingDatasetSource,
     read_source_profiles,
 )
-from msi_autoencoder_wrapper.utils.exceptions import DownloadLimitError, ValidationError
+from msi_dataset_manager.utils.exceptions import DownloadLimitError, ValidationError
 
 
 class ProfileSource(DatasetSource):

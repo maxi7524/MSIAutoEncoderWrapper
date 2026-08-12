@@ -11,22 +11,22 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from msi_autoencoder_wrapper.dataset_management.exploration.dataset_explorer import (
+from msi_dataset_manager.exploration.dataset_explorer import (
     DatasetExplorer,
 )
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace import (
+from msi_dataset_manager.sources.strategies.metaspace import (
     MetaspaceDatasetSource,
     _records_from_table,
 )
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace_metadata import (
+from msi_dataset_manager.sources.strategies.metaspace_metadata import (
     attach_api_metadata,
     summarise_records,
 )
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace_parameters import (
+from msi_dataset_manager.sources.strategies.metaspace_parameters import (
     FREE_TEXT_VALUE_GROUPS,
     split_filters,
 )
-from msi_autoencoder_wrapper.utils.exceptions import (
+from msi_dataset_manager.utils.exceptions import (
     DownloadLimitError,
     ExternalServiceError,
 )

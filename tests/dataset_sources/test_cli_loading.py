@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from msi_autoencoder_wrapper.dataset_management.cli import (
+from msi_dataset_manager.cli import (
     build_parser,
     _repository_root,
     _resolve_cli_path,
@@ -44,7 +44,7 @@ def test_download_merge_accepts_annotation_aware_sampling_limits() -> None:
 
 
 def test_cli_and_config_paths_have_distinct_stable_roots(tmp_path: Path) -> None:
-    """CLI paths use the repository while config paths use the config folder."""
+    """CLI paths use the invocation directory; config paths use their folder."""
     repository_root = _repository_root()
     config_directory = tmp_path / "configs"
 
@@ -58,7 +58,7 @@ def test_dataset_cli_help_does_not_import_models_or_training() -> None:
     """Dataset management starts without importing model and training trees."""
     code = """
 import sys
-from msi_autoencoder_wrapper.dataset_management.cli import build_parser
+from msi_dataset_manager.cli import build_parser
 build_parser().format_help()
 assert not any(name.startswith('msi_autoencoder_wrapper.models') for name in sys.modules)
 assert not any(name.startswith('msi_autoencoder_wrapper.training') for name in sys.modules)
