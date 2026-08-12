@@ -105,11 +105,12 @@ class M2aiaReader(MSIBaseReader):
 
     @property
     def capabilities(self) -> ReaderCapabilities:
-        """Expose native batch access only for continuous imzML representations."""
+        """Expose native batching and the M2aia reference reconstruction axis."""
         continuous = "Continuous" in self._img.GetSpectrumType()
         return ReaderCapabilities(
             native_batch_read=continuous,
             shared_mass_axis=continuous,
+            reconstruction_mass_axis=True,
             variable_spectrum_length=not continuous,
             requires_worker_reopen=True,
         )

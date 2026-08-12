@@ -84,8 +84,13 @@ class MSIBaseInverseBinner(ConfigurableComponent, ABC):
             return self._validate_axis(explicit_axis)
 
         reader = getattr(self.active_context, "reader", None)
-        if reader is not None and getattr(reader.capabilities, "shared_mass_axis", False):
-            return self._validate_axis(reader.GetXAxis())
+        if reader is not None:
+            capabilities = reader.capabilities
+            if (
+                getattr(capabilities, "reconstruction_mass_axis", False)
+                or getattr(capabilities, "shared_mass_axis", False)
+            ):
+                return self._validate_axis(reader.GetXAxis())
         if reader is not None:
             cached = getattr(reader, "_inverse_reconstruction_axis", None)
             if cached is None:
