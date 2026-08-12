@@ -17,28 +17,28 @@ from msi_autoencoder_wrapper.models.model_loader import ModelLoader
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 
 
-def test_mlp_preset_defaults_decoder_depth_to_encoder_depth(mock_active_context) -> None:
-    """Omitted decoder depth mirrors the explicitly requested encoder depth."""
+def test_mlp_preset_reverses_encoder_dimensions_for_default_decoder(
+    mock_active_context,
+) -> None:
+    """Omitted decoder dimensions mirror the encoder in reverse order."""
     setup = get_mlp_autoencoder_preset(
         mock_active_context,
         latent_dim=5,
-        encoder_layers=2,
+        encoder_hidden_dims=[512, 256],
     )
 
-    assert setup["encoder"]["params"]["num_layers"] == 2
-    assert setup["decoder"]["params"]["num_layers"] == 2
-    assert setup["encoder"]["params"]["hidden_dim"] == 512
+    assert setup["encoder"]["params"]["hidden_dims"] == [512, 256]
+    assert setup["decoder"]["params"]["hidden_dims"] == [256, 512]
     assert setup["decoder"]["params"]["output_activation"]["type"] == "softplus"
 
 
-def test_mlp_preset_supports_asymmetric_depths(mock_active_context) -> None:
-    """Encoder and decoder hidden-layer counts can be varied independently."""
+def test_mlp_preset_supports_asymmetric_dimension_lists(mock_active_context) -> None:
+    """Encoder and decoder layer dimensions can be varied independently."""
     setup = get_mlp_autoencoder_preset(
         mock_active_context,
         latent_dim=4,
-        encoder_layers=2,
-        decoder_layers=1,
-        hidden_dim=16,
+        encoder_hidden_dims=[16, 8],
+        decoder_hidden_dims=[12],
         output_activation={"type": "sigmoid", "parameters": {}},
     )
     model = ArchitecturesManager.build_model("autoencoder", setup)
@@ -52,8 +52,21 @@ def test_mlp_preset_supports_asymmetric_depths(mock_active_context) -> None:
         mock_active_context.binner.GetXAxisDepth(),
     )
     assert torch.all((outputs["reconstruction"] > 0) & (outputs["reconstruction"] < 1))
-    assert sum(isinstance(layer, nn.Linear) for layer in model.encoder.modules()) == 3
-    assert sum(isinstance(layer, nn.Linear) for layer in model.decoder.modules()) == 2
+    encoder_linears = [
+        layer for layer in model.encoder.modules() if isinstance(layer, nn.Linear)
+    ]
+    decoder_linears = [
+        layer for layer in model.decoder.modules() if isinstance(layer, nn.Linear)
+    ]
+    assert [(layer.in_features, layer.out_features) for layer in encoder_linears] == [
+        (mock_active_context.binner.GetXAxisDepth(), 16),
+        (16, 8),
+        (8, 4),
+    ]
+    assert [(layer.in_features, layer.out_features) for layer in decoder_linears] == [
+        (4, 12),
+        (12, mock_active_context.binner.GetXAxisDepth()),
+    ]
 
 
 def test_mlp_autoencoder_has_finite_gradients_and_portable_config(
@@ -63,9 +76,8 @@ def test_mlp_autoencoder_has_finite_gradients_and_portable_config(
     setup = get_mlp_autoencoder_preset(
         mock_active_context,
         latent_dim=3,
-        encoder_layers=2,
-        decoder_layers=2,
-        hidden_dim=8,
+        encoder_hidden_dims=[16, 8],
+        decoder_hidden_dims=[7, 11],
     )
     model = ArchitecturesManager.build_model("autoencoder", setup)
     inputs = torch.rand(4, mock_active_context.binner.GetXAxisDepth())
@@ -91,34 +103,34 @@ def test_mlp_autoencoder_has_finite_gradients_and_portable_config(
         for parameter in model.parameters()
     )
     assert model_type == "autoencoder"
-    assert restored.encoder.get_config()["num_layers"] == 2
-    assert restored.decoder.get_config()["num_layers"] == 2
+    assert restored.encoder.get_config()["hidden_dims"] == [16, 8]
+    assert restored.decoder.get_config()["hidden_dims"] == [7, 11]
 
 
-@pytest.mark.parametrize("invalid_depth", [0, -1, True, 1.5])
-def test_mlp_preset_rejects_invalid_decoder_depth(
+@pytest.mark.parametrize("invalid_dims", [[], [0], [-1], [True], [1.5], "512"])
+def test_mlp_preset_rejects_invalid_decoder_dimensions(
     mock_active_context,
-    invalid_depth: object,
+    invalid_dims: object,
 ) -> None:
-    """Reject non-positive and non-integral decoder depths."""
-    with pytest.raises(ValidationError, match="decoder_layers"):
+    """Reject empty, non-positive, and non-integral decoder dimensions."""
+    with pytest.raises(ValidationError, match="decoder_hidden_dims"):
         get_mlp_autoencoder_preset(
             mock_active_context,
             latent_dim=3,
-            encoder_layers=1,
-            decoder_layers=invalid_depth,
+            encoder_hidden_dims=[8],
+            decoder_hidden_dims=invalid_dims,
         )
 
 
-@pytest.mark.parametrize("invalid_depth", [0, -1, True, 1.5])
-def test_mlp_preset_rejects_invalid_encoder_depth(
+@pytest.mark.parametrize("invalid_dims", [[], [0], [-1], [True], [1.5], "512"])
+def test_mlp_preset_rejects_invalid_encoder_dimensions(
     mock_active_context,
-    invalid_depth: object,
+    invalid_dims: object,
 ) -> None:
-    """Reject non-positive and non-integral encoder depths."""
-    with pytest.raises(ValidationError, match="encoder_layers"):
+    """Reject empty, non-positive, and non-integral encoder dimensions."""
+    with pytest.raises(ValidationError, match="encoder_hidden_dims"):
         get_mlp_autoencoder_preset(
             mock_active_context,
             latent_dim=3,
-            encoder_layers=invalid_depth,
+            encoder_hidden_dims=invalid_dims,
         )

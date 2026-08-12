@@ -43,13 +43,21 @@ class FakeExplorationSource(DatasetSource):
                         "organismParts": [{"name": "Urinary bladder"}],
                     },
                     "total_size_bytes": 1000,
+                    "download_size_bytes": 1000,
+                    "mz_min": 100,
+                    "mz_max": 1000,
                     "annotation_status": "supported",
                 },
             },
             {
                 "dataset_id": "two",
                 "name": "Two",
-                "metadata": {"total_size_bytes": 2000},
+                "metadata": {
+                    "total_size_bytes": 2000,
+                    "download_size_bytes": 2000,
+                    "mz_min": 250,
+                    "mz_max": 850,
+                },
             },
         ]
         return self.get_accepted_records()
@@ -119,6 +127,31 @@ def test_explorer_exposes_filter_help_and_rejection_links() -> None:
     assert explorer.get_available_values("verified")["value"].tolist() == [True, False]
     assert explorer.rejected().loc[0, "reason"] == "unsupported annotation format"
     assert explorer.rejected().loc[0, "project_url"].endswith("PXD000002")
+
+
+def test_explorer_counts_selects_and_exports_mz_ranges(tmp_path: Path) -> None:
+    """Range analysis is reusable and the frozen selection retains metadata."""
+    explorer = DatasetExplorer(FakeExplorationSource())
+    explorer.search({})
+
+    coverage = explorer.count_mz_range_coverage([100, 200], [800, 900])
+    selected = explorer.select_mz_range(200, 900)
+    exported = explorer.export_selection(
+        tmp_path / "kidney",
+        sort_by="download_size_bytes",
+        ascending=False,
+    )
+
+    assert coverage["dataset_count"].tolist() == [1, 1, 1, 1]
+    assert selected["dataset_id"].tolist() == ["one"]
+    payload = json.loads(exported["selection"].read_text(encoding="utf-8"))
+    assert payload["filters"]["mz_range"] == {
+        "min": 200.0,
+        "max": 900.0,
+        "mode": "covers",
+    }
+    assert payload["datasets"][0]["metadata"]["mz_min"] == 100
+    assert payload["exported_at"]
 
 
 def test_explorer_supports_metaspace_filters_and_metadata() -> None:
