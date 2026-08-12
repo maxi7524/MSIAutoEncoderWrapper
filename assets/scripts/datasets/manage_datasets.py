@@ -1,6 +1,6 @@
-"""Run query, download, and merge stages from a repository checkout."""
+"""Run query, download, and compose stages from a repository checkout."""
 
-from msi_autoencoder_wrapper.dataset_management.cli import main
+from msi_dataset_manager.cli import main
 
 
 if __name__ == "__main__":

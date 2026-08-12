@@ -1,5 +1,13 @@
 # Discover external datasets
 
+```{admonition} METASPACE API access
+:class: warning
+
+As of this writing, METASPACE does not allow this project to query datasets
+through its public API. This guide documents the intended discovery workflow
+for when API access is available.
+```
+
 Dataset discovery queries a registered provider, normalizes provider metadata,
 and returns accepted and rejected records without downloading imzML or ibd
 files. This guide documents the user-facing discovery interface. The internal
@@ -12,7 +20,7 @@ METASPACE request and normalization flow is described in
 exclusions, and rejection diagnostics for one provider.
 
 ```python
-from msi_autoencoder_wrapper.dataset_management.exploration import DatasetExplorer
+from msi_dataset_manager.exploration import DatasetExplorer
 
 explorer = DatasetExplorer(
     source="metaspace",
@@ -61,6 +69,8 @@ filters = {
     "organism_part": "Kidney",
     "polarity": "Negative",
     "condition": "Wildtype",
+    "mz_min": 200,
+    "mz_max": 900,
     "annotation_fdr": 0.1,
     "min_annotation_count": 1,
     "include_molecule_stats": True,
@@ -75,6 +85,16 @@ METASPACE-native filters such as `polarity`, `ionisation_source`, and
 first restrict the cached catalogue. The resulting IDs are then sent to
 METASPACE together with the native filters. This avoids retrieving the full
 provider catalogue for every search.
+
+`exclude_dataset_ids` and the `mz_min`/`mz_max` coverage requirement are
+applied together, immediately after metadata and m/z ranges are attached and
+before annotation counts, molecular statistics, or spatial statistics are
+requested. A dataset covers the requested range when its own `mz_min` is no
+greater than the requested minimum and its `mz_max` is no less than the
+requested maximum; datasets without both values, or with a narrower range, are
+rejected with a diagnostic before any further API cost is spent on them.
+`mz_min`/`mz_max` is a convenience pair for `mz_range: {"min": ..., "max": ...,
+"mode": "covers"}`; supplying both forms together raises `ValueError`.
 
 Discovery always requests current annotation counts and the following public
 METASPACE metadata:
@@ -91,6 +111,36 @@ The returned table contains separate `condition` and `diseases` columns.
 `condition` is the submitter-provided experimental or biological condition and
 may contain values such as `Wildtype`, `Control`, or `Frozen`. `diseases` is
 reserved for explicit disease metadata and is not inferred from `condition`.
+
+## Explore m/z coverage interactively
+
+Two methods let a review session narrow a range before it is committed to
+`filters`.
+
+```python
+coverage = explorer.count_mz_range_coverage(
+    lower_bounds=[100, 200, 300, 400],
+    upper_bounds=[700, 800, 900, 1000],
+)
+```
+
+`count_mz_range_coverage()` returns a long table with `lower_bound`,
+`upper_bound`, `range_width`, and `dataset_count` for every combination of the
+supplied bounds (pairs where `lower_bound >= upper_bound` are skipped). It
+counts datasets from the most recent `filter()`/`search()` result; pivot the
+table with `pandas.DataFrame.pivot()` for a matrix view.
+
+```python
+matching = explorer.select_mz_range(min_mz=200, max_mz=900)
+```
+
+`select_mz_range()` excludes datasets from the current result that do not
+cover `[min_mz, max_mz]` and records the range as `filters["mz_range"]`. It
+operates on the explorer's current in-memory results; a later `filter()` call
+runs a new provider query and replaces those results. To have m/z coverage
+enforced during that provider query itself — before annotation counts or
+molecular statistics are requested — pass `mz_min`/`mz_max` directly in the
+`filters` mapping instead, as shown above.
 
 ## Calculate molecular statistics
 
@@ -135,7 +185,8 @@ Each ordinary row represents one accepted dataset. Relevant column groups are:
   `unique_molecule_count`, `unique_molecules`;
 - spatial annotations: `annotated_pixel_count`, `unannotated_pixel_count`,
   `annotated_pixel_fraction`, `spatial_annotation_count`,
-  `spatial_annotation_database_count`, `spatial_stats_status`.
+  `spatial_annotation_database_count`, `spatial_stats_status`;
+- review state: `excluded`.
 
 Missing values mean that METASPACE did not expose the field or that the
 corresponding optional calculation was not requested. A zero molecular count
@@ -160,9 +211,10 @@ dataset_id = results.loc[results["dataset_id"] != "SUMMARY", "dataset_id"].iloc[
 record = explorer.source.get_dataset_metadata(dataset_id)
 ```
 
-`rejected()` explains local free-text and quantitative rejections. Datasets
-removed directly by a native METASPACE filter are not returned by the provider
-and therefore cannot have wrapper-generated rejection reasons.
+`rejected()` explains local free-text, m/z-coverage, and quantitative
+rejections. Datasets removed directly by a native METASPACE filter are not
+returned by the provider and therefore cannot have wrapper-generated rejection
+reasons.
 
 `get_dataset_metadata()` returns the normalized source record together with
 the original METASPACE metadata and current GraphQL enrichment fields.
@@ -170,22 +222,25 @@ the original METASPACE metadata and current GraphQL enrichment fields.
 ## Query through the dataset CLI
 
 ```bash
-.venv/bin/python assets/scripts/datasets/manage_datasets.py query \
+msi-datasets query \
   --source metaspace \
-  --workspace-path data/tutorial_workspace \
-  --filters assets/configs/datasets/metaspace_filters.json \
-  --selection data/tutorial_workspace/datasets/selections/query.json
+  --workspace-path workspace \
+  --filters workspace/configs/datasets/kidney/filter.json \
+  --selection workspace/configs/datasets/kidney/selection.json
 ```
 
 The query stores accepted discovery records in the catalogue and writes a
 selection snapshot. Download and annotation materialization are separate
 operations described in [Download datasets](downloading-datasets.md) and
-[Retrieve dataset annotations](retrieving-annotations.md).
+[Retrieve dataset annotations](retrieving-annotations.md). See
+[Use the msi-datasets CLI](command-line-workflow.md) for every argument.
 
 ## Diagnose common failures
 
 - `Unknown METASPACE filters` indicates a misspelled or unsupported public
   filter key.
+- `Use either mz_range or mz_min/mz_max, not both` and `mz_min and mz_max must
+  be provided together` indicate an invalid m/z filter combination.
 - A GraphQL error occurs before local filtering and means the installed client
   and deployed schema disagree or access to a requested field was denied.
 - Empty `mz_min` and `mz_max` values mean the dataset has no accessible

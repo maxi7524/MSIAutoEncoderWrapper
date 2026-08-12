@@ -98,7 +98,7 @@ family, for example:
 
 - [`ReaderManager`](../../../src/msi_autoencoder_wrapper/readers/readers_manager.py);
 - [`BinnerManager`](../../../src/msi_autoencoder_wrapper/binners/binners_manager.py);
-- [`DatasetSourceManager`](../../../src/msi_autoencoder_wrapper/dataset_management/sources/source_manager.py);
+- [`DatasetSourceManager`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/sources/source_manager.py) (independent `msi_dataset_manager` distribution);
 - [`DatasetManager`](../../../src/msi_autoencoder_wrapper/models/datasets/dataset_manager.py).
 
 ### Discover model architectures

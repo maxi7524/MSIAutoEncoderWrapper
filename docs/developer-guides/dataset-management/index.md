@@ -1,5 +1,15 @@
 # Dataset management development
 
+`msi_dataset_manager` is developed as a separate, independent distribution
+under `packages/msi_dataset_manager` (its own `pyproject.toml`, source under
+`packages/msi_dataset_manager/src/msi_dataset_manager`, and tests under
+`packages/msi_dataset_manager/tests`). It has no dependency on
+`msi_autoencoder_wrapper` and must not gain one; the wrapper depends on it
+instead, through `SQLiteAnnotationReader`. Changes to dataset management are
+made in that package, then validated against the wrapper's own
+`tests/dataset_sources` integration tests, which exercise the installed
+`msi_dataset_manager` the way the wrapper actually uses it.
+
 These guides extend external provider discovery and canonical local dataset
 state.
 

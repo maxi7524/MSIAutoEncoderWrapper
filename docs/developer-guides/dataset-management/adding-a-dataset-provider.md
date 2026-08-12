@@ -20,8 +20,13 @@ selection remain inside the adapter. Operations consume normalized records.
 
 ### Implement and register
 
-Create a strategy under `dataset_management/sources/strategies`, inherit
-`DatasetSource`, and decorate it with `DatasetSourceManager.register_source()`.
+Create a strategy under
+`packages/msi_dataset_manager/src/msi_dataset_manager/sources/strategies`,
+inherit `DatasetSource`, and decorate it with
+`DatasetSourceManager.register_source()`. `DatasetSourceManager.discover_strategies()`
+imports every module in that package, so a new strategy module is discovered
+without further registration wiring as long as its file lives there and
+applies the decorator at import time.
 
 ### Normalize records
 
@@ -31,6 +36,10 @@ materialization.
 
 ### Add tests
 
-Mock the provider boundary. Test discovery, pagination, filtering, diagnostics,
-metadata, annotation options, download reuse/failure, authentication, quota,
-registration, and end-to-end materialization into a temporary catalog.
+Add tests under `packages/msi_dataset_manager/tests`, mocking the provider
+boundary. Test discovery, pagination, filtering, diagnostics, metadata,
+annotation options, download reuse/failure, authentication, quota,
+registration, and end-to-end materialization into a temporary catalog. Extend
+`tests/dataset_sources` in the wrapper repository only for integration
+coverage that exercises the installed package as the wrapper consumes it
+(for example, through `SQLiteAnnotationReader`).

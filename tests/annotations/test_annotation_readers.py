@@ -15,9 +15,9 @@ from msi_autoencoder_wrapper.annotations.strategies.sqlite_annotation_reader imp
     SQLiteAnnotationReader,
 )
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
-from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
+from msi_dataset_manager.catalog import DatasetCatalog
 from tests.mocks.components import MockMSIReader
 
 
@@ -223,6 +223,47 @@ def test_data_reader_automatically_loads_workspace_annotations(
     assert (
         wrapper.active_context.annotation_reader.get_spectrum_annotations(0)[0]["formula"]
         == "A"
+    )
+
+
+def test_data_reader_automatically_loads_sibling_composed_catalog(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A composed image discovers its same-named SQLite annotation store."""
+    directory = tmp_path / "datasets" / "kidney"
+    directory.mkdir(parents=True)
+    image_path = directory / "kidney.imzML"
+    shutil.copy2(msi_fixture_path, image_path)
+    shutil.copy2(msi_fixture_path.with_suffix(".ibd"), image_path.with_suffix(".ibd"))
+    catalog = DatasetCatalog(directory / "kidney.sqlite")
+    catalog.register_merged_dataset("kidney", image_path)
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path))
+
+    wrapper.context_manager.set_reader(MockMSIReader(image_path), str(image_path))
+    wrapper.workspace.set_active_image(str(image_path))
+
+    reader = wrapper.active_context.annotation_reader
+    assert isinstance(reader, SQLiteAnnotationReader)
+    assert reader.merged_dataset_id == "kidney"
+
+
+def test_local_csv_precedes_sibling_composed_catalog(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Portable CSV annotations take priority during automatic discovery."""
+    image_path = _copy_image_with_metaspace_csv(tmp_path / "kidney", msi_fixture_path)
+    catalog = DatasetCatalog(image_path.with_suffix(".sqlite"))
+    catalog.register_merged_dataset("kidney", image_path)
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path / "workspace"))
+
+    wrapper.context_manager.set_reader(MockMSIReader(image_path), str(image_path))
+    wrapper.workspace.set_active_image(str(image_path))
+
+    assert isinstance(
+        wrapper.active_context.annotation_reader,
+        MetaspaceCSVAnnotationReader,
     )
 
 

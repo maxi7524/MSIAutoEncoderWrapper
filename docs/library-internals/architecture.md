@@ -63,10 +63,12 @@ component and consolidated configuration contracts. Workspace `ModelStore`
 writes model artifacts. [`execution`](../../src/msi_autoencoder_wrapper/execution/__init__.py)
 turns schema-v1 campaign YAML into tasks for local or Slurm execution.
 
-[`dataset_management`](../../src/msi_autoencoder_wrapper/dataset_management/__init__.py)
-isolates provider communication and normalizes external records into SQLite and
-local imzML artifacts. Annotation readers consume those local forms without
-calling providers.
+[`msi_dataset_manager`](../../packages/msi_dataset_manager/src/msi_dataset_manager/__init__.py)
+is an independent distribution (`packages/msi_dataset_manager`), not a module
+of this wrapper. It isolates provider communication and normalizes external
+records into SQLite and local imzML artifacts. Annotation readers consume
+those local forms without calling providers; see
+[Dataset management internals](dataset-management/index.md).
 
 ### Analysis boundary
 
