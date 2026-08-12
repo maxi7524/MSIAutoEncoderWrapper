@@ -151,6 +151,8 @@ def test_explorer_counts_selects_and_exports_mz_ranges(tmp_path: Path) -> None:
         "mode": "covers",
     }
     assert payload["datasets"][0]["metadata"]["mz_min"] == 100
+    assert payload["dataset_ids"] == ["one"]
+    assert "rejected" not in payload
     assert payload["exported_at"]
 
 

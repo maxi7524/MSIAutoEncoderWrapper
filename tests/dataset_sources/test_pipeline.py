@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -18,6 +19,7 @@ from msi_autoencoder_wrapper.dataset_management.operations import (
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
 from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
+from msi_autoencoder_wrapper.utils.exceptions import DownloadLimitError
 
 
 class FakeDatasetSource(DatasetSource):
@@ -66,6 +68,7 @@ class FakeDatasetSource(DatasetSource):
             {
                 "id": "annotation-1",
                 "sumFormula": "C6H12O6",
+                "mz": 181.0707,
                 "fdr": 0.5,
                 "spectrum_ids": list(range(6)),
             }
@@ -187,6 +190,51 @@ def test_materialization_downloads_all_pairs_before_annotations_and_reuses_both(
     assert source.annotation_calls == []
     manifest = datasets_dir / "manifests" / "selection.materialization.json"
     assert manifest.is_file()
+
+
+def test_download_limit_continues_with_annotations_for_later_local_pairs(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """File quota ends phase one but does not hide later cached datasets."""
+    class LimitedSource(FakeDatasetSource):
+        def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
+            if dataset_id == "missing":
+                Path(destination).mkdir(parents=True, exist_ok=True)
+                raise DownloadLimitError("provider refused download links")
+            return super().download_dataset(dataset_id, destination)
+
+    source = LimitedSource(msi_fixture_path)
+    datasets_dir = tmp_path / "datasets"
+    catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
+    selection = datasets_dir / "selection.json"
+    selection.write_text(
+        '{"source":"fake","datasets":['
+        '{"dataset_id":"missing","name":"Missing"},'
+        '{"dataset_id":"local","name":"Local"}]}'
+    )
+    local = datasets_dir / "sources" / "fake" / "local"
+    local.mkdir(parents=True)
+    shutil.copy2(msi_fixture_path, local / "local.imzML")
+    shutil.copy2(msi_fixture_path.with_suffix(".ibd"), local / "local.ibd")
+
+    materialized = materialize_selection(
+        source=source,
+        selection_path=selection,
+        datasets_dir=datasets_dir,
+        catalog=catalog,
+    )
+
+    assert materialized == [local]
+    assert source.annotation_calls == ["local"]
+    assert (local / "metaspace_annotations.csv").is_file()
+    assert (local / "local_pixel_intensities.csv").is_file()
+    manifest = json.loads(
+        (datasets_dir / "manifests" / "selection.materialization.json").read_text()
+    )
+    assert manifest["file_limit_reached"] is True
+    assert manifest["file_statuses"]["missing"] == "download_limit"
+    assert manifest["annotation_statuses"]["local"] == "downloaded_and_imported"
 
 
 def test_query_applies_generic_dataset_exclusions_outside_provider(

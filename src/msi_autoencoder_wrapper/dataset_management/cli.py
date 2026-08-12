@@ -15,6 +15,7 @@ from .operations.download import (
 )
 from .operations.query import query_to_selection
 from .sources.source_manager import DatasetSourceManager
+from .sources.profiles import read_source_profiles
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--selection", type=Path, required=True)
     download.add_argument("--annotation-options", type=Path)
     download.add_argument("--dataset-id", action="append", dest="dataset_ids")
+    download.add_argument(
+        "--profiles",
+        type=Path,
+        help="CSV with a mandatory 'key' column and optional metadata columns",
+    )
+    download.add_argument("--manifest", type=Path)
 
     download_merge = commands.add_parser(
         "download-merge",
@@ -103,7 +110,28 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
 
     DatasetSourceManager.discover_strategies()
-    source = DatasetSourceManager.get_source(arguments.source)
+    resolved_profiles_path = (
+        _resolve_cli_path(arguments.profiles, repository_root)
+        if arguments.command == "download" and arguments.profiles is not None
+        else None
+    )
+    source = DatasetSourceManager.get_source(
+        arguments.source,
+        **(
+            {
+                "client_options": {
+                    "api_key": read_source_profiles(resolved_profiles_path)[0]["key"]
+                }
+            }
+            if resolved_profiles_path is not None
+            else {}
+        ),
+        **(
+            {"load_catalog": False}
+            if arguments.command in {"download", "download-merge"}
+            else {}
+        ),
+    )
     if arguments.command == "query":
         filters_path = _resolve_cli_path(arguments.filters, repository_root)
         selection_path = _resolve_cli_path(arguments.selection, repository_root)
@@ -153,6 +181,19 @@ def main(argv: Sequence[str] | None = None) -> None:
             else None
         ),
         dataset_ids=arguments.dataset_ids,
+        profiles_path=resolved_profiles_path,
+        source_factory=(
+            lambda key, _profile: DatasetSourceManager.get_source(
+                arguments.source,
+                client_options={"api_key": key},
+                load_catalog=False,
+            )
+        ),
+        manifest_path=(
+            _resolve_cli_path(arguments.manifest, repository_root)
+            if arguments.manifest is not None
+            else None
+        ),
     )
 
 

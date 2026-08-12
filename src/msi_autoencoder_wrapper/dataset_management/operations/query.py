@@ -22,8 +22,10 @@ def query_to_selection(
     """Query metadata, update SQLite, and write a reproducible selection."""
     provider_filters = dict(filters)
     excluded_ids = {
-        str(value) for value in provider_filters.pop("exclude_dataset_ids", ())
+        str(value) for value in provider_filters.get("exclude_dataset_ids", ())
     }
+    if source.source_name != "metaspace":
+        provider_filters.pop("exclude_dataset_ids", None)
     records = [
         record
         for record in source.filter(provider_filters)

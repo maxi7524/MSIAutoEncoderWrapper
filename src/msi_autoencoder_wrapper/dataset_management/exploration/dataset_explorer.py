@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -106,8 +107,10 @@ class DatasetExplorer:
             self.set_filters(filters)
         provider_filters = dict(self._filters)
         configured_exclusions = {
-            str(value) for value in provider_filters.pop("exclude_dataset_ids", ())
+            str(value) for value in provider_filters.get("exclude_dataset_ids", ())
         }
+        if self.source.source_name != "metaspace":
+            provider_filters.pop("exclude_dataset_ids", None)
         self.source.filter(provider_filters)
         discovered = self.source.get_accepted_records()
         self._records = []
@@ -169,6 +172,56 @@ class DatasetExplorer:
         """Return provider diagnostics for records rejected during discovery."""
         return pd.DataFrame(self.source.get_rejected_records())
 
+    def count_mz_range_coverage(
+        self,
+        lower_bounds: Iterable[float],
+        upper_bounds: Iterable[float],
+    ) -> pd.DataFrame:
+        """Count discovered datasets covering every requested m/z interval.
+
+        A dataset covers an interval when its minimum is no greater than the
+        requested lower bound and its maximum is no less than the requested
+        upper bound. Invalid or missing provider values never match.
+        """
+        results = self.results()
+        minima = pd.to_numeric(results["mz_min"], errors="coerce")
+        maxima = pd.to_numeric(results["mz_max"], errors="coerce")
+        rows: List[Dict[str, Any]] = []
+        for lower_bound in lower_bounds:
+            for upper_bound in upper_bounds:
+                lower = float(lower_bound)
+                upper = float(upper_bound)
+                if lower >= upper:
+                    continue
+                mask = minima.le(lower) & maxima.ge(upper)
+                rows.append(
+                    {
+                        "lower_bound": lower,
+                        "upper_bound": upper,
+                        "range_width": upper - lower,
+                        "dataset_count": int(mask.sum()),
+                    }
+                )
+        return pd.DataFrame(
+            rows,
+            columns=["lower_bound", "upper_bound", "range_width", "dataset_count"],
+        )
+
+    def select_mz_range(self, min_mz: float, max_mz: float) -> pd.DataFrame:
+        """Select discovered datasets covering the complete requested range."""
+        lower = float(min_mz)
+        upper = float(max_mz)
+        if lower < 0 or lower >= upper:
+            raise ValueError("m/z range requires 0 <= min_mz < max_mz.")
+        results = self.results(include_excluded=True)
+        minima = pd.to_numeric(results["mz_min"], errors="coerce")
+        maxima = pd.to_numeric(results["mz_max"], errors="coerce")
+        matching = minima.le(lower) & maxima.ge(upper)
+        rejected_ids = results.loc[~matching, "dataset_id"].astype(str).tolist()
+        self._excluded_ids.update(rejected_ids)
+        self._filters["mz_range"] = {"min": lower, "max": upper, "mode": "covers"}
+        return self.results()
+
     def exclude(self, dataset_ids: str | Iterable[str]) -> pd.DataFrame:
         """Exclude one or more reviewed dataset IDs from exported filters.
 
@@ -215,6 +268,68 @@ class DatasetExplorer:
         )
         logger.info("Exported dataset query configuration to %s", target)
         return target
+
+    def export_selection(
+        self,
+        directory: Path | str,
+        *,
+        sort_by: str | None = None,
+        ascending: bool = True,
+    ) -> Dict[str, Path]:
+        """Export query configuration and the frozen accepted dataset records."""
+        target = Path(directory)
+        target.mkdir(parents=True, exist_ok=True)
+        filters_path = self.export_config(target / "filter.json")
+        selected = [
+            record for record in self._records
+            if str(record["dataset_id"]) not in self._excluded_ids
+        ]
+        if sort_by is not None:
+            populated = [
+                record for record in selected
+                if _metadata_value(record, sort_by) is not None
+            ]
+            missing = [
+                record for record in selected
+                if _metadata_value(record, sort_by) is None
+            ]
+            populated.sort(
+                key=lambda record: _metadata_value(record, sort_by),
+                reverse=not ascending,
+            )
+            selected = populated + missing
+        exported_at = datetime.now(timezone.utc).isoformat()
+        selection_path = target / "selection.json"
+        selection_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "source": self.source.source_name,
+                    "exported_at": exported_at,
+                    "catalog_retrieved_at": getattr(
+                        self.source, "catalog_retrieved_at", None
+                    ),
+                    "filters_path": filters_path.name,
+                    "filters": json.loads(filters_path.read_text(encoding="utf-8")),
+                    "sort": (
+                        {"field": sort_by, "direction": "ascending" if ascending else "descending"}
+                        if sort_by is not None else None
+                    ),
+                    "dataset_ids": [str(record["dataset_id"]) for record in selected],
+                    "datasets": selected,
+                },
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        return {"filters": filters_path, "selection": selection_path}
+
+
+def _metadata_value(record: Mapping[str, Any], field: str) -> Any:
+    """Return one top-level or nested metadata value for selection sorting."""
+    return record.get(field, _mapping(record.get("metadata")).get(field))
 
 
 _RESULT_COLUMNS = [

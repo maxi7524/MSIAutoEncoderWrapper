@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import DatasetSource
+from .profiles import RotatingDatasetSource, read_source_profiles
 from .source_manager import DatasetSourceManager
 
 __all__ = [
@@ -10,6 +11,8 @@ __all__ = [
     "DatasetSourceManager",
     "MetaspaceDatasetSource",
     "PrideDatasetSource",
+    "RotatingDatasetSource",
+    "read_source_profiles",
 ]
 
 

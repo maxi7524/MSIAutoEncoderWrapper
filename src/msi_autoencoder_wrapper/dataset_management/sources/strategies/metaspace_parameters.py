@@ -60,6 +60,10 @@ FREE_TEXT_FILTER_FIELDS = {
 
 
 LOCAL_FILTERS = {
+    "exclude_dataset_ids",
+    "mz_range",
+    "mz_min",
+    "mz_max",
     "annotation_fdr",
     "include_molecule_stats",
     "include_spatial_annotation_stats",
@@ -122,6 +126,21 @@ def filter_schema() -> Dict[str, Any]:
                 "type": "list[string]",
                 "description": "Local exclusions applied after provider discovery.",
             },
+            "mz_range": {
+                "type": "object{min: float, max: float, mode: covers}",
+                "local": True,
+                "description": "Retain datasets covering the complete requested m/z range.",
+            },
+            "mz_min": {
+                "type": "float",
+                "local": True,
+                "description": "Required lower bound covered by the dataset.",
+            },
+            "mz_max": {
+                "type": "float",
+                "local": True,
+                "description": "Required upper bound covered by the dataset.",
+            },
         }
     )
     for key in FREE_TEXT_FILTER_FIELDS:
@@ -143,8 +162,19 @@ def split_filters(filters: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str,
     if unknown:
         raise ValueError(f"Unknown METASPACE filters: {sorted(unknown)}")
     options = dict(filters)
-    options.pop("exclude_dataset_ids", None)
     local = {key: options.pop(key) for key in list(options) if key in LOCAL_FILTERS}
+    if "mz_range" in local and (
+        local.get("mz_min") is not None or local.get("mz_max") is not None
+    ):
+        raise ValueError("Use either mz_range or mz_min/mz_max, not both")
+    if local.get("mz_min") is not None or local.get("mz_max") is not None:
+        if local.get("mz_min") is None or local.get("mz_max") is None:
+            raise ValueError("mz_min and mz_max must be provided together")
+        local["mz_range"] = {
+            "min": float(local.pop("mz_min")),
+            "max": float(local.pop("mz_max")),
+            "mode": "covers",
+        }
     fdr = float(local.get("annotation_fdr", 0.1))
     molecule = options.pop("molecule", None)
     native = {
