@@ -42,15 +42,44 @@ def write_annotation_csv_pair(
     annotations: Sequence[Mapping[str, Any]],
     reader: PyImzMLReader,
 ) -> tuple[Path, Path]:
-    """Atomically write provider annotations and per-pixel intensities."""
+    """Atomically write the reader-compatible annotation representation.
+
+    :param directory: Canonical directory of the source imzML pair.
+    :type directory: pathlib.Path
+    :param dataset_id: Stable source dataset identifier.
+    :type dataset_id: str
+    :param dataset_name: Human-readable source dataset name.
+    :type dataset_name: str
+    :param annotations: Original provider records returned for this dataset.
+    :type annotations: Sequence[Mapping[str, Any]]
+    :param reader: Reader defining the canonical spectrum-coordinate mapping.
+    :type reader: PyImzMLReader
+    :return: Annotation metadata and pixel-intensity CSV paths.
+    :rtype: tuple[pathlib.Path, pathlib.Path]
+
+    The paired CSV files are the persisted source-annotation artifact consumed
+    by the current reader. Composition later imports them into the cohort-wide
+    SQLite schema; download itself never creates SQLite.
+
+    TODO: Introduce an explicitly provider-independent intermediate annotation
+    schema. The current canonical CSV contract intentionally follows METASPACE
+    fields and filenames for reader compatibility. Future adapters should
+    preserve their provider response and normalize it at this boundary without
+    changing compose or downstream readers.
+    """
+    # Reader-compatible output paths
     annotations_path, intensities_path = annotation_csv_paths(directory, dataset_id)
     annotations_tmp = annotations_path.with_suffix(".csv.tmp")
     intensities_tmp = intensities_path.with_suffix(".csv.tmp")
+    # Spatial coordinate contract
+    ## CSV columns use zero-based xN_yN labels while imzML positions are one-based.
     coordinates = [
         f"x{x - 1}_y{y - 1}"
         for spectrum_id in range(reader.GetNumberOfSpectra())
         for x, y, _ in [reader.GetSpectrumPosition(spectrum_id)]
     ]
+    # Provider-record normalization
+    ## Preserve molecule identity and database provenance in the annotation table.
     rows = []
     intensity_rows = []
     for position, annotation in enumerate(annotations):
@@ -88,6 +117,8 @@ def write_annotation_csv_pair(
             for key, value in dict(annotation.get("spectrum_values") or {}).items()
         }
         spectrum_ids = {int(value) for value in annotation.get("spectrum_ids") or ()}
+        # Pixel association
+        ## Prefer provider ion images; retain sparse spectrum mappings for legacy data.
         for spectrum_id, coordinate in enumerate(coordinates):
             if ion_image is None:
                 intensity_row[coordinate] = spectrum_values.get(
@@ -105,6 +136,8 @@ def write_annotation_csv_pair(
                 else ""
             )
         intensity_rows.append(intensity_row)
+    # Atomic paired-file publication
+    ## Neither CSV is considered reusable until both temporary writes succeed.
     try:
         _write_csv(annotations_tmp, rows, list(rows[0]) if rows else [
             "group", "datasetName", "datasetId", "formula", "adduct", "mz", "fdr",

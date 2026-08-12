@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import numpy as np
@@ -412,7 +414,20 @@ class MetaspaceDatasetSource(DatasetSource):
         return records
 
     def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
-        """Download an imzML/ibd pair with the official METASPACE client."""
+        """Download one imzML/ibd pair from a single signed-link response.
+
+        :param dataset_id: Stable METASPACE dataset identifier.
+        :type dataset_id: str
+        :param destination: Canonical dataset directory.
+        :type destination: pathlib.Path | str
+        :return: Directory containing the complete pair.
+        :rtype: pathlib.Path
+
+        The official client requests signed links inside ``download_to_dir``.
+        This adapter must validate the same response before transfer to detect
+        quota sentinel files, so it transfers that validated response directly
+        instead of consuming a second provider request.
+        """
         target = Path(destination)
         target.mkdir(parents=True, exist_ok=True)
         expected = target / f"{dataset_id}.imzML"
@@ -433,7 +448,7 @@ class MetaspaceDatasetSource(DatasetSource):
             )
             return target
 
-        ## Remote response validation
+        ## Remote response validation and transfer
         dataset = self.client.dataset(id=dataset_id)
         if hasattr(dataset, "download_links"):
             download = dataset.download_links()
@@ -447,17 +462,23 @@ class MetaspaceDatasetSource(DatasetSource):
                     message=f"Cannot download dataset '{dataset_id}': {message}",
                 )
             _validate_download_files(files, dataset_id)
-
-        ## Official client transfer
-        ### Delegate signed-link handling, parallel transfer, and file naming to
-        ### SMDataset instead of maintaining a second downloader in this adapter.
-        try:
-            dataset.download_to_dir(target, base_name=dataset_id)
-        except (OSError, ValueError, requests.RequestException) as error:
-            raise_external_service_error(
-                context_name="METASPACE",
-                message=f"Download failed for dataset '{dataset_id}': {error}",
-            )
+            try:
+                _download_authorized_files(files, target, dataset_id)
+            except (OSError, ValueError, requests.RequestException) as error:
+                raise_external_service_error(
+                    context_name="METASPACE",
+                    message=f"Download failed for dataset '{dataset_id}': {error}",
+                )
+        else:
+            # REMARK: Retain compatibility with injected and older clients that
+            # expose only the high-level transfer operation.
+            try:
+                dataset.download_to_dir(target, base_name=dataset_id)
+            except (OSError, ValueError, requests.RequestException) as error:
+                raise_external_service_error(
+                    context_name="METASPACE",
+                    message=f"Download failed for dataset '{dataset_id}': {error}",
+                )
 
         ## Output verification
         if not expected.is_file() or not expected.with_suffix(".ibd").is_file():
@@ -1159,6 +1180,67 @@ def _database_parts(database: Any) -> tuple[Optional[str], Optional[str]]:
 
 
 # Dataset download response validation
+def _download_authorized_files(
+    files: List[Mapping[str, Any]],
+    destination: Path,
+    dataset_id: str,
+) -> None:
+    """Transfer one validated signed-link response with byte-level progress.
+
+    :param files: Validated imzML and ibd signed-link records.
+    :type files: List[Mapping[str, Any]]
+    :param destination: Canonical dataset directory.
+    :type destination: pathlib.Path
+    :param dataset_id: Stable output basename.
+    :type dataset_id: str
+
+    Both files are transferred concurrently because METASPACE signed links can
+    expire while the substantially larger ibd file is downloading. Partial
+    files use a ``.part`` suffix and therefore cannot be mistaken for a
+    reusable dataset by the materialization scanner.
+    """
+    progress = tqdm(
+        total=0,
+        desc=f"Download {dataset_id}",
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        dynamic_ncols=True,
+        leave=True,
+    )
+    total_lock = Lock()
+
+    def transfer(file_record: Mapping[str, Any]) -> None:
+        suffix = Path(str(file_record["filename"])).suffix
+        target = destination / f"{dataset_id}{suffix}"
+        if target.is_file() and target.stat().st_size > 0:
+            return
+        partial = target.with_suffix(f"{target.suffix}.part")
+        try:
+            with requests.get(str(file_record["link"]), stream=True) as response:
+                response.raise_for_status()
+                content_length = int(response.headers.get("content-length", 0))
+                if content_length:
+                    with total_lock:
+                        progress.total = (progress.total or 0) + content_length
+                        progress.refresh()
+                with partial.open("wb") as stream:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            stream.write(chunk)
+                            progress.update(len(chunk))
+            partial.replace(target)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(files)) as executor:
+            list(executor.map(transfer, files))
+    finally:
+        progress.close()
+
+
 def _validate_download_files(
     files: List[Mapping[str, Any]],
     dataset_id: str,

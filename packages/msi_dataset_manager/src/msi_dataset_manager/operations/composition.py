@@ -34,7 +34,7 @@ def compose_cohort(
     random_seed: int = 0,
     config: Optional[Mapping[str, Any]] = None,
 ) -> Path:
-    """Merge one cohort and persist its normalized composition configuration.
+    """Build one merged cohort and its self-contained result catalogue.
 
     :param workspace_path: Workspace containing ``datasets`` and ``configs``.
     :type workspace_path: pathlib.Path | str
@@ -61,21 +61,29 @@ def compose_cohort(
     :type config: Mapping[str, Any] | None
     :return: Merged imzML path.
     :rtype: pathlib.Path
+
+    Composition is the only stage that creates SQLite. It validates canonical
+    source pairs, imports their paired annotation CSVs into one common schema,
+    merges selected spectra, stores source-to-merged index provenance, builds
+    cohort-level annotation masks, and finally writes normalized configuration.
     """
+    # Composition request validation
     ordered_ids = [str(value) for value in dataset_ids]
     if not ordered_ids or len(ordered_ids) != len(set(ordered_ids)):
         raise_validation_error("Composition", "dataset_ids must be non-empty and unique.")
 
     layout = DatasetWorkspaceLayout(workspace_path)
-    # Destination annotation store
-    ## Composition owns a self-contained catalogue beside the merged imzML pair.
+    # Result catalogue initialization
+    ## This is the only SQLite catalogue in the workflow. Query and download
+    ## use JSON artifacts and the filesystem instead of maintaining shadow state.
     catalog = DatasetCatalog(layout.composed_catalog_path(cohort_id))
     inputs = []
     available_ids = []
     missing_ids = []
 
     # Canonical input validation and cohort-local annotation import
-    ## Each cohort owns its SQLite index while large source pairs remain shared.
+    ## Source pairs remain shared under datasets/<source_id>. Paired source CSVs
+    ## are normalized by the annotation reader into the common SQLite schema.
     for dataset_id in ordered_ids:
         directory = layout.dataset_dir(dataset_id)
         if not (
@@ -113,6 +121,8 @@ def compose_cohort(
             "Composition", "None of the requested datasets has a complete local imzML pair."
         )
 
+    # Reproducible composition configuration
+    ## Record both requested and actually available datasets before merging.
     normalized: Dict[str, Any] = {
         **dict(config or {}),
         "schema_version": 1,
@@ -128,6 +138,8 @@ def compose_cohort(
         "unannotated_amount": unannotated_amount,
         "random_seed": int(random_seed),
     }
+    # Spectrum merge and provenance
+    ## ImzMLMerger writes the result pair and source-to-output spectrum mappings.
     output = layout.imzml_path(cohort_id)
     ImzMLMerger(catalog).merge(
         inputs=inputs,
@@ -139,6 +151,8 @@ def compose_cohort(
         unannotated_amount=unannotated_amount,
         random_seed=random_seed,
     )
+    # Cohort annotation index
+    ## Derive occurrence/FDR masks from the now-complete common SQLite catalogue.
     build_cohort_annotation_index(
         catalog=catalog,
         source=source,
@@ -146,6 +160,7 @@ def compose_cohort(
         config=normalized,
         output_path=output.parent / "annotation_index.json",
     )
+    # Final composition artifact
     _write_json_atomic(layout.composition_path(cohort_id), normalized)
     return output
 
