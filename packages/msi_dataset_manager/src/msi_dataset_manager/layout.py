@@ -37,8 +37,12 @@ class DatasetWorkspaceLayout:
         return self.workspace_path / "configs" / "datasets" / cohort_id
 
     def catalog_path(self, cohort_id: str) -> Path:
-        """Return the cohort-named SQLite catalogue path."""
+        """Return the working SQLite catalogue used by query and download."""
         return self.cohort_config_dir(cohort_id) / f"{cohort_id}.sqlite"
+
+    def composed_catalog_path(self, cohort_id: str) -> Path:
+        """Return the self-contained SQLite catalogue of a composed dataset."""
+        return self.dataset_dir(cohort_id) / f"{cohort_id}.sqlite"
 
     def materialization_path(self, cohort_id: str) -> Path:
         """Return the cohort materialization report path."""

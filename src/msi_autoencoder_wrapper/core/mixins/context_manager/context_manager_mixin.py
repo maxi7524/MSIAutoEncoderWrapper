@@ -82,8 +82,8 @@ class ContextManagerProxy:
         :param img_name_or_path: Explicit target path or standalone image name key token. Defaults to None.
         :type img_name_or_path: Optional[str]
         :param annotation_catalog_path: Optional explicit SQLite catalog path.
-            When omitted, first use a registered workspace dataset and then
-            detect paired METASPACE CSV exports beside the image.
+            When omitted, first detect paired CSV exports and then a SQLite
+            catalogue beside the image.
         :type annotation_catalog_path: Optional[str]
         :param auto_load_annotations: Automatically attach the matching SQLite
             or local METASPACE CSV annotation reader after configuring data.
@@ -119,8 +119,8 @@ class ContextManagerProxy:
 
         :param img_name_or_path: Image identifier or explicit imzML path.
         :type img_name_or_path: str | None
-        :param catalog_path: Explicit SQLite path. When omitted, use the single
-            catalog in the workspace datasets directory.
+        :param catalog_path: Explicit SQLite path. When omitted, inspect
+            annotation files stored beside the image.
         :type catalog_path: str | None
         :param image_path: Resolved path exposed by the configured data reader.
         :type image_path: pathlib.Path | None
@@ -131,11 +131,6 @@ class ContextManagerProxy:
         from ....dataset_management.catalog import DatasetCatalog
 
         workspace = self._wrapper.workspace
-        resolved_catalog_path = (
-            Path(catalog_path).expanduser().resolve()
-            if catalog_path is not None
-            else workspace.get_datasets_dir() / "catalog.sqlite"
-        )
         if image_path is None:
             logger.warning(
                 "No annotations were attached to '%s' because the configured "
@@ -144,42 +139,37 @@ class ContextManagerProxy:
             )
             return None
         resolved_image_path = Path(image_path).expanduser().resolve()
-        if catalog_path is not None and not resolved_catalog_path.is_file():
+        explicit_catalog = (
+            Path(catalog_path).expanduser().resolve()
+            if catalog_path is not None
+            else None
+        )
+        if explicit_catalog is not None and not explicit_catalog.is_file():
             raise_validation_error(
                 "AnnotationReader",
-                f"Explicit annotation catalog does not exist: '{resolved_catalog_path}'.",
+                f"Explicit annotation catalog does not exist: '{explicit_catalog}'.",
             )
 
-        if resolved_catalog_path.is_file():
-            identity = DatasetCatalog(resolved_catalog_path).resolve_dataset_path(
-                resolved_image_path
+        # Explicit annotation configuration
+        ## Explicit paths are strict and take precedence over auto-detection.
+        if explicit_catalog is not None:
+            reader = self._load_sqlite_annotations(
+                DatasetCatalog,
+                resolved_image_path,
+                explicit_catalog,
             )
-            if identity is not None:
-                reader_options: Dict[str, Any] = {
-                    "catalog_path": str(resolved_catalog_path)
-                }
-                if identity["kind"] == "merged":
-                    reader_options["merged_dataset_id"] = identity[
-                        "merged_dataset_id"
-                    ]
-                else:
-                    reader_options["source"] = identity["source"]
-                    reader_options["dataset_id"] = identity["dataset_id"]
-                return self._set_component(
-                    component_type="annotation_reader",
-                    target="SQLiteAnnotationReader",
-                    img_name_or_path=str(resolved_image_path),
-                    **reader_options,
-                )
-            if catalog_path is not None:
+            if reader is None:
                 raise_validation_error(
                     "AnnotationReader",
                     (
                         f"Image '{resolved_image_path}' is not registered in the "
-                        f"explicit annotation catalog '{resolved_catalog_path}'."
+                        f"explicit annotation catalog '{explicit_catalog}'."
                     ),
                 )
+            return reader
 
+        # Automatic annotation discovery
+        ## Portable CSV exports beside a source image have first priority.
         csv_paths = self._find_local_metaspace_annotations(resolved_image_path)
         if csv_paths is not None:
             annotations_path, pixel_intensities_path = csv_paths
@@ -192,6 +182,20 @@ class ContextManagerProxy:
                 pixel_intensities_path=str(pixel_intensities_path),
             )
 
+        ## A composed dataset owns a same-named SQLite catalogue beside imzML.
+        sibling_catalog = resolved_image_path.with_suffix(".sqlite")
+        legacy_catalog = workspace.get_datasets_dir() / "catalog.sqlite"
+        for candidate in (sibling_catalog, legacy_catalog):
+            if not candidate.is_file():
+                continue
+            reader = self._load_sqlite_annotations(
+                DatasetCatalog,
+                resolved_image_path,
+                candidate,
+            )
+            if reader is not None:
+                return reader
+
         logger.warning(
             "No annotations were attached to image '%s'. Register the image in "
             "the workspace catalog, place canonical 'annotations.csv' and "
@@ -200,6 +204,29 @@ class ContextManagerProxy:
             resolved_image_path,
         )
         return None
+
+    def _load_sqlite_annotations(
+        self,
+        catalog_type: Any,
+        image_path: Path,
+        catalog_path: Path,
+    ) -> Optional[MSIBaseAnnotationReader]:
+        """Attach an SQLite reader when ``catalog_path`` registers the image."""
+        identity = catalog_type(catalog_path).resolve_dataset_path(image_path)
+        if identity is None:
+            return None
+        reader_options: Dict[str, Any] = {"catalog_path": str(catalog_path)}
+        if identity["kind"] == "merged":
+            reader_options["merged_dataset_id"] = identity["merged_dataset_id"]
+        else:
+            reader_options["source"] = identity["source"]
+            reader_options["dataset_id"] = identity["dataset_id"]
+        return self._set_component(
+            component_type="annotation_reader",
+            target="SQLiteAnnotationReader",
+            img_name_or_path=str(image_path),
+            **reader_options,
+        )
 
     @staticmethod
     def _find_local_metaspace_annotations(

@@ -67,7 +67,9 @@ def compose_cohort(
         raise_validation_error("Composition", "dataset_ids must be non-empty and unique.")
 
     layout = DatasetWorkspaceLayout(workspace_path)
-    catalog = DatasetCatalog(layout.catalog_path(cohort_id))
+    # Destination annotation store
+    ## Composition owns a self-contained catalogue beside the merged imzML pair.
+    catalog = DatasetCatalog(layout.composed_catalog_path(cohort_id))
     inputs = []
     available_ids = []
     missing_ids = []
