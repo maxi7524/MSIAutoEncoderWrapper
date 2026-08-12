@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from msi_autoencoder_wrapper.dataset_management.exploration import DatasetExplorer
-from msi_autoencoder_wrapper.dataset_management.sources.base import DatasetSource
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace import (
+from msi_dataset_manager.exploration import DatasetExplorer
+from msi_dataset_manager.sources.base import DatasetSource
+from msi_dataset_manager.sources.strategies.metaspace import (
     MetaspaceDatasetSource,
 )
 

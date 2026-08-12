@@ -9,11 +9,11 @@ from typing import Any, Dict, List
 
 import pytest
 
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.pride import (
+from msi_dataset_manager.sources.strategies.pride import (
     PrideDatasetSource,
     _read_annotation_table,
 )
-from msi_autoencoder_wrapper.utils.exceptions import ProjectConfigError
+from msi_dataset_manager.utils.exceptions import ProjectConfigError
 
 
 PROJECT = {

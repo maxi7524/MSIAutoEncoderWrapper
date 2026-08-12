@@ -1,5 +1,3 @@
-"""Notebook-oriented external dataset discovery tools."""
+"""Compatibility aliases for independent exploration."""
 
-from .dataset_explorer import DatasetExplorer
-
-__all__ = ["DatasetExplorer"]
+from msi_dataset_manager.exploration import *

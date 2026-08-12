@@ -10,6 +10,7 @@ description = "MIMUW love forever - Autoencoder wrapper for MSI data"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "msi-dataset-manager",
     "ipywidgets",
     "matplotlib",
     "metaspace2020==2.0.9",
@@ -68,6 +69,7 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+msi-dataset-manager = { workspace = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu118", extra = "cu118" },
@@ -77,6 +79,9 @@ torch = [
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[tool.uv.workspace]
+members = ["packages/msi_dataset_manager"]
 
 [[tool.uv.index]]
 name = "pytorch-cu118"

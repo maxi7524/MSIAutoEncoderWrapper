@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+from collections import defaultdict, deque
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -43,12 +44,18 @@ def read_metaspace_csv_annotations(
         raise_validation_error(
             "MetaspaceCSVAnnotationReader", "The annotation CSV contains no records."
         )
-    intensity_by_mz = {Decimal(row["mz"]): row for row in intensity_rows}
-    if len(intensity_by_mz) != len(intensity_rows):
-        raise_validation_error(
-            "MetaspaceCSVAnnotationReader",
-            "Pixel-intensity m/z values are not unique.",
+    # Annotation-to-intensity matching
+    ## METASPACE can export different formula/adduct ions at an identical m/z.
+    intensity_by_ion: dict[
+        tuple[str, str, Decimal], deque[Dict[str, str]]
+    ] = defaultdict(deque)
+    for intensity_row in intensity_rows:
+        key = (
+            str(intensity_row.get("mol_formula") or "").strip(),
+            str(intensity_row.get("adduct") or "").strip(),
+            Decimal(intensity_row["mz"]),
         )
+        intensity_by_ion[key].append(intensity_row)
 
     image_reader = PyImzMLReader(image)
     coordinate_to_spectrum = {
@@ -64,12 +71,19 @@ def read_metaspace_csv_annotations(
                 "MetaspaceCSVAnnotationReader",
                 f"Annotation row {position} does not contain an m/z value.",
             )
-        intensity_row = intensity_by_mz.get(Decimal(raw_mz))
-        if intensity_row is None:
+        ion_key = (
+            str(row.get("formula") or "").strip(),
+            str(row.get("adduct") or "").strip(),
+            Decimal(raw_mz),
+        )
+        matching_rows = intensity_by_ion.get(ion_key)
+        if not matching_rows:
             raise_validation_error(
                 "MetaspaceCSVAnnotationReader",
-                f"No pixel-intensity row matches annotation m/z {raw_mz}.",
+                "No pixel-intensity row matches annotation "
+                f"formula={ion_key[0]!r}, adduct={ion_key[1]!r}, m/z={raw_mz}.",
             )
+        intensity_row = matching_rows.popleft()
         spectrum_ids: List[int] = []
         spectrum_values: Dict[int, float] = {}
         for column, spectrum_id in coordinate_to_spectrum.items():

@@ -10,16 +10,16 @@ from typing import Any, Dict, List, Mapping, Optional
 import pytest
 
 from msi_autoencoder_wrapper.annotations import SQLiteAnnotationReader
-from msi_autoencoder_wrapper.dataset_management.sources.base import DatasetSource
-from msi_autoencoder_wrapper.dataset_management.operations import (
+from msi_dataset_manager.sources.base import DatasetSource
+from msi_dataset_manager.operations import (
     materialize_and_merge_selection,
     materialize_selection,
     query_to_selection,
 )
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
-from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
-from msi_autoencoder_wrapper.utils.exceptions import ValidationError
-from msi_autoencoder_wrapper.utils.exceptions import DownloadLimitError
+from msi_dataset_manager.catalog import DatasetCatalog
+from msi_dataset_manager.utils.exceptions import ValidationError
+from msi_dataset_manager.utils.exceptions import DownloadLimitError
 
 
 class FakeDatasetSource(DatasetSource):
@@ -101,7 +101,7 @@ def test_discovery_and_download_are_separate_stages(
         selection_path=selection,
     )
     assert selection.is_file()
-    assert not (datasets_dir / "sources" / "fake" / "one").exists()
+    assert not (datasets_dir / "one").exists()
 
     materialized = materialize_selection(
         source=source,
@@ -109,7 +109,7 @@ def test_discovery_and_download_are_separate_stages(
         datasets_dir=datasets_dir,
         catalog=catalog,
     )
-    assert materialized == [datasets_dir / "sources" / "fake" / "one"]
+    assert materialized == [datasets_dir / "one"]
     assert (materialized[0] / "one.imzML").is_file()
     assert len(catalog.get_annotations(source="fake", dataset_id="one")) == 1
     assert source.annotation_options == {"annotation_fdr": 0.1}
@@ -130,7 +130,7 @@ def test_materialization_reuses_workspace_source_before_provider_request(
         catalog=catalog,
         selection_path=selection,
     )
-    retained = datasets_dir / "sources" / "fake" / "one"
+    retained = datasets_dir / "one"
     retained.mkdir(parents=True)
     shutil.copy2(msi_fixture_path, retained / "one.imzML")
     shutil.copy2(msi_fixture_path.with_suffix(".ibd"), retained / "one.ibd")
@@ -188,7 +188,7 @@ def test_materialization_downloads_all_pairs_before_annotations_and_reuses_both(
 
     assert source.download_calls == []
     assert source.annotation_calls == []
-    manifest = datasets_dir / "manifests" / "selection.materialization.json"
+    manifest = selection.parent / "materialization.json"
     assert manifest.is_file()
 
 
@@ -213,7 +213,7 @@ def test_download_limit_continues_with_annotations_for_later_local_pairs(
         '{"dataset_id":"missing","name":"Missing"},'
         '{"dataset_id":"local","name":"Local"}]}'
     )
-    local = datasets_dir / "sources" / "fake" / "local"
+    local = datasets_dir / "local"
     local.mkdir(parents=True)
     shutil.copy2(msi_fixture_path, local / "local.imzML")
     shutil.copy2(msi_fixture_path.with_suffix(".ibd"), local / "local.ibd")
@@ -227,10 +227,10 @@ def test_download_limit_continues_with_annotations_for_later_local_pairs(
 
     assert materialized == [local]
     assert source.annotation_calls == ["local"]
-    assert (local / "metaspace_annotations.csv").is_file()
-    assert (local / "local_pixel_intensities.csv").is_file()
+    assert (local / "annotations.csv").is_file()
+    assert (local / "pixel_intensities.csv").is_file()
     manifest = json.loads(
-        (datasets_dir / "manifests" / "selection.materialization.json").read_text()
+        (selection.parent / "materialization.json").read_text()
     )
     assert manifest["file_limit_reached"] is True
     assert manifest["file_statuses"]["missing"] == "download_limit"
@@ -344,7 +344,7 @@ def test_download_merge_reuses_workspace_source_before_provider_request(
         catalog=catalog,
         selection_path=selection,
     )
-    retained = datasets_dir / "sources" / "fake" / "one"
+    retained = datasets_dir / "one"
     retained.mkdir(parents=True)
     shutil.copy2(msi_fixture_path, retained / "one.imzML")
     shutil.copy2(msi_fixture_path.with_suffix(".ibd"), retained / "one.ibd")
@@ -379,7 +379,7 @@ def test_download_merge_completes_partial_workspace_source_in_place(
         catalog=catalog,
         selection_path=selection,
     )
-    retained = datasets_dir / "sources" / "fake" / "one"
+    retained = datasets_dir / "one"
     retained.mkdir(parents=True)
     shutil.copy2(msi_fixture_path, retained / "one.imzML")
 

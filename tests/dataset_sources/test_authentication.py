@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace_authentication import (
+from msi_dataset_manager.sources.strategies.metaspace_authentication import (
     METASPACE_API_KEY_ENV,
     metaspace_client_options,
     validate_metaspace_session,
 )
-from msi_autoencoder_wrapper.dataset_management.sources.strategies.metaspace import (
+from msi_dataset_manager.sources.strategies.metaspace import (
     MetaspaceDatasetSource,
 )
-from msi_autoencoder_wrapper.utils.exceptions import ProjectConfigError
+from msi_dataset_manager.utils.exceptions import ProjectConfigError
 
 
 class FakeAuthenticatedClient:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from msi_autoencoder_wrapper.dataset_management.operations import ImzMLMergeInput, ImzMLMerger
+from msi_dataset_manager.operations import ImzMLMergeInput, ImzMLMerger
 from msi_autoencoder_wrapper.readers.strategies.pyimzml_reader import PyImzMLReader
-from msi_autoencoder_wrapper.dataset_management.catalog import DatasetCatalog
-from msi_autoencoder_wrapper.dataset_management.operations.spectrum_selection import (
+from msi_dataset_manager.catalog import DatasetCatalog
+from msi_dataset_manager.operations.spectrum_selection import (
     select_merge_spectrum_ids,
 )
 
@@ -60,11 +60,11 @@ def test_merger_writes_rectangular_coordinates_and_index_mapping(
     )["source_dataset_id"] == "dataset-b"
 
 
-def test_merger_defaults_to_spectra_with_molecular_annotations(
+def test_merger_defaults_to_all_candidate_spectra(
     tmp_path: Path,
     msi_fixture_path: Path,
 ) -> None:
-    """Implicit merge selection excludes spectra without molecule links."""
+    """An omitted unannotated limit retains every available source spectrum."""
     catalog = DatasetCatalog(tmp_path / "datasets" / "catalog.sqlite")
     catalog.upsert_dataset(
         source="pride",
@@ -97,7 +97,7 @@ def test_merger_defaults_to_spectra_with_molecular_annotations(
         merged_dataset_id="annotated",
     )
 
-    assert PyImzMLReader(result).GetNumberOfSpectra() == 2
+    assert PyImzMLReader(result).GetNumberOfSpectra() == 6
     assert catalog.get_source_index(
         merged_dataset_id="annotated",
         merged_spectrum_index=0,
