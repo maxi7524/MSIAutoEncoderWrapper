@@ -75,6 +75,7 @@ class RotatingDatasetSource:
         self._profiles = [dict(profile) for profile in profiles]
         self._source_factory = source_factory
         self._index = 0
+        self._exhausted_profile_count = 0
         self._source = initial_source or self._make_source()
 
     @property
@@ -85,7 +86,12 @@ class RotatingDatasetSource:
     @property
     def exhausted_profile_count(self) -> int:
         """Return the number of profiles rejected due to quota exhaustion."""
-        return self._index
+        return self._exhausted_profile_count
+
+    @property
+    def remaining_profile_count(self) -> int:
+        """Return profiles not yet observed to reject a quota-sensitive call."""
+        return len(self._profiles) - self._exhausted_profile_count
 
     def call(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Call a source method, retrying with the next profile on quota errors."""
@@ -93,6 +99,7 @@ class RotatingDatasetSource:
             try:
                 return getattr(self._source, method_name)(*args, **kwargs)
             except DownloadLimitError:
+                self._exhausted_profile_count += 1
                 if self._index + 1 >= len(self._profiles):
                     raise
                 self._index += 1

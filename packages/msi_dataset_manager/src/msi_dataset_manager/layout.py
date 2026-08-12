@@ -32,21 +32,9 @@ class DatasetWorkspaceLayout:
         """Return the canonical imzML path for a source or merged dataset."""
         return self.dataset_dir(dataset_id) / f"{dataset_id}.imzML"
 
-    def cohort_config_dir(self, cohort_id: str) -> Path:
-        """Return the directory owning one cohort's reproducibility artifacts."""
-        return self.workspace_path / "configs" / "datasets" / cohort_id
-
-    def catalog_path(self, cohort_id: str) -> Path:
-        """Return the working SQLite catalogue used by query and download."""
-        return self.cohort_config_dir(cohort_id) / f"{cohort_id}.sqlite"
-
     def composed_catalog_path(self, cohort_id: str) -> Path:
-        """Return the self-contained SQLite catalogue of a composed dataset."""
+        """Return the only SQLite catalogue, created during composition."""
         return self.dataset_dir(cohort_id) / f"{cohort_id}.sqlite"
-
-    def materialization_path(self, cohort_id: str) -> Path:
-        """Return the cohort materialization report path."""
-        return self.cohort_config_dir(cohort_id) / "materialization.json"
 
     def composition_path(self, cohort_id: str) -> Path:
         """Return the normalized composition configuration path."""

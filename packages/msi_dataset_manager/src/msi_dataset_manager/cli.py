@@ -7,10 +7,13 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
-from .catalog.sqlite_catalog import DatasetCatalog
 from .layout import DatasetWorkspaceLayout
 from .operations import compose_cohort
-from .operations.download import materialize_selection
+from .operations.download import (
+    create_materialization_manifest,
+    format_materialization_plan,
+    materialize_selection,
+)
 from .operations.query import query_to_selection
 from .sources.source_manager import DatasetSourceManager
 from .sources.profiles import read_source_profiles
@@ -26,7 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument("--source", default="metaspace")
     query.add_argument("--filters", type=Path, required=True)
     query.add_argument("--selection", type=Path, required=True)
-    query.add_argument("--cohort-id")
 
     download = commands.add_parser("download", help="Materialize a query selection")
     _add_workspace_argument(download)
@@ -40,7 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="CSV with a mandatory 'key' column and optional metadata columns",
     )
     download.add_argument("--manifest", type=Path)
-    download.add_argument("--cohort-id")
+    download.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scan files, write and print the manifest, then exit without provider access",
+    )
 
     compose = commands.add_parser(
         "compose", help="Create a cohort dataset from canonical local folders"
@@ -60,7 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Execute a dataset-management command."""
+    """Dispatch the explicit ``query``, ``download``, and ``compose`` stages.
+
+    ``query`` writes a frozen selection, ``download`` regenerates and executes
+    a filesystem-derived manifest, and ``compose`` merges local inputs while
+    creating the only SQLite catalogue. No command implicitly invokes another
+    stage, which keeps provider access visible and independently repeatable.
+    """
+    # Shared path resolution
     arguments = build_parser().parse_args(argv)
     invocation_directory = _repository_root()
     arguments.workspace_path = _resolve_cli_path(
@@ -69,21 +82,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     layout = DatasetWorkspaceLayout(arguments.workspace_path)
     datasets_dir = layout.datasets_dir
     cohort_id = _resolve_cohort_id(arguments)
-    catalog = (
-        None
-        if arguments.command == "compose"
-        else DatasetCatalog(layout.catalog_path(cohort_id))
-    )
+    resolved_profiles_path = None
+    source_profiles = None
 
     print(f"Invocation directory: {invocation_directory}")
     print(f"Workspace path: {arguments.workspace_path}")
     print(f"Cohort: {cohort_id}")
-    print(
-        "Dataset catalog: "
-        f"{layout.composed_catalog_path(cohort_id) if catalog is None else catalog.path}"
-    )
 
+    # Composition dispatch
+    ## Compose reads only canonical local files and owns the output SQLite.
     if arguments.command == "compose":
+        print(f"Output dataset catalog: {layout.composed_catalog_path(cohort_id)}")
         composition_config = (
             _read_json(_resolve_cli_path(arguments.config, invocation_directory))
             if arguments.config is not None
@@ -126,18 +135,75 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Composition config: {layout.composition_path(arguments.cohort_id)}")
         return
 
+    # Download planning
+    ## Always replace the manifest from the current selection and filesystem.
+    ## Dry-run returns here, before strategy discovery or provider construction.
+    if arguments.command == "download":
+        arguments.selection = _resolve_cli_path(
+            arguments.selection, invocation_directory
+        )
+        _validate_selection_workspace(
+            selection_path=arguments.selection,
+            workspace_path=arguments.workspace_path,
+        )
+        annotation_options_path = (
+            _resolve_cli_path(arguments.annotation_options, invocation_directory)
+            if arguments.annotation_options is not None
+            else None
+        )
+        manifest_path = (
+            _resolve_cli_path(arguments.manifest, invocation_directory)
+            if arguments.manifest is not None
+            else None
+        )
+        if arguments.profiles is not None:
+            resolved_profiles_path = _resolve_cli_path(
+                arguments.profiles, invocation_directory
+            )
+            source_profiles = read_source_profiles(resolved_profiles_path)
+        manifest = create_materialization_manifest(
+            selection_path=arguments.selection,
+            datasets_dir=datasets_dir,
+            source_name=arguments.source,
+            annotation_options=(
+                _read_json(annotation_options_path)
+                if annotation_options_path is not None
+                else None
+            ),
+            dataset_ids=arguments.dataset_ids,
+            manifest_path=manifest_path,
+            dry_run=arguments.dry_run,
+        )
+        print(f"Manifest: {manifest['manifest_path']}")
+        print(
+            "Datasets directory (absolute): "
+            f"{manifest['workspace_datasets_path']}"
+        )
+        print(
+            "Datasets directory (relative to invocation): "
+            f"{manifest['workspace_datasets_path_relative_to_invocation']}"
+        )
+        print(format_materialization_plan(manifest))
+        if source_profiles is not None:
+            print(
+                "Provider profiles available: "
+                f"{len(source_profiles)}. METASPACE does not expose the remaining "
+                "download quota for a profile before a request."
+            )
+        if arguments.dry_run:
+            print("Dry run complete: no provider was initialized and no download started.")
+            return
+
+    # Provider construction
+    ## Query loads discovery metadata; download uses the frozen selection and
+    ## therefore explicitly disables the provider catalogue request.
     DatasetSourceManager.discover_strategies()
-    resolved_profiles_path = (
-        _resolve_cli_path(arguments.profiles, invocation_directory)
-        if arguments.command == "download" and arguments.profiles is not None
-        else None
-    )
     source = DatasetSourceManager.get_source(
         arguments.source,
         **(
             {
                 "client_options": {
-                    "api_key": read_source_profiles(resolved_profiles_path)[0]["key"]
+                    "api_key": source_profiles[0]["key"]
                 }
             }
             if resolved_profiles_path is not None
@@ -150,6 +216,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
     )
     if arguments.command == "query":
+        # Query dispatch
+        ## Persist selection criteria and records only; SQLite is a compose output.
         filters_path = _resolve_cli_path(arguments.filters, invocation_directory)
         selection_path = _resolve_cli_path(arguments.selection, invocation_directory)
         print(f"Query filters: {filters_path}")
@@ -157,26 +225,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         query_to_selection(
             source=source,
             filters=_read_json(filters_path),
-            catalog=catalog,
             selection_path=selection_path,
         )
         return
-    arguments.selection = _resolve_cli_path(arguments.selection, invocation_directory)
-    if arguments.annotation_options is not None:
-        arguments.annotation_options = _resolve_cli_path(
-            arguments.annotation_options, invocation_directory
-        )
+
+    # Download execution
+    ## Execute exactly the fresh manifest printed above. The operation updates
+    ## that manifest after every dataset-level state transition.
     materialize_selection(
         source=source,
-        selection_path=arguments.selection,
-        datasets_dir=datasets_dir,
-        catalog=catalog,
-        annotation_options=(
-            _read_json(arguments.annotation_options)
-            if arguments.annotation_options is not None
-            else None
-        ),
-        dataset_ids=arguments.dataset_ids,
         profiles_path=resolved_profiles_path,
         source_factory=(
             lambda key, _profile: DatasetSourceManager.get_source(
@@ -185,11 +242,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 load_catalog=False,
             )
         ),
-        manifest_path=(
-            _resolve_cli_path(arguments.manifest, invocation_directory)
-            if arguments.manifest is not None
-            else None
-        ),
+        manifest=manifest,
     )
 
 
@@ -216,7 +269,7 @@ def _add_unannotated_sampling_arguments(parser: argparse.ArgumentParser) -> None
 
 
 def _resolve_cohort_id(arguments: argparse.Namespace) -> str:
-    """Resolve the cohort owning SQLite and reproducibility artifacts."""
+    """Resolve the cohort label printed by CLI and required by composition."""
     explicit = getattr(arguments, "cohort_id", None)
     if explicit:
         return str(explicit)
@@ -229,6 +282,40 @@ def _resolve_cohort_id(arguments: argparse.Namespace) -> str:
     if config is not None:
         return Path(config).stem
     return "default"
+
+
+def _validate_selection_workspace(
+    *,
+    selection_path: Path,
+    workspace_path: Path,
+) -> None:
+    """Reject a selection belonging to a different workspace before API access.
+
+    :param selection_path: Resolved ``selection.json`` path.
+    :type selection_path: pathlib.Path
+    :param workspace_path: Resolved target workspace path.
+    :type workspace_path: pathlib.Path
+    :raises ValueError: If the conventional selection layout identifies a
+        different workspace.
+    """
+    resolved_selection = selection_path.resolve()
+    parents = resolved_selection.parents
+    if (
+        len(parents) < 4
+        or parents[1].name != "datasets"
+        or parents[2].name != "configs"
+    ):
+        return
+    selection_workspace = parents[3]
+    resolved_workspace = workspace_path.resolve()
+    if selection_workspace == resolved_workspace:
+        return
+    raise ValueError(
+        "Selection/workspace mismatch detected before provider access: "
+        f"selection '{resolved_selection}' belongs to workspace "
+        f"'{selection_workspace}', but --workspace-path resolves to "
+        f"'{resolved_workspace}'. Use --workspace-path {selection_workspace}."
+    )
 
 
 def _repository_root() -> Path:
@@ -247,16 +334,6 @@ def _resolve_cli_path(path: Path | str, repository_root: Path) -> Path:
         candidate.resolve()
         if candidate.is_absolute()
         else (repository_root / candidate).resolve()
-    )
-
-
-def _resolve_config_path(path: Path | str, config_directory: Path) -> Path:
-    """Resolve a path declared inside a configuration beside that file."""
-    candidate = Path(path)
-    return (
-        candidate.resolve()
-        if candidate.is_absolute()
-        else (config_directory / candidate).resolve()
     )
 
 
