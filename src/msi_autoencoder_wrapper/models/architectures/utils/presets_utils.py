@@ -71,7 +71,7 @@ def estimate_max_peak_width(
     
     for idx in indices:
         xs, ys = reader.GetSpectrum(int(idx))
-        spectrum_arr = binner(xs=xs, ys=ys)
+        spectrum_arr = binner.transform_spectrum(xs, ys).cpu().numpy()
         peaks, _ = find_peaks(
             spectrum_arr,
             prominence=max(float(np.mean(spectrum_arr)), 0.0),

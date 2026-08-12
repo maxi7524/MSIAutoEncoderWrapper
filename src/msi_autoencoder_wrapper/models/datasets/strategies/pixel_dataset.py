@@ -177,7 +177,7 @@ class PixelDataset(MSIBaseDataset):
 
         # Transformation execution pipeline block
         ## Map and normalize one spectrum without hiding invalid reader output
-        mapped_values = np.asarray(binner(xs=xs, ys=ys), dtype=np.float32)
+        mapped_values = binner.transform_spectrum(xs, ys).cpu().numpy().astype(np.float32, copy=False)
         if not np.all(np.isfinite(mapped_values)):
             raise_validation_error(
                 context_name="PixelDataset",

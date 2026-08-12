@@ -31,6 +31,8 @@ class FakeDatasetSource(DatasetSource):
         self._accepted: List[Dict[str, Any]] = []
         self.annotation_options: Optional[Mapping[str, Any]] = None
         self.download_calls: List[tuple[str, Path]] = []
+        self.annotation_calls: List[str] = []
+        self.events: List[str] = []
         self._config = {}
 
     def get_available_filters(self) -> Dict[str, Any]:
@@ -57,6 +59,8 @@ class FakeDatasetSource(DatasetSource):
         dataset_id: str,
         options: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        self.annotation_calls.append(dataset_id)
+        self.events.append(f"annotations:{dataset_id}")
         self.annotation_options = options
         return [
             {
@@ -70,6 +74,7 @@ class FakeDatasetSource(DatasetSource):
     def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
         target = Path(destination)
         self.download_calls.append((dataset_id, target))
+        self.events.append(f"download:{dataset_id}")
         target.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.fixture_path, target / f"{dataset_id}.imzML")
         shutil.copy2(self.fixture_path.with_suffix(".ibd"), target / f"{dataset_id}.ibd")
@@ -135,6 +140,53 @@ def test_materialization_reuses_workspace_source_before_provider_request(
     )
 
     assert source.download_calls == []
+
+
+def test_materialization_downloads_all_pairs_before_annotations_and_reuses_both(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """Files form phase one and completed annotation imports form phase two."""
+    source = FakeDatasetSource(msi_fixture_path)
+    datasets_dir = tmp_path / "datasets"
+    catalog = DatasetCatalog(datasets_dir / "catalog.sqlite")
+    selection = datasets_dir / "selection.json"
+    selection.write_text(
+        '{"source":"fake","datasets":['
+        '{"dataset_id":"one","name":"One"},'
+        '{"dataset_id":"two","name":"Two"}]}'
+    )
+
+    materialize_selection(
+        source=source,
+        selection_path=selection,
+        datasets_dir=datasets_dir,
+        catalog=catalog,
+        annotation_options={"annotation_fdr": 0.1},
+    )
+
+    assert source.events == [
+        "download:one",
+        "download:two",
+        "annotations:one",
+        "annotations:two",
+    ]
+    source.events.clear()
+    source.download_calls.clear()
+    source.annotation_calls.clear()
+
+    materialize_selection(
+        source=source,
+        selection_path=selection,
+        datasets_dir=datasets_dir,
+        catalog=catalog,
+        annotation_options={"annotation_fdr": 0.1},
+    )
+
+    assert source.download_calls == []
+    assert source.annotation_calls == []
+    manifest = datasets_dir / "manifests" / "selection.materialization.json"
+    assert manifest.is_file()
 
 
 def test_query_applies_generic_dataset_exclusions_outside_provider(
