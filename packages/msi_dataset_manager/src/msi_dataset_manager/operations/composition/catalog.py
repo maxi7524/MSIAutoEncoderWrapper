@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from ..annotations import read_canonical_csv_annotations
-from ..imzml import PyImzMLReader
-from ..utils.logger import get_custom_logger
-from ..catalog.sqlite_catalog import DatasetCatalog
+from ...annotations import read_canonical_csv_annotations
+from ...imzml import PyImzMLReader
+from ...utils.logger import get_custom_logger
+from ...catalog.sqlite_catalog import DatasetCatalog
 
 
 logger = get_custom_logger(__name__)

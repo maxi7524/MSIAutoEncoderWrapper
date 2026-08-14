@@ -216,6 +216,7 @@ class DatasetCatalog:
                     database_version,
                     _first_value(raw, "formula", "sumFormula"),
                     _first_value(raw, "adduct"),
+                    _numeric_value(raw, "mz", "m/z", "mz_value"),
                     _numeric_value(raw, "fdr", "FDR"),
                     _json_dump(raw),
                 )
@@ -244,8 +245,8 @@ class DatasetCatalog:
                 """
                 INSERT INTO annotations (
                     source, dataset_id, annotation_id, database_name,
-                    database_version, formula, adduct, fdr, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    database_version, formula, adduct, mz, fdr, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 prepared,
             )
@@ -570,6 +571,7 @@ class DatasetCatalog:
                     database_version TEXT,
                     formula TEXT,
                     adduct TEXT,
+                    mz REAL,
                     fdr REAL,
                     raw_json TEXT NOT NULL,
                     PRIMARY KEY (source, dataset_id, annotation_id),
@@ -634,6 +636,16 @@ class DatasetCatalog:
                     );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(annotations)").fetchall()
+            }
+            if "mz" not in columns:
+                connection.execute("ALTER TABLE annotations ADD COLUMN mz REAL")
+                connection.execute(
+                    "UPDATE annotations SET mz = CAST(json_extract(raw_json, '$.mz') AS REAL) "
+                    "WHERE json_extract(raw_json, '$.mz') IS NOT NULL"
+                )
         logger.debug("Dataset catalog initialized at %s", self.path)
 
 

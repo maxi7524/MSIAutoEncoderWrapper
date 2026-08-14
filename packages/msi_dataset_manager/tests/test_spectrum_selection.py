@@ -1,6 +1,6 @@
 """Tests for explicit unannotated-spectrum selection semantics."""
 
-from msi_dataset_manager.operations.spectrum_selection import select_merge_spectrum_ids
+from msi_dataset_manager.operations.composition.selection import select_merge_spectrum_ids
 
 
 def test_none_keeps_all_while_zero_keeps_no_unannotated_spectra() -> None:

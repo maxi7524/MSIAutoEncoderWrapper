@@ -1,5 +1,10 @@
-"""Small pyimzML adapter used by dataset operations."""
+"""
+Small pyimzML adapter used by dataset operations.
 
+It is separated as we do not need additional functionality from mian module 
+"""
+
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +16,17 @@ class PyImzMLReader:
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
-        self.parser = ImzMLParser(str(self.path))
+        # pyimzML ontology compatibility
+        ## Older imzML exports contain legacy CV names. pyimzML corrects them
+        ## internally, so their absolute-path UserWarnings add terminal noise
+        ## without changing parsing or the resulting spectra.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=UserWarning,
+                module=r"pyimzml\.ontology\.ontology",
+            )
+            self.parser = ImzMLParser(str(self.path))
 
     def GetNumberOfSpectra(self) -> int:
         return len(self.parser.coordinates)
