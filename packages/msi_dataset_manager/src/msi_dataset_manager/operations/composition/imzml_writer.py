@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from pyimzml.ImzMLWriter import ImzMLWriter
+from tqdm.auto import tqdm
 
-from ..imzml import PyImzMLReader
-from ..utils.exceptions import raise_validation_error, raise_workspace_error
-from ..utils.logger import get_custom_logger
-from ..catalog.sqlite_catalog import DatasetCatalog
-from .spectrum_selection import select_merge_spectrum_ids
+from ...imzml import PyImzMLReader
+from ...utils.exceptions import raise_validation_error, raise_workspace_error
+from ...utils.logger import get_custom_logger
+from ...catalog.sqlite_catalog import DatasetCatalog
+from .selection import select_merge_spectrum_ids
 
 
 logger = get_custom_logger(__name__)
@@ -107,6 +108,20 @@ class ImzMLMerger:
         if width <= 0:
             raise_validation_error("ImzMLMerge", "row_width must be greater than zero.")
 
+        # Merge progress estimation
+        ## imzML writing does not expose a byte callback. Estimate source bytes
+        ## read per selected spectrum, while the postfix reports completed source
+        ## images. The final output size can differ due to imzML serialization.
+        estimated_bytes = _estimate_selected_input_bytes(inputs, prepared)
+        progress = tqdm(
+            total=estimated_bytes,
+            desc="Merge source data",
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            dynamic_ncols=True,
+        )
+
         temporary = output.with_name(f"{output.stem}.partial.imzML")
         temporary_ibd = temporary.with_suffix(".ibd")
         temporary.unlink(missing_ok=True)
@@ -116,7 +131,12 @@ class ImzMLMerger:
         try:
             with ImzMLWriter(str(temporary), mode="processed") as writer:
                 merged_index = 0
-                for merge_input, (reader, spectrum_ids) in zip(inputs, prepared):
+                for input_index, (merge_input, (reader, spectrum_ids)) in enumerate(
+                    zip(inputs, prepared),
+                    start=1,
+                ):
+                    source_bytes = _source_pair_size(merge_input.imzml_path)
+                    source_spectrum_count = reader.GetNumberOfSpectra()
                     for source_spectrum_id in spectrum_ids:
                         mass_axis, intensities = reader.GetSpectrum(source_spectrum_id)
                         x_position = merged_index % width + 1
@@ -140,6 +160,11 @@ class ImzMLMerger:
                             }
                         )
                         merged_index += 1
+                        progress.update(max(1, source_bytes // source_spectrum_count))
+                    progress.set_postfix(
+                        images=f"{input_index}/{len(inputs)}",
+                        spectra=merged_index,
+                    )
             temporary.replace(output)
             temporary_ibd.replace(output.with_suffix(".ibd"))
         except Exception as error:
@@ -149,6 +174,8 @@ class ImzMLMerger:
                 "ImzMLMerge",
                 f"Failed to create merged dataset '{output}': {error}",
             )
+        finally:
+            progress.close()
 
         self.catalog.register_merged_dataset(merged_dataset_id, output)
         self.catalog.replace_spectrum_mappings(merged_dataset_id, mappings)
@@ -208,3 +235,25 @@ class ImzMLMerger:
             )
             prepared.append((reader, spectrum_ids))
         return prepared
+
+
+def _source_pair_size(imzml_path: Path) -> int:
+    """Return the byte size of one source imzML/ibd pair."""
+    ibd_path = imzml_path.with_suffix(".ibd")
+    return imzml_path.stat().st_size + ibd_path.stat().st_size
+
+
+def _estimate_selected_input_bytes(
+    inputs: Sequence[ImzMLMergeInput],
+    prepared: Sequence[tuple[PyImzMLReader, Sequence[int]]],
+) -> int:
+    """Estimate bytes read for the selected spectra of every source image."""
+    return sum(
+        max(
+            1,
+            _source_pair_size(merge_input.imzml_path)
+            * len(spectrum_ids)
+            // reader.GetNumberOfSpectra(),
+        )
+        for merge_input, (reader, spectrum_ids) in zip(inputs, prepared)
+    )

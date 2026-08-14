@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
-from ..utils.exceptions import raise_validation_error
-from ..catalog.sqlite_catalog import DatasetCatalog
+from ...utils.exceptions import raise_validation_error
+from ...catalog.sqlite_catalog import DatasetCatalog
 
 
 def build_cohort_annotation_index(

@@ -37,6 +37,12 @@ from ..source_manager import DatasetSourceManager
 logger = get_custom_logger(__name__)
 
 
+_CANONICAL_DATASET_SUFFIXES = {
+    ".imzml": ".imzML",
+    ".ibd": ".ibd",
+}
+
+
 # Catalogue cache
 _CACHE_SCHEMA_VERSION = 1
 _AVAILABLE_DATASETS_CACHE_FILE = "available-datasets.json"
@@ -1211,7 +1217,7 @@ def _download_authorized_files(
     total_lock = Lock()
 
     def transfer(file_record: Mapping[str, Any]) -> None:
-        suffix = Path(str(file_record["filename"])).suffix
+        suffix = _normalize_dataset_file_suffix(str(file_record["filename"]))
         target = destination / f"{dataset_id}{suffix}"
         if target.is_file() and target.stat().st_size > 0:
             return
@@ -1265,11 +1271,11 @@ def _validate_download_files(
                 "resets or contact METASPACE support. No data files were downloaded."
             ),
         )
-    suffixes = {Path(filename).suffix.lower() for filename in filenames}
+    suffixes = {_normalize_dataset_file_suffix(filename) for filename in filenames}
     unsupported = [
         filename
         for filename in filenames
-        if Path(filename).suffix.lower() not in {".imzml", ".ibd"}
+        if _normalize_dataset_file_suffix(filename) not in _CANONICAL_DATASET_SUFFIXES.values()
     ]
     if unsupported:
         raise_external_service_error(
@@ -1279,11 +1285,24 @@ def _validate_download_files(
                 f"{', '.join(unsupported)}."
             ),
         )
-    if not {".imzml", ".ibd"}.issubset(suffixes):
+    if set(_CANONICAL_DATASET_SUFFIXES.values()) != suffixes:
         raise_external_service_error(
             "METASPACE",
             f"Dataset '{dataset_id}' did not return a complete imzML/ibd pair.",
         )
+
+
+def _normalize_dataset_file_suffix(filename: str) -> str:
+    """Return the canonical extension for one METASPACE dataset file.
+
+    Provider responses may use arbitrary casing, for example ``.imzml``.
+    Local workspace layout is case-sensitive and always uses ``.imzML`` and
+    ``.ibd``; this helper enforces that convention before validation and write.
+    Unknown extensions are returned lower-cased so the response validator can
+    report them as unsupported.
+    """
+    suffix = Path(filename).suffix.lower()
+    return _CANONICAL_DATASET_SUFFIXES.get(suffix, suffix)
 
 
 def _spatial_images_by_molecule(

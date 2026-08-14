@@ -7,7 +7,7 @@ import math
 import random
 from typing import Iterable, List, Optional, Sequence
 
-from ..utils.exceptions import raise_validation_error
+from ...utils.exceptions import raise_validation_error
 
 
 def select_merge_spectrum_ids(

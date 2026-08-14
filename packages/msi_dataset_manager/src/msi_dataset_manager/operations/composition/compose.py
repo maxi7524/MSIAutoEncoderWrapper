@@ -6,18 +6,62 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from ..catalog import DatasetCatalog
-from ..layout import DatasetWorkspaceLayout
-from ..utils.exceptions import raise_validation_error
-from ..utils.logger import get_custom_logger
-from ..validators import validate_imzml_pair
-from .annotation_csv import annotation_csv_paths, has_complete_annotation_csv
-from .cohort_annotations import build_cohort_annotation_index
-from .import_local import import_local_dataset
-from .merge import ImzMLMergeInput, ImzMLMerger
+from ...catalog import DatasetCatalog
+from ...layout import DatasetWorkspaceLayout
+from ...utils.exceptions import raise_validation_error
+from ...utils.logger import get_custom_logger
+from ...validators import validate_imzml_pair
+from ..annotation_csv import annotation_csv_paths, has_complete_annotation_csv
+from .annotations import build_cohort_annotation_index
+from .catalog import import_local_dataset
+from .imzml_writer import ImzMLMergeInput, ImzMLMerger
 
 
 logger = get_custom_logger(__name__)
+
+
+def create_composition_manifest(
+    *,
+    workspace_path: Path | str,
+    source: str,
+    dataset_ids: Sequence[str],
+) -> Dict[str, Any]:
+    """Validate requested local datasets and return the exact merge input plan.
+
+    The manifest separates filesystem validation from composition execution.
+    ``compose_cohort`` subsequently iterates only over ``available_inputs``;
+    unavailable datasets remain recorded in ``missing_dataset_ids``.
+    """
+    ordered_ids = [str(value) for value in dataset_ids]
+    if not ordered_ids or len(ordered_ids) != len(set(ordered_ids)):
+        raise_validation_error("Composition", "dataset_ids must be non-empty and unique.")
+    layout = DatasetWorkspaceLayout(workspace_path)
+    available_inputs = []
+    missing_ids = []
+    for dataset_id in ordered_ids:
+        directory = layout.dataset_dir(dataset_id)
+        try:
+            imzml_path = validate_imzml_pair(directory, dataset_id)
+        except Exception:
+            missing_ids.append(dataset_id)
+            logger.warning("Skipping unavailable local dataset %s", dataset_id)
+            continue
+        available_inputs.append(
+            {
+                "source": source,
+                "dataset_id": dataset_id,
+                "directory": str(directory),
+                "imzml_path": str(imzml_path),
+                "annotations_present": has_complete_annotation_csv(directory, dataset_id),
+            }
+        )
+    return {
+        "source": source,
+        "requested_dataset_ids": ordered_ids,
+        "dataset_ids": [entry["dataset_id"] for entry in available_inputs],
+        "missing_dataset_ids": missing_ids,
+        "available_inputs": available_inputs,
+    }
 
 
 def compose_cohort(
@@ -33,6 +77,7 @@ def compose_cohort(
     unannotated_amount: Optional[int] = None,
     random_seed: int = 0,
     config: Optional[Mapping[str, Any]] = None,
+    composition_manifest: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Build one merged cohort and its self-contained result catalogue.
 
@@ -67,35 +112,30 @@ def compose_cohort(
     merges selected spectra, stores source-to-merged index provenance, builds
     cohort-level annotation masks, and finally writes normalized configuration.
     """
-    # Composition request validation
-    ordered_ids = [str(value) for value in dataset_ids]
-    if not ordered_ids or len(ordered_ids) != len(set(ordered_ids)):
-        raise_validation_error("Composition", "dataset_ids must be non-empty and unique.")
-
     layout = DatasetWorkspaceLayout(workspace_path)
     # Result catalogue initialization
     ## This is the only SQLite catalogue in the workflow. Query and download
     ## use JSON artifacts and the filesystem instead of maintaining shadow state.
     catalog = DatasetCatalog(layout.composed_catalog_path(cohort_id))
+    manifest = dict(composition_manifest or create_composition_manifest(
+        workspace_path=workspace_path,
+        source=source,
+        dataset_ids=dataset_ids,
+    ))
+    available_entries = list(manifest["available_inputs"])
+    available_ids = [str(value) for value in manifest["dataset_ids"]]
+    missing_ids = [str(value) for value in manifest["missing_dataset_ids"]]
+    requested_ids = [str(value) for value in manifest["requested_dataset_ids"]]
     inputs = []
-    available_ids = []
-    missing_ids = []
 
     # Canonical input validation and cohort-local annotation import
     ## Source pairs remain shared under datasets/<source_id>. Paired source CSVs
     ## are normalized by the annotation reader into the common SQLite schema.
-    for dataset_id in ordered_ids:
-        directory = layout.dataset_dir(dataset_id)
-        if not (
-            (directory / f"{dataset_id}.imzML").is_file()
-            and (directory / f"{dataset_id}.ibd").is_file()
-        ):
-            missing_ids.append(dataset_id)
-            logger.warning("Skipping unavailable local dataset %s", dataset_id)
-            continue
-        imzml_path = validate_imzml_pair(directory, dataset_id)
-        available_ids.append(dataset_id)
-        if has_complete_annotation_csv(directory, dataset_id):
+    for entry in available_entries:
+        dataset_id = str(entry["dataset_id"])
+        directory = Path(str(entry["directory"]))
+        imzml_path = Path(str(entry["imzml_path"]))
+        if bool(entry["annotations_present"]):
             annotations_path, intensities_path = annotation_csv_paths(directory, dataset_id)
             import_local_dataset(
                 catalog=catalog,
@@ -128,7 +168,7 @@ def compose_cohort(
         "schema_version": 1,
         "cohort_id": cohort_id,
         "source": source,
-        "requested_dataset_ids": ordered_ids,
+        "requested_dataset_ids": requested_ids,
         "dataset_ids": available_ids,
         "missing_dataset_ids": missing_ids,
         "row_width": row_width,
