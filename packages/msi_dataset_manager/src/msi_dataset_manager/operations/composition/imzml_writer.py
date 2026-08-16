@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from pyimzml.ImzMLWriter import ImzMLWriter
 from tqdm.auto import tqdm
@@ -13,7 +13,6 @@ from tqdm.auto import tqdm
 from ...imzml import PyImzMLReader
 from ...utils.exceptions import raise_validation_error, raise_workspace_error
 from ...utils.logger import get_custom_logger
-from ...catalog.sqlite_catalog import DatasetCatalog
 from .selection import select_merge_spectrum_ids
 
 
@@ -39,34 +38,37 @@ class ImzMLMergeInput:
     dataset_id: str
     imzml_path: Path
     spectrum_ids: Optional[Sequence[int]] = None
+    annotation_records: Sequence[Mapping[str, Any]] = ()
+
+
+@dataclass(frozen=True)
+class ImzMLMergeResult:
+    """Return the composed pair path and exact source-pixel mappings."""
+
+    path: Path
+    pixel_mappings: List[Dict[str, object]]
 
 
 class ImzMLMerger:
-    """Create a rectangular imzML and persist minimal index provenance."""
-
-    def __init__(self, catalog: DatasetCatalog) -> None:
-        self.catalog = catalog
+    """Create a rectangular imzML and return its source-pixel provenance."""
 
     def merge(
         self,
         *,
         inputs: Sequence[ImzMLMergeInput],
         output_path: Path | str,
-        merged_dataset_id: str,
         row_width: Optional[int] = None,
         unannotated_ratio: Optional[float] = None,
         unannotated_amount: Optional[int] = None,
         max_fdr: Optional[float] = None,
         random_seed: int = 0,
-    ) -> Path:
-        """Write selected spectra sequentially and register index mappings.
+    ) -> ImzMLMergeResult:
+        """Write selected spectra sequentially and return index mappings.
 
         :param inputs: Ordered source datasets and selected source spatial IDs.
         :type inputs: Sequence[ImzMLMergeInput]
         :param output_path: Destination imzML path. Existing output is rejected.
         :type output_path: pathlib.Path | str
-        :param merged_dataset_id: Catalog identifier for the produced dataset.
-        :type merged_dataset_id: str
         :param row_width: Optional output image width. The default is the
             smallest near-square width that contains all spectra.
         :type row_width: int | None
@@ -79,8 +81,8 @@ class ImzMLMerger:
         :type unannotated_amount: int | None
         :param random_seed: Reproducible unannotated sampling seed.
         :type random_seed: int
-        :return: Written imzML path.
-        :rtype: pathlib.Path
+        :return: Written path and exact source-to-merged pixel mappings.
+        :rtype: ImzMLMergeResult
         :raises ValidationError: If inputs or selected indices are invalid.
         :raises WorkspaceConfigError: If output creation fails.
         """
@@ -126,7 +128,7 @@ class ImzMLMerger:
         temporary_ibd = temporary.with_suffix(".ibd")
         temporary.unlink(missing_ok=True)
         temporary_ibd.unlink(missing_ok=True)
-        mappings: List[Dict[str, object]] = []
+        pixel_mappings: List[Dict[str, object]] = []
 
         try:
             with ImzMLWriter(str(temporary), mode="processed") as writer:
@@ -151,7 +153,7 @@ class ImzMLMerger:
                                 {"name": "source_spectrum_id", "value": str(source_spectrum_id)},
                             ],
                         )
-                        mappings.append(
+                        pixel_mappings.append(
                             {
                                 "source": merge_input.source,
                                 "source_dataset_id": merge_input.dataset_id,
@@ -177,15 +179,13 @@ class ImzMLMerger:
         finally:
             progress.close()
 
-        self.catalog.register_merged_dataset(merged_dataset_id, output)
-        self.catalog.replace_spectrum_mappings(merged_dataset_id, mappings)
         logger.info(
             "Merged %s spectra from %s datasets into %s",
             spectrum_count,
             len(inputs),
             output,
         )
-        return output
+        return ImzMLMergeResult(path=output, pixel_mappings=pixel_mappings)
 
     def _prepare_inputs(
         self,
@@ -222,9 +222,8 @@ class ImzMLMerger:
                 if explicit_selection
                 else select_merge_spectrum_ids(
                     candidate_ids=candidate_ids,
-                    annotated_ids=self.catalog.get_annotated_spectrum_ids(
-                        source=merge_input.source,
-                        dataset_id=merge_input.dataset_id,
+                    annotated_ids=_annotated_spectrum_ids(
+                        merge_input.annotation_records,
                         max_fdr=max_fdr,
                     ),
                     unannotated_ratio=unannotated_ratio,
@@ -257,3 +256,20 @@ def _estimate_selected_input_bytes(
         )
         for merge_input, (reader, spectrum_ids) in zip(inputs, prepared)
     )
+
+
+def _annotated_spectrum_ids(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    max_fdr: Optional[float],
+) -> set[int]:
+    """Return source spectrum indices supported by an accepted annotation."""
+    selected: set[int] = set()
+    for record in records:
+        fdr = record.get("fdr")
+        if max_fdr is not None and (
+            fdr is None or float(fdr) > float(max_fdr)
+        ):
+            continue
+        selected.update(int(value) for value in record.get("spectrum_ids", ()))
+    return selected
