@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 
-ANNOTATION_EXPORT_SCHEMA_VERSION = 1
+ANNOTATION_EXPORT_SCHEMA_VERSION = 2
 ANNOTATION_TABLE_NAME = "annotations.csv"
 PIXEL_INTENSITY_TABLE_NAME = "pixel_intensities.csv"
 ANNOTATION_REQUIRED_COLUMNS = {
@@ -22,7 +22,12 @@ ANNOTATION_REQUIRED_COLUMNS = {
     "mz",
     "fdr",
 }
-PIXEL_INTENSITY_REQUIRED_COLUMNS = {"mol_formula", "adduct", "mz"}
+PIXEL_INTENSITY_REQUIRED_COLUMNS = {
+    "source_annotation_id",
+    "mol_formula",
+    "adduct",
+    "mz",
+}
 
 
 @dataclass(frozen=True)

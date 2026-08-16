@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from ...base import (
     ANNOTATION_EXPORT_SCHEMA_VERSION,
@@ -40,9 +42,10 @@ def materialize_metaspace_annotations(
     rather than silently producing incomplete exports.
     """
     # Provider retrieval
-    ## Database identity comes from the dataset object, then each result table
-    ## is queried independently at the selected FDR threshold.
-    from .source import _database_parts, _records_from_table, _spatial_images_by_molecule
+    ## One GraphQL annotation record contains both the table fields and the URL
+    ## of the first-isotope spatial matrix. This is METASPACE's actual export
+    ## model: the service does not expose a prebuilt pixel-intensity CSV.
+    from .source import _database_parts
 
     options = dict(options or {})
     dataset = client.dataset(id=dataset_id)
@@ -51,54 +54,58 @@ def materialize_metaspace_annotations(
         for database in getattr(dataset, "database_details", [])
     ]
     annotation_fdr = float(options.get("annotation_fdr", 0.1))
-    include_spatial = bool(options.get("include_spatial", True))
-    records: List[tuple[Dict[str, Any], np.ndarray | None]] = []
-    for database in databases:
-        results = dataset.results(database=database, fdr=annotation_fdr)
-        database_name, database_version = _database_parts(database)
-        database_id = _database_id(dataset, database_name, database_version)
-        spatial_images = _spatial_images_by_molecule(
-            dataset,
-            database,
-            annotation_fdr,
-            enabled=include_spatial,
-        )
-        missing_spatial_annotations: List[Tuple[str, str]] = []
-        for position, row in enumerate(_records_from_table(results)):
-            formula = row.get("formula", row.get("sumFormula"))
-            adduct = row.get("adduct")
-            key = (str(formula or ""), str(adduct or ""))
-            if include_spatial and key not in spatial_images:
-                missing_spatial_annotations.append(key)
-            records.append(
-                (
-                    _normalize_metaspace_record(
+    records: List[tuple[Dict[str, Any], np.ndarray]] = []
+    progress = tqdm(
+        total=0,
+        desc=f"METASPACE records: {dataset_id}",
+        unit="annotation",
+        leave=False,
+        dynamic_ncols=True,
+    )
+    try:
+        for database in databases:
+            database_name, database_version = _database_parts(database)
+            database_id = _database_id(dataset, database_name, database_version)
+            provider_records = _get_annotation_records(
+                dataset=dataset,
+                dataset_id=dataset_id,
+                database_id=database_id,
+                fdr=annotation_fdr,
+            )
+            normalized = [
+                _normalize_metaspace_record(
                     dataset_id=dataset_id,
                     row=row,
-                    position=position,
                     database_name=database_name,
                     database_version=database_version,
                     database_id=database_id,
-                    ),
-                    spatial_images.get(key),
                 )
-            )
-        if missing_spatial_annotations:
-            preview = ", ".join(
-                f"{formula}{adduct}"
-                for formula, adduct in missing_spatial_annotations[:5]
-            )
-            raise_external_service_error(
-                context_name="METASPACE",
-                message=(
-                    f"Dataset '{dataset_id}' returned "
-                    f"{len(missing_spatial_annotations)} molecular annotations "
-                    f"without matching ion images for database "
-                    f"'{database_name} {database_version}' at annotation_fdr="
-                    f"{annotation_fdr}. Missing examples: {preview}. Spatial "
-                    "pixel annotations cannot be constructed completely."
-                ),
-            )
+                for row in provider_records
+            ]
+            progress.total += len(provider_records)
+            progress.refresh()
+            # Spatial-intensity retrieval
+            ## A complete annotation export always includes actual pixel values.
+            ## There is intentionally no metadata-only or synthetic-value fallback.
+            spatial_images: List[Optional[np.ndarray]] = [None] * len(provider_records)
+            with ThreadPoolExecutor() as executor:
+                futures = {
+                    executor.submit(_download_spatial_intensity_matrix, dataset, row): position
+                    for position, row in enumerate(provider_records)
+                }
+                for future in as_completed(futures):
+                    position = futures[future]
+                    row = provider_records[position]
+                    spatial_images[position] = future.result()
+                    progress.set_postfix(
+                        formula=str(row.get("sumFormula") or ""),
+                        adduct=str(row.get("adduct") or ""),
+                        mz=row.get("mz", ""),
+                    )
+                    progress.update(1)
+            records.extend(zip(normalized, spatial_images))
+    finally:
+        progress.close()
     write_annotation_csv_pair(
         directory=directory,
         dataset_id=dataset_id,
@@ -114,7 +121,11 @@ def materialize_metaspace_annotations(
         directory / f"{dataset_id}_pixel_intensities.csv",
     ):
         obsolete_path.unlink(missing_ok=True)
-    logger.info("Exported %s METASPACE annotations for dataset %s", len(records), dataset_id)
+    logger.info(
+        "Exported %s METASPACE annotations for dataset %s",
+        len(records),
+        dataset_id,
+    )
     return len(records)
 
 
@@ -131,33 +142,32 @@ def read_metaspace_annotations(
         imzml_path=imzml_path,
     )
 
-# --------------------------------------------------
-# Section: Wrapper, export function
-# --------------------------------------------------
 
+# METASPACE source-schema normalization
 def _normalize_metaspace_record(
     *,
     dataset_id: str,
     row: Mapping[str, Any],
-    position: int,
     database_name: Optional[str],
     database_version: Optional[str],
     database_id: Optional[str],
 ) -> Dict[str, Any]:
     """Normalize one recognized METASPACE result row without losing it."""
     source_record = dict(row)
-    formula = source_record.get("formula", source_record.get("sumFormula"))
+    formula = source_record.get("sumFormula", source_record.get("formula"))
+    ion = str(source_record.get("ion") or "")
+    if not ion:
+        raise_external_service_error(
+            "METASPACE",
+            "Annotation response does not contain the stable ion identifier required "
+            "to join its pixel-intensity matrix.",
+        )
     return {
         **source_record,
         "schema_version": ANNOTATION_EXPORT_SCHEMA_VERSION,
         "source": "metaspace",
         "dataset_id": dataset_id,
-        "source_annotation_id": str(
-            source_record.get("id")
-            or source_record.get("annotationId")
-            or source_record.get("annotation_id")
-            or position
-        ),
+        "source_annotation_id": f"{database_id or 'unknown-database'}:{ion}",
         "provider_record_layout": _metaspace_record_layout(source_record),
         "database_name": database_name,
         "database_version": database_version,
@@ -165,7 +175,7 @@ def _normalize_metaspace_record(
         "formula": formula,
         "adduct": source_record.get("adduct"),
         "mz": _first_value(source_record, "mz", "m/z", "mz_value"),
-        "fdr": _first_value(source_record, "fdr", "FDR"),
+        "fdr": _first_value(source_record, "fdrLevel", "fdr", "FDR"),
         "molecule_names": _first_value(
             source_record,
             "molecule_names",
@@ -182,13 +192,80 @@ def _normalize_metaspace_record(
 
 def _metaspace_record_layout(record: Mapping[str, Any]) -> str:
     """Identify a supported METASPACE table layout from its field names."""
-    if "formula" in record and "mz" in record:
-        return "metaspace-results-formula-mz-v1"
-    if "sumFormula" in record and "mz" in record:
-        return "metaspace-results-sum-formula-mz-v1"
-    if "formula" in record and "m/z" in record:
-        return "metaspace-results-formula-mass-slash-v1"
+    if {"sumFormula", "ion", "mz", "fdrLevel", "isotopeImages"}.issubset(record):
+        return "metaspace-graphql-annotation-v1"
     return "metaspace-results-unrecognized-v1"
+
+
+def _get_annotation_records(
+    *,
+    dataset: Any,
+    dataset_id: str,
+    database_id: Optional[str],
+    fdr: float,
+) -> List[Dict[str, Any]]:
+    """Retrieve full METASPACE annotation records in one provider request."""
+    graph_client = getattr(dataset, "_gqclient", None)
+    if graph_client is None or not hasattr(graph_client, "getAnnotations"):
+        raise_external_service_error(
+            "METASPACE",
+            "The installed METASPACE client does not expose full annotation records. "
+            "Update the client before materializing annotations.",
+        )
+    annotation_filter: Dict[str, Any] = {
+        "fdrLevel": fdr,
+        "hasChemMod": False,
+        "hasNeutralLoss": False,
+    }
+    if database_id is not None:
+        try:
+            annotation_filter["databaseId"] = int(database_id)
+        except (TypeError, ValueError):
+            raise_external_service_error(
+                "METASPACE",
+                f"Dataset '{dataset_id}' returned an invalid database identifier: "
+                f"{database_id!r}.",
+            )
+    return [
+        dict(row)
+        for row in graph_client.getAnnotations(
+            annotationFilter=annotation_filter,
+            datasetFilter={"ids": dataset_id},
+        )
+    ]
+
+
+def _download_spatial_intensity_matrix(
+    dataset: Any,
+    record: Mapping[str, Any],
+) -> np.ndarray:
+    """Download the first-isotope matrix referenced by one annotation record."""
+    images = record.get("isotopeImages") or []
+    if not images:
+        raise_external_service_error(
+            "METASPACE",
+            "Annotation response has no first-isotope image, so its pixel intensities "
+            "cannot be exported without data loss.",
+        )
+    image_group = dataset.isotope_images(
+        str(record.get("sumFormula") or ""),
+        str(record.get("adduct") or ""),
+        only_first_isotope=True,
+        scale_intensity=True,
+        # REMARK: METASPACE's CSV export explicitly states that hotspot removal
+        # has been applied. Preserve that provider-level preprocessing rather
+        # than silently exporting a different intensity representation.
+        hotspot_clipping=True,
+        neutral_loss=str(record.get("neutralLoss") or ""),
+        chem_mod=str(record.get("chemMod") or ""),
+        image_metadata=list(images[:1]),
+    )
+    if not image_group or image_group[0] is None:
+        raise_external_service_error(
+            "METASPACE",
+            "METASPACE returned an empty first-isotope matrix for an annotation.",
+        )
+    return np.asarray(image_group[0])
 
 
 def _database_id(dataset: Any, name: Optional[str], version: Optional[str]) -> Optional[str]:

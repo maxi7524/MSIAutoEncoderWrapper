@@ -48,6 +48,12 @@ class FakeMetaspaceDataset:
         self.result_calls: List[Dict[str, Any]] = []
         self.download_calls: List[tuple[Path, str]] = []
 
+    def isotope_images(self, *args: Any, **kwargs: Any) -> List[np.ndarray]:
+        assert kwargs["only_first_isotope"] is True
+        assert kwargs["scale_intensity"] is True
+        assert kwargs["hotspot_clipping"] is True
+        return [np.array([[1.0, 0.0], [0.0, 0.0]])]
+
     def results(self, **kwargs: Any) -> List[Dict[str, Any]]:
         self.result_calls.append(kwargs)
         return [
@@ -82,6 +88,7 @@ class FakeMetaspaceClient:
         self.value = FakeMetaspaceDataset()
         self.filters: Dict[str, Any] = {}
         self._gqclient = FakeGraphQLClient()
+        self.value._gqclient = self._gqclient
 
     def datasets(self, **filters: Any) -> List[FakeMetaspaceDataset]:
         self.filters = filters
@@ -103,6 +110,9 @@ class AnnotationImages(list):
 
 class FakeGraphQLClient:
     """Return aggregate metadata without ion images or binary downloads."""
+
+    def __init__(self) -> None:
+        self.annotation_filters: List[Dict[str, Any]] = []
 
     def listQuery(
         self,
@@ -132,6 +142,33 @@ class FakeGraphQLClient:
         ]
 
     def getAnnotations(self, **kwargs: Any) -> List[Dict[str, Any]]:
+        if "annotationFilter" in kwargs:
+            self.annotation_filters.append(dict(kwargs["annotationFilter"]))
+            return [
+                {
+                    "dataset": {"id": "dataset-a", "name": "Dataset A"},
+                    "sumFormula": "C6H12O6",
+                    "adduct": "+H",
+                    "ion": "C6H12O6+H",
+                    "mz": 181.0707,
+                    "fdrLevel": 0.1,
+                    "possibleCompounds": [
+                        {
+                            "name": "Glucose",
+                            "information": [{"databaseId": 1}],
+                        }
+                    ],
+                    "isotopeImages": [
+                        {
+                            "mz": 181.0707,
+                            "url": "https://example.invalid/image",
+                            "minIntensity": 0.0,
+                            "maxIntensity": 1.0,
+                            "totalIntensity": 1.0,
+                        }
+                    ],
+                }
+            ]
         return [
             {
                 "dataset": {"id": "dataset-a"},
@@ -277,7 +314,8 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     assert records[0]["metadata"]["has_optical_image"] is True
     assert annotations[0]["database_name"] == "HMDB"
     assert annotations[0]["database_version"] == "v4"
-    assert client.value.result_calls == [{"database": ("HMDB", "v4"), "fdr": 0.1}]
+    assert client._gqclient.annotation_filters[-1]["databaseId"] == 1
+    assert client.value.result_calls == []
     assert annotations[0]["spectrum_values"] == {0: 1.0}
     assert client.value.download_calls == [(destination, "dataset-a")]
     assert (destination / "dataset-a.imzML").is_file()
@@ -543,17 +581,21 @@ def test_download_transfers_the_validated_links_without_requesting_them_twice(
     assert list(destination.glob("*.part")) == []
 
 
-def test_spatial_retrieval_rejects_annotations_without_ion_images() -> None:
+def test_spatial_retrieval_rejects_annotations_without_first_isotope_data() -> None:
     """Requested pixel annotations cannot silently lose molecular results."""
-    class MissingImageDataset(FakeMetaspaceDataset):
-        def all_annotation_images(self, **kwargs: Any) -> List[Any]:
-            return []
+    class MissingImageGraphQLClient(FakeGraphQLClient):
+        def getAnnotations(self, **kwargs: Any) -> List[Dict[str, Any]]:
+            records = super().getAnnotations(**kwargs)
+            if "annotationFilter" in kwargs:
+                records[0]["isotopeImages"] = []
+            return records
 
     client = FakeMetaspaceClient()
-    client.value = MissingImageDataset()
+    client._gqclient = MissingImageGraphQLClient()
+    client.value._gqclient = client._gqclient
     source = MetaspaceDatasetSource(client=client)
 
-    with pytest.raises(ExternalServiceError, match="without matching ion images"):
+    with pytest.raises(ExternalServiceError, match="no first-isotope image"):
         source.materialize_annotations(
             dataset_id="dataset-a",
             dataset_name="Dataset A",

@@ -25,14 +25,14 @@ def test_isobaric_ions_are_matched_by_formula_adduct_and_mz(
         )
     annotations.write_text(
         "schema_version,source,source_annotation_id,datasetId,datasetName,formula,adduct,mz,fdr\n"
-        "1,metaspace,a1,one,One,C1,[M]-,100.5,0.05\n"
-        "1,metaspace,a2,one,One,C2,-H,100.5,0.05\n",
+        "2,metaspace,a1,one,One,C1,[M]-,100.5,0.05\n"
+        "2,metaspace,a2,one,One,C2,-H,100.5,0.05\n",
         encoding="utf-8",
     )
     intensities.write_text(
-        "mol_formula,adduct,mz,x0_y0\n"
-        "C1,[M]-,100.5,3.0\n"
-        "C2,-H,100.5,7.0\n",
+        "source_annotation_id,mol_formula,adduct,mz,x0_y0\n"
+        "a1,C1,[M]-,100.5,3.0\n"
+        "a2,C2,-H,100.5,7.0\n",
         encoding="utf-8",
     )
 

@@ -146,28 +146,35 @@ def _download_dataset_files(
     rotating_source: Optional[RotatingDatasetSource],
 ) -> bool:
     """Download planned imzML/ibd pairs and return quota-boundary status."""
-    downloads_remaining = sum("download_dataset" in entry["planned_actions"] for entry in entries)
-    progress = _download_progress(total=len(entries))
+    downloads_remaining = sum(
+        "download_dataset" in entry["planned_actions"] for entry in entries
+    )
+    progress = _download_progress(
+        total=len(entries),
+        initial=len(entries) - downloads_remaining,
+    )
+    progress.set_postfix(downloads_remaining=downloads_remaining)
+    progress.refresh()
     file_limit_reached = False
     try:
         for position, entry in enumerate(entries):
             dataset_id = str(entry["dataset_id"])
             destination = Path(str(entry["directory"]))
-            progress.set_postfix(
-                current=dataset_id,
-                downloads_remaining=downloads_remaining,
-                profiles_remaining=(
-                    rotating_source.remaining_profile_count
-                    if rotating_source is not None
-                    else "unknown"
-                ),
-            )
             # Binary-file phase
             ## Existing complete pairs were marked reusable when the manifest
             ## was created, so this branch needs no provider API request.
             if "download_dataset" not in entry["planned_actions"]:
                 entry["execution"]["dataset"] = "reused"
             else:
+                progress.set_postfix(
+                    current=dataset_id,
+                    downloads_remaining=downloads_remaining,
+                    profiles_remaining=(
+                        rotating_source.remaining_profile_count
+                        if rotating_source is not None
+                        else "unknown"
+                    ),
+                )
                 entry["execution"]["dataset"] = "downloading"
                 _update_running_manifest(manifest, target_manifest, rotating_source)
                 try:
@@ -190,7 +197,8 @@ def _download_dataset_files(
                     )
                     break
             _update_running_manifest(manifest, target_manifest, rotating_source)
-            progress.update(1)
+            if "download_dataset" in entry["planned_actions"]:
+                progress.update(1)
     finally:
         progress.set_postfix(downloads_remaining=downloads_remaining)
         progress.close()
@@ -208,41 +216,66 @@ def _download_annotation_files(
     annotation_counts: Dict[str, int],
 ) -> List[Path]:
     """Download annotation CSVs for every complete local dataset pair."""
+    annotation_downloads_remaining = sum(
+        "download_annotations" in entry["planned_actions"] for entry in entries
+    )
+    progress = _annotation_progress(
+        total=len(entries),
+        initial=len(entries) - annotation_downloads_remaining,
+    )
+    progress.set_postfix(downloads_remaining=annotation_downloads_remaining)
+    progress.refresh()
     materialized: List[Path] = []
-    for entry in entries:
-        dataset_id = str(entry["dataset_id"])
-        destination = Path(str(entry["directory"]))
-        if not has_complete_pair(destination, dataset_id):
-            entry["execution"]["annotations"] = "not_executed_without_data"
-            _update_running_manifest(manifest, target_manifest, rotating_source)
-            continue
-        imzml_path = validate_imzml_pair(destination, dataset_id)
-        materialized.append(destination)
-        if entry["execution"]["dataset"] in {"pending", "not_executed_after_limit"}:
-            entry["execution"]["dataset"] = "reused_after_file_phase"
-        if "download_annotations" not in entry["planned_actions"]:
-            entry["execution"]["annotations"] = "reused"
-            _update_running_manifest(manifest, target_manifest, rotating_source)
-            continue
-        entry["execution"]["annotations"] = "downloading"
-        _update_running_manifest(manifest, target_manifest, rotating_source)
-        try:
-            annotation_count = call(
-                "materialize_annotations",
-                dataset_id=dataset_id,
-                dataset_name=str(entry.get("name", dataset_id)),
-                directory=destination,
-                imzml_path=imzml_path,
-                options=annotation_options,
-            )
-        except Exception as error:
-            entry["execution"]["annotations"] = f"failed: {type(error).__name__}: {error}"
-            logger.error("Annotation materialization failed for dataset %s: %s", dataset_id, error)
-            _update_running_manifest(manifest, target_manifest, rotating_source)
-            continue
-        annotation_counts[dataset_id] = int(annotation_count)
-        entry["execution"]["annotations"] = "downloaded"
-        _update_running_manifest(manifest, target_manifest, rotating_source)
+    try:
+        for entry in entries:
+            dataset_id = str(entry["dataset_id"])
+            destination = Path(str(entry["directory"]))
+            if not has_complete_pair(destination, dataset_id):
+                entry["execution"]["annotations"] = "not_executed_without_data"
+                _update_running_manifest(manifest, target_manifest, rotating_source)
+            else:
+                imzml_path = validate_imzml_pair(destination, dataset_id)
+                materialized.append(destination)
+                if entry["execution"]["dataset"] in {"pending", "not_executed_after_limit"}:
+                    entry["execution"]["dataset"] = "reused_after_file_phase"
+                if "download_annotations" not in entry["planned_actions"]:
+                    entry["execution"]["annotations"] = "reused"
+                    _update_running_manifest(manifest, target_manifest, rotating_source)
+                else:
+                    progress.set_postfix(
+                        current=dataset_id,
+                        downloads_remaining=annotation_downloads_remaining,
+                    )
+                    entry["execution"]["annotations"] = "downloading"
+                    _update_running_manifest(manifest, target_manifest, rotating_source)
+                    try:
+                        annotation_count = call(
+                            "materialize_annotations",
+                            dataset_id=dataset_id,
+                            dataset_name=str(entry.get("name", dataset_id)),
+                            directory=destination,
+                            imzml_path=imzml_path,
+                            options=annotation_options,
+                        )
+                    except Exception as error:
+                        entry["execution"]["annotations"] = (
+                            f"failed: {type(error).__name__}: {error}"
+                        )
+                        logger.error(
+                            "Annotation materialization failed for dataset %s: %s",
+                            dataset_id,
+                            error,
+                        )
+                        _update_running_manifest(manifest, target_manifest, rotating_source)
+                    else:
+                        annotation_counts[dataset_id] = int(annotation_count)
+                        entry["execution"]["annotations"] = "downloaded"
+                        annotation_downloads_remaining -= 1
+                        _update_running_manifest(manifest, target_manifest, rotating_source)
+                    progress.update(1)
+    finally:
+        progress.set_postfix(downloads_remaining=annotation_downloads_remaining)
+        progress.close()
     return materialized
 
 
@@ -305,9 +338,26 @@ def _update_running_manifest(
     write_json_atomic(target, manifest)
 
 
-def _download_progress(*, total: int) -> Any:
+def _download_progress(*, total: int, initial: int) -> Any:
     """Create the terminal progress display for binary dataset downloads."""
-    return tqdm(total=total, desc="Dataset files", unit="dataset", dynamic_ncols=True)
+    return tqdm(
+        total=total,
+        initial=initial,
+        desc="Dataset files",
+        unit="dataset",
+        dynamic_ncols=True,
+    )
+
+
+def _annotation_progress(*, total: int, initial: int) -> Any:
+    """Create the terminal progress display for annotation exports."""
+    return tqdm(
+        total=total,
+        initial=initial,
+        desc="Annotations",
+        unit="dataset",
+        dynamic_ncols=True,
+    )
 
 
 def _has_annotation_export(
