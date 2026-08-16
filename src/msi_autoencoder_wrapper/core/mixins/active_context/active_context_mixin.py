@@ -13,7 +13,6 @@ from ....utils.exceptions import raise_validation_error
 
 if TYPE_CHECKING:
     from ....readers.base_reader import MSIBaseReader
-    from ....annotations.base_annotation_reader import MSIBaseAnnotationReader
     from ....binners.base_binner import MSIBaseBinner
     from ....binners.base_inverse import MSIBaseInverseBinner
     from ....normalization import NormalizationPipeline
@@ -127,11 +126,11 @@ class ActiveContextProxy(LatentContextMixin):
         return self._cached_reader
 
     @property
-    def annotation_reader(self) -> Optional[MSIBaseAnnotationReader]:
+    def annotation_reader(self) -> Optional[Any]:
         """Return the annotation reader bound to the active image, if configured.
 
         :return: Active annotation reader or ``None``.
-        :rtype: Optional[MSIBaseAnnotationReader]
+        :rtype: Optional[Any]
         """
         if self._cached_reader is None:
             self._resolve_active_pipeline()

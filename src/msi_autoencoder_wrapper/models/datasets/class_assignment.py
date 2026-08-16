@@ -39,7 +39,7 @@ def metadata_values(metadata: Mapping[str, Any], field: str) -> Sequence[str]:
     :return: Values in source order.
     :rtype: Sequence[str]
     """
-    records = metadata.get("sources")
+    records = metadata.get("datasets", metadata.get("sources"))
     if records is None:
         records = [metadata]
     values = []

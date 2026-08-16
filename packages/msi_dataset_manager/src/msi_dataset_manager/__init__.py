@@ -1,7 +1,7 @@
 """Independent MSI dataset discovery and materialization library."""
 
 from .layout import DatasetWorkspaceLayout
-from .catalog import DatasetCatalog
+from .annotations import AnnotationReader
 from .exploration import DatasetExplorer
 
-__all__ = ["DatasetCatalog", "DatasetExplorer", "DatasetWorkspaceLayout"]
+__all__ = ["AnnotationReader", "DatasetExplorer", "DatasetWorkspaceLayout"]

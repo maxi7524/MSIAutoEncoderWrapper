@@ -1,13 +1,5 @@
-"""Annotation readers independent of external provider formats."""
+"""Dataset-manager annotation API exposed by the wrapper package."""
 
-from .base_annotation_reader import MSIBaseAnnotationReader
-from .annotations_manager import AnnotationReaderManager
-from .strategies.metaspace_csv_annotation_reader import MetaspaceCSVAnnotationReader
-from .strategies.sqlite_annotation_reader import SQLiteAnnotationReader
+from msi_dataset_manager.annotations import AnnotationReader
 
-__all__ = [
-    "AnnotationReaderManager",
-    "MetaspaceCSVAnnotationReader",
-    "MSIBaseAnnotationReader",
-    "SQLiteAnnotationReader",
-]
+__all__ = ["AnnotationReader"]

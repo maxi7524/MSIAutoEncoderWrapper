@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from ...catalog import DatasetCatalog
+from tqdm.auto import tqdm
+
+from ...annotations.merge import AnnotationMergeInput, MergedAnnotationWriter
 from ...layout import DatasetWorkspaceLayout
 from ...utils.exceptions import raise_validation_error
 from ...utils.logger import get_custom_logger
 from ...validators import validate_imzml_pair
 from ...sources.source_manager import DatasetSourceManager
-from .annotations import build_cohort_annotation_index
-from .catalog import import_local_dataset
 from .imzml_writer import ImzMLMergeInput, ImzMLMerger
 
 
@@ -40,6 +40,12 @@ def create_composition_manifest(
     annotation_source = DatasetSourceManager.get_annotation_source_class(source)
     available_inputs = []
     missing_ids = []
+    validation_progress = tqdm(
+        total=len(ordered_ids),
+        desc="Composition inputs",
+        unit="dataset",
+        dynamic_ncols=True,
+    )
     for dataset_id in ordered_ids:
         directory = layout.dataset_dir(dataset_id)
         try:
@@ -47,6 +53,8 @@ def create_composition_manifest(
         except Exception:
             missing_ids.append(dataset_id)
             logger.warning("Skipping unavailable local dataset %s", dataset_id)
+            validation_progress.update(1)
+            validation_progress.set_postfix(dataset=dataset_id, status="unavailable")
             continue
         available_inputs.append(
             {
@@ -60,6 +68,9 @@ def create_composition_manifest(
                 ),
             }
         )
+        validation_progress.update(1)
+        validation_progress.set_postfix(dataset=dataset_id)
+    validation_progress.close()
     return {
         "source": source,
         "requested_dataset_ids": ordered_ids,
@@ -118,10 +129,6 @@ def compose_cohort(
     cohort-level annotation masks, and finally writes normalized configuration.
     """
     layout = DatasetWorkspaceLayout(workspace_path)
-    # Result catalogue initialization
-    ## This is the only SQLite catalogue in the workflow. Query and download
-    ## use JSON artifacts and the filesystem instead of maintaining shadow state.
-    catalog = DatasetCatalog(layout.composed_catalog_path(cohort_id))
     manifest = dict(composition_manifest or create_composition_manifest(
         workspace_path=workspace_path,
         source=source,
@@ -132,33 +139,70 @@ def compose_cohort(
     missing_ids = [str(value) for value in manifest["missing_dataset_ids"]]
     requested_ids = [str(value) for value in manifest["requested_dataset_ids"]]
     inputs = []
+    annotation_inputs = []
+    composition_progress = tqdm(
+        total=3,
+        desc="Composition",
+        unit="stage",
+        dynamic_ncols=True,
+    )
+    composition_progress.set_postfix(stage="reading annotations")
+    composition_progress.refresh()
+    annotation_progress = tqdm(
+        total=len(available_entries),
+        desc="Source annotations",
+        unit="dataset",
+        dynamic_ncols=True,
+    )
 
-    # Canonical input validation and cohort-local annotation import
-    ## Source pairs remain shared under datasets/<source_id>. Paired source CSVs
-    ## are normalized by the annotation reader into the common SQLite schema.
+    # Source-owned annotation loading
+    ## Each source adapter returns the common in-memory contract. Composition
+    ## does not parse provider files or maintain an intermediate catalog.
     for entry in available_entries:
         dataset_id = str(entry["dataset_id"])
         directory = Path(str(entry["directory"]))
         imzml_path = Path(str(entry["imzml_path"]))
-        if bool(entry["annotations_present"]):
-            import_local_dataset(
-                catalog=catalog,
+        annotation_export = (
+            DatasetSourceManager.read_annotation_export(
                 source=source,
                 dataset_id=dataset_id,
-                name=dataset_id,
+                directory=directory,
                 imzml_path=imzml_path,
             )
-        else:
-            catalog.upsert_dataset(
+            if bool(entry["annotations_present"])
+            else None
+        )
+        records = annotation_export.records if annotation_export is not None else ()
+        inputs.append(
+            ImzMLMergeInput(
                 source=source,
                 dataset_id=dataset_id,
-                name=dataset_id,
-                metadata={},
-                local_path=directory,
-                status="materialized_without_annotations",
+                imzml_path=imzml_path,
+                annotation_records=records,
             )
-        inputs.append(ImzMLMergeInput(source, dataset_id, imzml_path))
+        )
+        annotation_inputs.append(
+            AnnotationMergeInput(
+                source=source,
+                dataset_id=dataset_id,
+                name=(
+                    str(annotation_export.metadata.get("name") or dataset_id)
+                    if annotation_export is not None
+                    else dataset_id
+                ),
+                imzml_path=imzml_path,
+                annotation_export=annotation_export,
+                metadata={},
+            )
+        )
+        annotation_progress.update(1)
+        annotation_progress.set_postfix(dataset=dataset_id)
+    annotation_progress.close()
+    composition_progress.update(1)
+    composition_progress.set_postfix(stage="merging imzML/ibd")
+    composition_progress.refresh()
     if not inputs:
+        composition_progress.close()
         raise_validation_error(
             "Composition", "None of the requested datasets has a complete local imzML pair."
         )
@@ -180,31 +224,43 @@ def compose_cohort(
         "unannotated_amount": unannotated_amount,
         "random_seed": int(random_seed),
     }
-    # Spectrum merge and provenance
-    ## ImzMLMerger writes the result pair and source-to-output spectrum mappings.
+    # Spectrum composition
+    ## The merger writes imzML/ibd and returns exact source-to-output mappings.
     output = layout.imzml_path(cohort_id)
-    ImzMLMerger(catalog).merge(
+    merge_result = ImzMLMerger().merge(
         inputs=inputs,
         output_path=output,
-        merged_dataset_id=cohort_id,
         row_width=row_width,
         max_fdr=max_fdr,
         unannotated_ratio=unannotated_ratio,
         unannotated_amount=unannotated_amount,
         random_seed=random_seed,
     )
-    # Cohort annotation index
-    ## Derive occurrence/FDR masks from the now-complete common SQLite catalogue.
-    build_cohort_annotation_index(
-        catalog=catalog,
-        source=source,
-        dataset_ids=available_ids,
-        config=normalized,
-        output_path=output.parent / "annotation_index.json",
+    composition_progress.update(1)
+    composition_progress.set_postfix(stage="writing annotation SQLite")
+    composition_progress.refresh()
+    # Merged annotation store
+    ## Persist global classes, source references, and compressed pixel provenance.
+    MergedAnnotationWriter().write(
+        path=layout.composed_catalog_path(cohort_id),
+        inputs=annotation_inputs,
+        pixel_mappings=merge_result.pixel_mappings,
+        filtering_metadata={
+            "max_fdr": max_fdr,
+            "minimum_dataset_occurrence": int(minimum_dataset_occurrence),
+            "unannotated_ratio": unannotated_ratio,
+            "unannotated_amount": unannotated_amount,
+            "random_seed": int(random_seed),
+        },
+        max_fdr=max_fdr,
     )
     # Final composition artifact
     _write_json_atomic(layout.composition_path(cohort_id), normalized)
-    return output
+    composition_progress.update(1)
+    composition_progress.set_postfix(stage="complete")
+    composition_progress.refresh()
+    composition_progress.close()
+    return merge_result.path
 
 
 def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
