@@ -5,8 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-from collections import defaultdict, deque
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -17,18 +15,13 @@ from ....utils.exceptions import raise_validation_error
 from ...base import ANNOTATION_EXPORT_SCHEMA_VERSION, SourceAnnotationExport
 from ...base.validation import validate_annotation_record
 
-# --------------------------------------------------
-# Section: Helpers 
-# --------------------------------------------------
-
-# Path orchestrator 
+# Annotation artifact paths
 def annotation_csv_paths(directory: Path, dataset_id: str) -> tuple[Path, Path]:
     """Return the only supported METASPACE annotation export paths."""
     del dataset_id
     return directory / "annotations.csv", directory / "pixel_intensities.csv"
 
 
-# Validator 
 def has_complete_annotation_csv(directory: Path, dataset_id: str) -> bool:
     """Return whether both reader-compatible annotation CSV files are non-empty."""
     return all(
@@ -36,16 +29,12 @@ def has_complete_annotation_csv(directory: Path, dataset_id: str) -> bool:
         for path in annotation_csv_paths(directory, dataset_id)
     )
 
-# --------------------------------------------------
-# Section: Main functionality 
-# --------------------------------------------------
-
 def write_annotation_csv_pair(
     *,
     directory: Path,
     dataset_id: str,
     dataset_name: str,
-    annotations: Sequence[tuple[Mapping[str, Any], np.ndarray | None]],
+    annotations: Sequence[tuple[Mapping[str, Any], np.ndarray]],
     reader: PyImzMLReader,
 ) -> tuple[Path, Path]:
     """Write one canonical, reader-compatible annotation CSV pair.
@@ -64,6 +53,7 @@ def write_annotation_csv_pair(
     ]
     rows = []
     intensity_rows = []
+    annotation_ids: set[str] = set()
     for position, (annotation, ion_image) in enumerate(annotations):
         formula = annotation.get("formula")
         mz = annotation.get("mz")
@@ -75,11 +65,23 @@ def write_annotation_csv_pair(
             raise_validation_error(
                 "AnnotationCSV", f"Annotation {position} does not contain m/z."
             )
+        annotation_id = str(annotation.get("source_annotation_id") or "")
+        if not annotation_id:
+            raise_validation_error(
+                "AnnotationCSV",
+                f"Annotation {position} does not contain a source annotation identifier.",
+            )
+        if annotation_id in annotation_ids:
+            raise_validation_error(
+                "AnnotationCSV",
+                f"Duplicate source annotation identifier: {annotation_id!r}.",
+            )
+        annotation_ids.add(annotation_id)
         rows.append(
             {
                 "schema_version": annotation.get("schema_version", ""),
                 "source": annotation.get("source", ""),
-                "source_annotation_id": annotation.get("source_annotation_id", ""),
+                "source_annotation_id": annotation_id,
                 "provider_record_layout": annotation.get("provider_record_layout", ""),
                 "group": annotation.get("group", ""),
                 "datasetName": dataset_name,
@@ -100,6 +102,7 @@ def write_annotation_csv_pair(
             }
         )
         intensity_row: dict[str, Any] = {
+            "source_annotation_id": annotation_id,
             "mol_formula": formula,
             "adduct": annotation.get("adduct", ""),
             "mz": mz,
@@ -110,18 +113,10 @@ def write_annotation_csv_pair(
                 "molecule_ids", annotation.get("moleculeIds", "")
             ),
         }
-        spectrum_values = {
-            int(key): float(value)
-            for key, value in dict(annotation.get("spectrum_values") or {}).items()
-        }
-        spectrum_ids = {int(value) for value in annotation.get("spectrum_ids") or ()}
+        # Pixel-matrix serialization
+        ## The source matrix is the only authority for per-pixel intensity.
+        ## Do not substitute presence flags or values from another schema.
         for spectrum_id, coordinate in enumerate(coordinates):
-            if ion_image is None:
-                intensity_row[coordinate] = spectrum_values.get(
-                    spectrum_id,
-                    1.0 if spectrum_id in spectrum_ids else "",
-                )
-                continue
             x, y, _ = reader.GetSpectrumPosition(spectrum_id)
             row_index = y - 1
             column_index = x - 1
@@ -146,7 +141,15 @@ def write_annotation_csv_pair(
         _write_csv(
             intensities_tmp,
             intensity_rows,
-            ["mol_formula", "adduct", "mz", "moleculeNames", "moleculeIds", *coordinates],
+            [
+                "source_annotation_id",
+                "mol_formula",
+                "adduct",
+                "mz",
+                "moleculeNames",
+                "moleculeIds",
+                *coordinates,
+            ],
         )
         annotations_tmp.replace(annotations_path)
         intensities_tmp.replace(intensities_path)
@@ -178,13 +181,17 @@ def read_metaspace_annotation_export(
     )
     rows = _read_csv(annotations_path)
     intensity_rows = _read_csv(pixel_intensities_path)
-    # Annotation-to-intensity matching
-    ## Isobaric ions may share m/z; formula and adduct disambiguate their images.
-    intensities: dict[tuple[str, str, Decimal], deque[Dict[str, str]]] = defaultdict(deque)
+    # Lossless annotation-to-intensity matching
+    ## Formula, adduct, and m/z are descriptive fields, not a stable join key.
+    intensities: dict[str, Dict[str, str]] = {}
     for intensity_row in intensity_rows:
-        intensities[_annotation_key(intensity_row, formula_field="mol_formula")].append(
-            intensity_row
-        )
+        annotation_id = intensity_row.get("source_annotation_id") or ""
+        if not annotation_id or annotation_id in intensities:
+            raise_validation_error(
+                "CanonicalCSV",
+                "Pixel-intensity rows must have unique source_annotation_id values.",
+            )
+        intensities[annotation_id] = intensity_row
     reader = PyImzMLReader(image)
     coordinate_to_spectrum = {
         f"x{x - 1}_y{y - 1}": spectrum_id
@@ -205,15 +212,14 @@ def read_metaspace_annotation_export(
                 "Annotation CSV source or dataset identifier does not match its directory.",
             )
         raw_mz = row.get("mz")
-        key = _annotation_key(row, formula_field="formula")
-        matching_rows = intensities.get(key)
-        if not matching_rows:
+        annotation_id = row.get("source_annotation_id") or ""
+        intensity_row = intensities.pop(annotation_id, None)
+        if intensity_row is None:
             raise_validation_error(
                 "CanonicalCSV",
-                "No intensity row matches annotation "
-                f"formula={key[0]!r}, adduct={key[1]!r}, m/z={raw_mz}.",
+                "No pixel-intensity row matches source_annotation_id="
+                f"{annotation_id!r}.",
             )
-        intensity_row = matching_rows.popleft()
         spectrum_values: Dict[int, float] = {}
         for column, spectrum_id in coordinate_to_spectrum.items():
             raw_value = intensity_row.get(column, "")
@@ -256,22 +262,6 @@ def read_metaspace_annotation_export(
         },
         records=records,
     )
-
-
-def _annotation_key(
-    row: Dict[str, str], *, formula_field: str
-) -> tuple[str, str, Decimal]:
-    """Return the canonical ion identity used to pair the two CSV exports."""
-    raw_mz = row.get("mz")
-    if not raw_mz:
-        raise_validation_error("CanonicalCSV", "An annotation row has no m/z value")
-    return (
-        str(row.get(formula_field) or "").strip(),
-        str(row.get("adduct") or "").strip(),
-        Decimal(raw_mz),
-    )
-
-
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]], fields: list[str]) -> None:
     """Write one UTF-8 CSV file with stable columns."""
     with path.open("w", encoding="utf-8", newline="") as stream:
