@@ -88,7 +88,8 @@ class ModelRuntimeProxy(BaseModelsManagerProxy):
             )
 
         target_device = getattr(self._wrapper, "device", "cpu")
-        torch_model.to(target_device)
+        target_dtype = getattr(self._wrapper, "dtype", None)
+        torch_model.to(device=target_device, dtype=target_dtype)
         self._wrapper.active_model = torch_model
         self._training_transient_cache.clear()
         self.active_model_type = resolved_type

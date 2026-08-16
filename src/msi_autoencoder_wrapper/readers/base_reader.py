@@ -17,7 +17,6 @@ class ReaderCapabilities:
 
     native_batch_read: bool = False
     shared_mass_axis: bool = False
-    reconstruction_mass_axis: bool = False
     variable_spectrum_length: bool = True
     requires_worker_reopen: bool = False
 

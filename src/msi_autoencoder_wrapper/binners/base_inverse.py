@@ -28,6 +28,11 @@ class MSIBaseInverseBinner(ConfigurableComponent, ABC):
         """
         self._config: dict[str, Any] = {}
         self.active_context = active_context or getattr(binner, "active_context", None)
+        self.dtype = getattr(
+            getattr(self.active_context, "_wrapper", None),
+            "dtype",
+            getattr(binner, "dtype", torch.float32),
+        )
         
         # Resolve binner instance via direct injection or session context proxy
         if binner is not None:
@@ -63,7 +68,7 @@ class MSIBaseInverseBinner(ConfigurableComponent, ABC):
         """Transform one or more dense spectra through the canonical batch path."""
         from ..data import SpectrumBatch, SpectrumSpace
 
-        values = spectra if isinstance(spectra, torch.Tensor) else torch.tensor(np.asarray(spectra))
+        values = torch.as_tensor(spectra, dtype=self.dtype)
         if values.ndim == 1:
             values = values.unsqueeze(0)
         if values.ndim != 2:
@@ -79,43 +84,25 @@ class MSIBaseInverseBinner(ConfigurableComponent, ABC):
         self,
         explicit_axis: torch.Tensor | np.ndarray | None,
     ) -> torch.Tensor:
-        """Resolve one shared reconstruction axis without retaining per-pixel axes."""
+        """Resolve an explicit, real shared, or binner mass axis.
+
+        A reader is consulted only when it declares an actual shared mass axis.
+        In particular, this method must not estimate an axis by scanning spectra:
+        that is the responsibility of ``StatisticalInverseBinner``.
+        """
         if explicit_axis is not None:
             return self._validate_axis(explicit_axis)
 
         reader = getattr(self.active_context, "reader", None)
         if reader is not None:
             capabilities = reader.capabilities
-            if (
-                getattr(capabilities, "reconstruction_mass_axis", False)
-                or getattr(capabilities, "shared_mass_axis", False)
-            ):
+            if getattr(capabilities, "shared_mass_axis", False):
                 return self._validate_axis(reader.GetXAxis())
-        if reader is not None:
-            cached = getattr(reader, "_inverse_reconstruction_axis", None)
-            if cached is None:
-                count = int(reader.GetNumberOfSpectra())
-                minimum = float("inf")
-                maximum = float("-inf")
-                total_length = 0
-                for index in range(count):
-                    axis, _ = reader.GetSpectrum(index)
-                    axis = np.asarray(axis)
-                    if axis.size:
-                        minimum = min(minimum, float(axis[0]))
-                        maximum = max(maximum, float(axis[-1]))
-                        total_length += int(axis.size)
-                if count and total_length and np.isfinite(minimum) and np.isfinite(maximum):
-                    mean_length = max(1, int(round(total_length / count)))
-                    cached = np.linspace(minimum, maximum, mean_length, dtype=np.float64)
-                    setattr(reader, "_inverse_reconstruction_axis", cached)
-            if cached is not None:
-                return self._validate_axis(cached)
         return self._validate_axis(self._Binner.GetXAxis())
 
     @staticmethod
     def _validate_axis(axis: torch.Tensor | np.ndarray) -> torch.Tensor:
-        resolved = torch.as_tensor(axis, dtype=torch.float64)
+        resolved = torch.as_tensor(axis, dtype=torch.float32)
         if resolved.ndim != 1 or resolved.numel() == 0:
             raise_validation_error("InverseBinner", "reconstruction_mass_axis must be a non-empty one-dimensional array.")
         if not bool(torch.isfinite(resolved).all()) or (resolved.numel() > 1 and not bool(torch.all(resolved[1:] > resolved[:-1]))):

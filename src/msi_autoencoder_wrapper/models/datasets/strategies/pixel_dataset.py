@@ -75,6 +75,7 @@ class PixelDataset(MSIBaseDataset):
                 message="normalization_epsilon must be greater than zero.",
             )
         self.source = source
+        self.dtype = getattr(getattr(active_context, "_wrapper", None), "dtype", torch.float32)
         self.normalization = resolved_normalization
         self.normalization_epsilon = float(normalization_epsilon)
         self.target_specs = self._validate_target_specs(target_specs or {})
@@ -202,7 +203,7 @@ class PixelDataset(MSIBaseDataset):
             )
         reader = self.active_context.get_data_reader(self.source)
         mass_values, intensities = reader.GetSpectrum(idx)
-        mass_array = np.array(mass_values, dtype=np.float64, copy=True)
+        mass_array = np.array(mass_values, dtype=np.float32, copy=True)
         intensity_array = np.array(intensities, dtype=np.float32, copy=True)
         if (
             mass_array.ndim != 1
@@ -215,8 +216,8 @@ class PixelDataset(MSIBaseDataset):
             )
         return RawSpectrumSample(
             sample_id=idx,
-            mass_values=torch.as_tensor(mass_array, dtype=torch.float64),
-            intensities=torch.as_tensor(intensity_array, dtype=torch.float32),
+            mass_values=torch.as_tensor(mass_array, dtype=self.dtype),
+            intensities=torch.as_tensor(intensity_array, dtype=self.dtype),
             targets=self._target_sample(idx),
         )
 
@@ -241,15 +242,15 @@ class PixelDataset(MSIBaseDataset):
             targets = self._collate_targets(target_samples)
             return SharedAxisRawBatch(
                 sample_ids=torch.from_numpy(reader_batch.sample_ids),
-                mass_axis=torch.as_tensor(reader_batch.mass_values, dtype=torch.float64),
-                intensities=torch.as_tensor(reader_batch.intensities, dtype=torch.float32),
+                mass_axis=torch.as_tensor(reader_batch.mass_values, dtype=self.dtype),
+                intensities=torch.as_tensor(reader_batch.intensities, dtype=self.dtype),
                 targets=targets,
             )
         samples = [
             RawSpectrumSample(
                 sample_id=int(sample_id),
-                mass_values=torch.tensor(axis, dtype=torch.float64),
-                intensities=torch.tensor(values, dtype=torch.float32),
+                mass_values=torch.tensor(axis, dtype=self.dtype),
+                intensities=torch.tensor(values, dtype=self.dtype),
                 targets=target,
             )
             for sample_id, axis, values, target in zip(
@@ -456,7 +457,7 @@ class PixelDataset(MSIBaseDataset):
         if self.normalization == "none":
             return values
         if self.normalization == "tic":
-            denominator = float(np.sum(np.abs(values), dtype=np.float64))
+            denominator = float(np.sum(np.abs(values), dtype=np.float32))
         elif self.normalization == "max":
             denominator = float(np.max(np.abs(values), initial=0.0))
         else:
