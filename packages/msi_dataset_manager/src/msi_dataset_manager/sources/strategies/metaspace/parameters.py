@@ -1,4 +1,4 @@
-"""Declared METASPACE filter names and free-text value mappings."""
+"""Declare METASPACE filter names and free-text value mappings."""
 
 from __future__ import annotations
 

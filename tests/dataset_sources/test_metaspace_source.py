@@ -10,19 +10,20 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 import pytest
+from pyimzml.ImzMLWriter import ImzMLWriter
 
 from msi_dataset_manager.exploration.dataset_explorer import (
     DatasetExplorer,
 )
 from msi_dataset_manager.sources.strategies.metaspace import (
     MetaspaceDatasetSource,
-    _records_from_table,
 )
-from msi_dataset_manager.sources.strategies.metaspace_metadata import (
+from msi_dataset_manager.sources.strategies.metaspace.source import _records_from_table
+from msi_dataset_manager.sources.strategies.metaspace.metadata import (
     attach_api_metadata,
     summarise_records,
 )
-from msi_dataset_manager.sources.strategies.metaspace_parameters import (
+from msi_dataset_manager.sources.strategies.metaspace.parameters import (
     FREE_TEXT_VALUE_GROUPS,
     split_filters,
 )
@@ -54,6 +55,7 @@ class FakeMetaspaceDataset:
                 "id": "one",
                 "sumFormula": "C6H12O6",
                 "adduct": "+H",
+                "mz": 181.0707,
                 "fdr": 0.1,
             }
         ]
@@ -240,8 +242,26 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     records = source.filter(
         {"organism": "MOUSE", "include_molecule_stats": True}
     )
-    annotations = source.get_annotations("dataset-a")
     destination = source.download_dataset("dataset-a", tmp_path / "dataset-a")
+    with ImzMLWriter(str(destination / "dataset-a.imzML"), mode="processed") as writer:
+        for y in (1, 2):
+            for x in (1, 2):
+                writer.addSpectrum(
+                    np.asarray([181.0707]),
+                    np.asarray([1.0]),
+                    (x, y, 1),
+                )
+    source.materialize_annotations(
+        dataset_id="dataset-a",
+        dataset_name="Dataset A",
+        directory=destination,
+        imzml_path=destination / "dataset-a.imzML",
+    )
+    annotations = source.read_annotation_export(
+        dataset_id="dataset-a",
+        directory=destination,
+        imzml_path=destination / "dataset-a.imzML",
+    ).records
 
     # "organism" is unstructured free text on METASPACE (e.g. "Mus musculus
     # (mouse)" vs "Mouse" vs "mouse"), so it is matched locally and
@@ -258,7 +278,7 @@ def test_metaspace_adapter_preserves_metadata_and_imports_broad_annotations(
     assert annotations[0]["database_name"] == "HMDB"
     assert annotations[0]["database_version"] == "v4"
     assert client.value.result_calls == [{"database": ("HMDB", "v4"), "fdr": 0.1}]
-    assert annotations[0]["ion_image"] == [[1.0, 0.0], [0.0, 0.0]]
+    assert annotations[0]["spectrum_values"] == {0: 1.0}
     assert client.value.download_calls == [(destination, "dataset-a")]
     assert (destination / "dataset-a.imzML").is_file()
 
@@ -459,6 +479,70 @@ def test_download_limit_sentinel_has_a_dedicated_error(tmp_path: Path) -> None:
     assert list((tmp_path / "dataset-a").iterdir()) == []
 
 
+def test_download_transfers_the_validated_links_without_requesting_them_twice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quota-sensitive signed links are fetched exactly once per dataset."""
+    class SignedLinkDataset(FakeMetaspaceDataset):
+        def __init__(self) -> None:
+            super().__init__()
+            self.link_calls = 0
+
+        def download_links(self) -> Dict[str, Any]:
+            self.link_calls += 1
+            if self.link_calls > 1:
+                return {
+                    "files": [
+                        {
+                            "filename": "Download_Limit_Reached.txt",
+                            "link": "https://example.invalid/quota",
+                        }
+                    ]
+                }
+            return {
+                "files": [
+                    {"filename": "source.imzml", "link": "https://example/imzml"},
+                    {"filename": "source.ibd", "link": "https://example/ibd"},
+                ]
+            }
+
+    class Response:
+        headers = {"content-length": "4"}
+
+        def __init__(self, url: str) -> None:
+            self.content = b"xml!" if url.endswith("imzml") else b"ibd!"
+
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_content(self, chunk_size: int) -> List[bytes]:
+            return [self.content]
+
+    dataset = SignedLinkDataset()
+    client = FakeMetaspaceClient()
+    client.value = dataset
+    monkeypatch.setattr(
+        "msi_dataset_manager.sources.strategies.metaspace.source.requests.get",
+        lambda url, stream: Response(url),
+    )
+
+    destination = MetaspaceDatasetSource(client=client).download_dataset(
+        "dataset-a", tmp_path / "dataset-a"
+    )
+
+    assert dataset.link_calls == 1
+    assert (destination / "dataset-a.imzML").read_bytes() == b"xml!"
+    assert (destination / "dataset-a.ibd").read_bytes() == b"ibd!"
+    assert list(destination.glob("*.part")) == []
+
+
 def test_spatial_retrieval_rejects_annotations_without_ion_images() -> None:
     """Requested pixel annotations cannot silently lose molecular results."""
     class MissingImageDataset(FakeMetaspaceDataset):
@@ -470,9 +554,12 @@ def test_spatial_retrieval_rejects_annotations_without_ion_images() -> None:
     source = MetaspaceDatasetSource(client=client)
 
     with pytest.raises(ExternalServiceError, match="without matching ion images"):
-        source.get_annotations(
-            "dataset-a",
-            {"annotation_fdr": 0.1, "include_spatial": True},
+        source.materialize_annotations(
+            dataset_id="dataset-a",
+            dataset_name="Dataset A",
+            directory=Path("unused"),
+            imzml_path=Path("unused.imzML"),
+            options={"annotation_fdr": 0.1, "include_spatial": True},
         )
 
 

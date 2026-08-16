@@ -8,13 +8,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from tqdm.auto import tqdm
 
-from ...imzml import PyImzMLReader
-from ...sources.base import DatasetSource
+from ...sources.base import AnnotationDatasetSource, DatasetSource
 from ...sources.profiles import RotatingDatasetSource, read_source_profiles
+from ...sources.source_manager import DatasetSourceManager
 from ...utils.exceptions import DownloadLimitError, raise_validation_error
 from ...utils.logger import get_custom_logger
 from ...validators import validate_imzml_pair
-from ..annotation_csv import has_complete_annotation_csv, write_annotation_csv_pair
 from .manifest import final_manifest_summary, has_complete_pair, write_json_atomic
 
 
@@ -49,6 +48,10 @@ def download_from_manifest(
         raise ValueError(
             f"Manifest source '{manifest.get('source')}' does not match "
             f"adapter '{source.source_name}'."
+        )
+    if not isinstance(source, AnnotationDatasetSource):
+        raise TypeError(
+            f"Dataset source '{source.source_name}' does not implement annotations."
         )
     entries = manifest.get("datasets")
     if not isinstance(entries, list):
@@ -224,20 +227,20 @@ def _download_annotation_files(
         entry["execution"]["annotations"] = "downloading"
         _update_running_manifest(manifest, target_manifest, rotating_source)
         try:
-            annotations = call("get_annotations", dataset_id, annotation_options)
-            write_annotation_csv_pair(
-                directory=destination,
+            annotation_count = call(
+                "materialize_annotations",
                 dataset_id=dataset_id,
                 dataset_name=str(entry.get("name", dataset_id)),
-                annotations=annotations,
-                reader=PyImzMLReader(imzml_path),
+                directory=destination,
+                imzml_path=imzml_path,
+                options=annotation_options,
             )
         except Exception as error:
             entry["execution"]["annotations"] = f"failed: {type(error).__name__}: {error}"
             logger.error("Annotation materialization failed for dataset %s: %s", dataset_id, error)
             _update_running_manifest(manifest, target_manifest, rotating_source)
             continue
-        annotation_counts[dataset_id] = len(annotations)
+        annotation_counts[dataset_id] = int(annotation_count)
         entry["execution"]["annotations"] = "downloaded"
         _update_running_manifest(manifest, target_manifest, rotating_source)
     return materialized
@@ -288,7 +291,11 @@ def _update_running_manifest(
         directory = Path(str(entry["directory"]))
         entry["final_state"] = {
             "data_present": has_complete_pair(directory, dataset_id),
-            "annotations_present": has_complete_annotation_csv(directory, dataset_id),
+            "annotations_present": _has_annotation_export(
+                source=str(manifest["source"]),
+                directory=directory,
+                dataset_id=dataset_id,
+            ),
         }
     manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
     manifest["exhausted_profile_count"] = (
@@ -301,3 +308,14 @@ def _update_running_manifest(
 def _download_progress(*, total: int) -> Any:
     """Create the terminal progress display for binary dataset downloads."""
     return tqdm(total=total, desc="Dataset files", unit="dataset", dynamic_ncols=True)
+
+
+def _has_annotation_export(
+    *,
+    source: str,
+    directory: Path,
+    dataset_id: str,
+) -> bool:
+    """Delegate annotation artifact validation to its registered source class."""
+    implementation = DatasetSourceManager.get_annotation_source_class(source)
+    return implementation.has_annotation_export(directory, dataset_id)

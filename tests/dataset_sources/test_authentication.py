@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from msi_dataset_manager.sources.strategies.metaspace_authentication import (
+from msi_dataset_manager.sources.strategies.metaspace.authentication import (
     METASPACE_API_KEY_ENV,
     metaspace_client_options,
     validate_metaspace_session,

@@ -2,12 +2,14 @@
 
 from typing import Any
 
-from .base import DatasetSource
+from .base import AnnotationDatasetSource, DatasetSource, SourceAnnotationExport
 from .profiles import RotatingDatasetSource, read_source_profiles
 from .source_manager import DatasetSourceManager
 
 __all__ = [
     "DatasetSource",
+    "AnnotationDatasetSource",
+    "SourceAnnotationExport",
     "DatasetSourceManager",
     "MetaspaceDatasetSource",
     "PrideDatasetSource",

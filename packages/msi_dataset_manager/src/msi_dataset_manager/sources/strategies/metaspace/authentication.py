@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any, Callable, Dict, Mapping, Optional
 
-from ...utils.exceptions import MSILibException, raise_project_config_error
+from ....utils.exceptions import MSILibException, raise_project_config_error
 
 
 METASPACE_API_KEY_ENV = "METASPACE_API_KEY"

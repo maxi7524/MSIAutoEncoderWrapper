@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from ...annotations import read_canonical_csv_annotations
 from ...imzml import PyImzMLReader
+from ...sources.source_manager import DatasetSourceManager
 from ...utils.logger import get_custom_logger
 from ...catalog.sqlite_catalog import DatasetCatalog
 
@@ -21,8 +21,6 @@ def import_local_dataset(
     dataset_id: str,
     name: str,
     imzml_path: Path | str,
-    annotations_path: Path | str,
-    pixel_intensities_path: Path | str,
     metadata: Mapping[str, Any] | None = None,
 ) -> Dict[str, int]:
     """Import one local imzML pair and its METASPACE CSV exports.
@@ -37,10 +35,6 @@ def import_local_dataset(
     :type name: str
     :param imzml_path: Existing imzML file with a sibling ``.ibd`` file.
     :type imzml_path: pathlib.Path | str
-    :param annotations_path: METASPACE annotation table CSV.
-    :type annotations_path: pathlib.Path | str
-    :param pixel_intensities_path: METASPACE pixel-intensity CSV.
-    :type pixel_intensities_path: pathlib.Path | str
     :param metadata: Complete known source metadata.
     :type metadata: Mapping[str, Any] | None
     :return: Imported spectrum, annotation, and spatial-link counts.
@@ -48,11 +42,13 @@ def import_local_dataset(
     :raises ValidationError: If files or annotation rows cannot be matched.
     """
     imzml = Path(imzml_path)
-    _, records = read_canonical_csv_annotations(
-        imzml,
-        annotations_path,
-        pixel_intensities_path,
+    annotation_export = DatasetSourceManager.read_annotation_export(
+        source=source,
+        dataset_id=dataset_id,
+        directory=imzml.parent,
+        imzml_path=imzml,
     )
+    records = annotation_export.records
     reader = PyImzMLReader(imzml)
     spatial_links = sum(len(record["spectrum_ids"]) for record in records)
 

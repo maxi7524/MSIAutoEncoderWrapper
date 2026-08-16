@@ -11,7 +11,7 @@ from ...layout import DatasetWorkspaceLayout
 from ...utils.exceptions import raise_validation_error
 from ...utils.logger import get_custom_logger
 from ...validators import validate_imzml_pair
-from ..annotation_csv import annotation_csv_paths, has_complete_annotation_csv
+from ...sources.source_manager import DatasetSourceManager
 from .annotations import build_cohort_annotation_index
 from .catalog import import_local_dataset
 from .imzml_writer import ImzMLMergeInput, ImzMLMerger
@@ -36,6 +36,8 @@ def create_composition_manifest(
     if not ordered_ids or len(ordered_ids) != len(set(ordered_ids)):
         raise_validation_error("Composition", "dataset_ids must be non-empty and unique.")
     layout = DatasetWorkspaceLayout(workspace_path)
+    DatasetSourceManager.discover_strategies()
+    annotation_source = DatasetSourceManager.get_annotation_source_class(source)
     available_inputs = []
     missing_ids = []
     for dataset_id in ordered_ids:
@@ -52,7 +54,10 @@ def create_composition_manifest(
                 "dataset_id": dataset_id,
                 "directory": str(directory),
                 "imzml_path": str(imzml_path),
-                "annotations_present": has_complete_annotation_csv(directory, dataset_id),
+                "annotations_present": annotation_source.has_annotation_export(
+                    directory,
+                    dataset_id,
+                ),
             }
         )
     return {
@@ -136,15 +141,12 @@ def compose_cohort(
         directory = Path(str(entry["directory"]))
         imzml_path = Path(str(entry["imzml_path"]))
         if bool(entry["annotations_present"]):
-            annotations_path, intensities_path = annotation_csv_paths(directory, dataset_id)
             import_local_dataset(
                 catalog=catalog,
                 source=source,
                 dataset_id=dataset_id,
                 name=dataset_id,
                 imzml_path=imzml_path,
-                annotations_path=annotations_path,
-                pixel_intensities_path=intensities_path,
             )
         else:
             catalog.upsert_dataset(

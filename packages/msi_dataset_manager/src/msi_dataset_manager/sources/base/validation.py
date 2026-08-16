@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..utils.exceptions import raise_validation_error
+from ...utils.exceptions import raise_validation_error
 
 
 def validate_annotation_record(record: Mapping[str, Any]) -> None:
