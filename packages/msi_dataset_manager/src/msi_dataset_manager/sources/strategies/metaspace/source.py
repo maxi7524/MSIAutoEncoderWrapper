@@ -15,23 +15,23 @@ import numpy as np
 import requests
 from tqdm.auto import tqdm
 
-from ...utils.exceptions import (
+from ....utils.exceptions import (
     raise_download_limit_error,
     raise_external_service_error,
     raise_project_config_error,
 )
-from ...utils.logger import get_custom_logger
-from .metaspace_authentication import metaspace_client_options
-from .metaspace_metadata import attach_api_metadata, summarise_records
-from .metaspace_parameters import (
+from ....utils.logger import get_custom_logger
+from .authentication import metaspace_client_options
+from .metadata import attach_api_metadata, summarise_records
+from .parameters import (
     FREE_TEXT_FILTER_FIELDS,
     FREE_TEXT_VALUE_GROUPS,
     canonical_free_text,
     filter_schema,
     split_filters,
 )
-from ..base import DatasetSource
-from ..source_manager import DatasetSourceManager
+from ...base import AnnotationDatasetSource, DatasetSource, SourceAnnotationExport
+from ...source_manager import DatasetSourceManager
 
 
 logger = get_custom_logger(__name__)
@@ -49,7 +49,7 @@ _AVAILABLE_DATASETS_CACHE_FILE = "available-datasets.json"
 
 
 @DatasetSourceManager.register_source("metaspace")
-class MetaspaceDatasetSource(DatasetSource):
+class MetaspaceDatasetSource(DatasetSource, AnnotationDatasetSource):
     """Discover and download METASPACE datasets through ``SMInstance``.
 
     :param client: Optional initialized ``SMInstance``. Primarily useful for
@@ -347,77 +347,43 @@ class MetaspaceDatasetSource(DatasetSource):
         """Return aggregate storage, m/z intersection and analysis methods."""
         return summarise_records(records)
 
-    def get_annotations(
+    def materialize_annotations(
         self,
+        *,
         dataset_id: str,
+        dataset_name: str,
+        directory: Path,
+        imzml_path: Path,
         options: Optional[Mapping[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Retrieve all annotations exposed by requested database/FDR options.
+    ) -> int:
+        """Fetch and write the current METASPACE annotation export schema."""
+        from .annotations import materialize_metaspace_annotations
 
-        ``options`` may contain ``databases``, ``annotation_fdr``, and
-        ``include_spatial``. When databases are omitted, every database listed
-        on the dataset is queried. ``annotation_fdr`` is the same threshold
-        used by discovery statistics and spatial annotation retrieval.
-        """
-        options = dict(options or {})
-        dataset = self.client.dataset(id=dataset_id)
-        databases = options.get("databases") or [
-            (database.name, database.version)
-            for database in getattr(dataset, "database_details", [])
-        ]
-        annotation_fdr = float(options.get("annotation_fdr", 0.1))
-        include_spatial = bool(options.get("include_spatial", True))
-        records: List[Dict[str, Any]] = []
-        for database in databases:
-            results = dataset.results(database=database, fdr=annotation_fdr)
-            database_name, database_version = _database_parts(database)
-            database_records = _records_from_table(results)
-            spatial_images = _spatial_images_by_molecule(
-                dataset,
-                database,
-                annotation_fdr,
-                enabled=include_spatial,
-            )
-            missing_spatial_annotations: List[Tuple[str, str]] = []
-            for row in database_records:
-                formula = row.get("formula", row.get("sumFormula"))
-                key = (str(formula or ""), str(row.get("adduct") or ""))
-                if include_spatial and key not in spatial_images:
-                    missing_spatial_annotations.append(key)
-                records.append(
-                    {
-                        **row,
-                        "database_name": database_name,
-                        "database_version": database_version,
-                        **(
-                            {"ion_image": spatial_images[key].tolist()}
-                            if key in spatial_images
-                            else {}
-                        ),
-                    }
-                )
-            if missing_spatial_annotations:
-                preview = ", ".join(
-                    f"{formula}{adduct}"
-                    for formula, adduct in missing_spatial_annotations[:5]
-                )
-                raise_external_service_error(
-                    context_name="METASPACE",
-                    message=(
-                        f"Dataset '{dataset_id}' returned "
-                        f"{len(missing_spatial_annotations)} molecular annotations "
-                        f"without matching ion images for database "
-                        f"'{database_name} {database_version}' at annotation_fdr="
-                        f"{annotation_fdr}. Missing examples: {preview}. Spatial "
-                        "pixel annotations cannot be constructed completely."
-                    ),
-                )
-        logger.info(
-            "Retrieved %s METASPACE annotations for dataset %s",
-            len(records),
-            dataset_id,
+        return materialize_metaspace_annotations(
+            client=self.client,
+            dataset_id=dataset_id,
+            dataset_name=dataset_name,
+            directory=directory,
+            imzml_path=imzml_path,
+            options=options,
         )
-        return records
+
+    @classmethod
+    def read_annotation_export(
+        cls,
+        *,
+        dataset_id: str,
+        directory: Path,
+        imzml_path: Path,
+    ) -> SourceAnnotationExport:
+        """Read one current-version METASPACE annotation export."""
+        from .annotations import read_metaspace_annotations
+
+        return read_metaspace_annotations(
+            dataset_id=dataset_id,
+            directory=directory,
+            imzml_path=imzml_path,
+        )
 
     def download_dataset(self, dataset_id: str, destination: Path | str) -> Path:
         """Download one imzML/ibd pair from a single signed-link response.
@@ -961,7 +927,7 @@ def _attach_spatial_annotation_statistics(
 def _canonical_free_text(value: Any) -> str:
     """Return the canonical group key for one free-text metadata value.
 
-    The explicit groups live in :mod:`metaspace_parameters`. Unreviewed values
+    The explicit groups live in :mod:`parameters`. Unreviewed values
     remain separate instead of being merged heuristically.
     """
     return canonical_free_text(value)

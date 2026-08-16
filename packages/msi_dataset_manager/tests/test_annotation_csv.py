@@ -5,7 +5,9 @@ from pathlib import Path
 import numpy as np
 from pyimzml.ImzMLWriter import ImzMLWriter
 
-from msi_dataset_manager.annotations import read_canonical_csv_annotations
+from msi_dataset_manager.sources.strategies.metaspace.csv import (
+    read_metaspace_annotation_export,
+)
 
 
 def test_isobaric_ions_are_matched_by_formula_adduct_and_mz(
@@ -22,9 +24,9 @@ def test_isobaric_ions_are_matched_by_formula_adduct_and_mz(
             (1, 1, 1),
         )
     annotations.write_text(
-        "datasetId,datasetName,formula,adduct,mz,fdr\n"
-        "one,One,C1,[M]-,100.5,0.05\n"
-        "one,One,C2,-H,100.5,0.05\n",
+        "schema_version,source,source_annotation_id,datasetId,datasetName,formula,adduct,mz,fdr\n"
+        "1,metaspace,a1,one,One,C1,[M]-,100.5,0.05\n"
+        "1,metaspace,a2,one,One,C2,-H,100.5,0.05\n",
         encoding="utf-8",
     )
     intensities.write_text(
@@ -34,11 +36,12 @@ def test_isobaric_ions_are_matched_by_formula_adduct_and_mz(
         encoding="utf-8",
     )
 
-    _, records = read_canonical_csv_annotations(
-        image,
-        annotations,
-        intensities,
+    export = read_metaspace_annotation_export(
+        dataset_id="one",
+        directory=tmp_path,
+        imzml_path=image,
     )
+    records = export.records
 
     assert [record["formula"] for record in records] == ["C1", "C2"]
     assert records[0]["spectrum_values"][0] == 3.0

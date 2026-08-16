@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Mapping, Optional
 
-from ...utils.logger import get_custom_logger
+from ....utils.logger import get_custom_logger
 
 
 logger = get_custom_logger(__name__)

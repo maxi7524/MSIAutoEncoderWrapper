@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from ...operations.annotation_csv import has_complete_annotation_csv
+from ...sources.base import AnnotationDatasetSource
 from ...validators import validate_selection
 
 # --------------------------------------------------
@@ -61,7 +61,10 @@ def create_download_manifest(
         dataset_id = str(record["dataset_id"])
         directory = dataset_root / dataset_id
         data_present = has_complete_pair(directory, dataset_id)
-        annotations_present = has_complete_annotation_csv(directory, dataset_id)
+        annotations_present = AnnotationDatasetSource.has_annotation_export(
+            directory,
+            dataset_id,
+        )
         actions = []
         if not data_present:
             actions.append("download_dataset")
