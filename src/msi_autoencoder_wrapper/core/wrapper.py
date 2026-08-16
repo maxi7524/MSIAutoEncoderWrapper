@@ -18,6 +18,7 @@ import torch
 # Centralized utilities imports
 from ..utils.logger import get_custom_logger
 from ..configuration import ConfigurationOrchestrator
+from ..utils.dtypes import resolve_floating_dtype
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -40,6 +41,7 @@ class MSIAutoEncoderWrapper(
         self,
         project_path: str,
         device: str = None,
+        dtype: torch.dtype | str | None = torch.float32,
         auto_create_dirs: bool = True,
         layout: Optional[Dict[str, str]] = None,
         coordinate_order: CoordinateOrder = "xy",
@@ -53,6 +55,9 @@ class MSIAutoEncoderWrapper(
         :type project_path: str
         :param device: Default hardware training device target ('cpu', 'cuda', 'mps'). Defaults to 'None', which sets local available.
         :type device: str
+        :param dtype: Floating-point dtype for spectra and models. Defaults to
+            ``torch.float32``.
+        :type dtype: torch.dtype | str | None
         :param auto_create_dirs: Toggles automatic directory structure layout creation. Defaults to True.
         :type auto_create_dirs: bool
         :param layout: Custom dictionary layout definition. Defaults to None.
@@ -69,9 +74,12 @@ class MSIAutoEncoderWrapper(
                 else "mps" if torch.backends.mps.is_available() else "cpu"
             )
         self.device = device
+        self.dtype = resolve_floating_dtype(dtype)
 
         logger.info(
-            "MSIAutoEncoderWrapper: Anchoring processing device state: %s", device
+            "MSIAutoEncoderWrapper: Anchoring processing state: device=%s dtype=%s",
+            device,
+            self.dtype,
         )
 
         # Cooperative MRO initialization chain

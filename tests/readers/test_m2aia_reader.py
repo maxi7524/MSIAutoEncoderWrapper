@@ -26,7 +26,7 @@ class _ContinuousNativeReader:
         return np.stack([indices, indices + 1], axis=1).astype(np.float32)
 
     def GetXAxis(self) -> np.ndarray:
-        return np.array([100.0, 101.0], dtype=np.float64)
+        return np.array([100.0, 101.0], dtype=np.float32)
 
 
 def test_m2aia_reader_loads_compact_bladder_fixture(
@@ -47,6 +47,7 @@ def test_m2aia_reader_loads_compact_bladder_fixture(
     assert len(mass_axis) == len(intensities) == 1129
     assert np.isfinite(mass_axis).all()
     assert np.isfinite(intensities).all()
+    assert not reader.capabilities.shared_mass_axis
 
 
 def test_m2aia_reader_exposes_native_spatial_operations(

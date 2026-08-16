@@ -105,12 +105,11 @@ class M2aiaReader(MSIBaseReader):
 
     @property
     def capabilities(self) -> ReaderCapabilities:
-        """Expose native batching and the M2aia reference reconstruction axis."""
+        """Expose native batching and a real shared mass axis when available."""
         continuous = "Continuous" in self._img.GetSpectrumType()
         return ReaderCapabilities(
             native_batch_read=continuous,
             shared_mass_axis=continuous,
-            reconstruction_mass_axis=True,
             variable_spectrum_length=not continuous,
             requires_worker_reopen=True,
         )
@@ -146,7 +145,7 @@ class M2aiaReader(MSIBaseReader):
         return float(self._img.GetXAxis()[-1])
 
     def GetXAxis(self) -> np.ndarray:
-        return self._img.GetXAxis()
+        return np.asarray(self._img.GetXAxis(), dtype=np.float32)
 
     def GetXAxisDepth(self) -> int:
         return int(self._img.GetXAxisDepth())

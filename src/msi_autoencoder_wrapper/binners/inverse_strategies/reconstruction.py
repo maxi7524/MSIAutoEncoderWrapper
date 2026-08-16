@@ -76,3 +76,54 @@ def _pack(
         reconstruction_space=reconstruction_space,
         normalization_trace=batch.normalization_trace,
     )
+
+
+def pack_dense_projection(
+    batch: SpectrumBatch,
+    axis: torch.Tensor,
+    values: torch.Tensor,
+) -> InverseSpectrumBatch:
+    """Pack every coordinate of a dense reconstructed batch.
+
+    :param batch: Source dense spectra.
+    :type batch: SpectrumBatch
+    :param axis: Shared axis of ``values`` with shape ``(G,)``.
+    :type axis: torch.Tensor
+    :param values: Reconstructed dense spectra with shape ``(B, G)``.
+    :type values: torch.Tensor
+    :return: Packed reconstruction retaining every coordinate, including zeros.
+    :rtype: InverseSpectrumBatch
+    """
+    if values.ndim != 2 or values.shape[0] != batch.batch_size or values.shape[1] != axis.numel():
+        raise ValueError("values must have shape [B, len(axis)].")
+    return _pack(batch, axis, values, torch.ones_like(values, dtype=torch.bool))
+
+
+def pack_top_projection(
+    batch: SpectrumBatch,
+    axis: torch.Tensor,
+    values: torch.Tensor,
+    max_points: int | None,
+) -> InverseSpectrumBatch:
+    """Pack up to the strongest positive reconstruction coordinates per spectrum.
+
+    :param batch: Source dense spectra.
+    :type batch: SpectrumBatch
+    :param axis: Shared axis of ``values`` with shape ``(G,)``.
+    :type axis: torch.Tensor
+    :param values: Reconstructed dense spectra with shape ``(B, G)``.
+    :type values: torch.Tensor
+    :param max_points: Maximum retained coordinates per row; ``None`` retains all
+        positive finite coordinates.
+    :type max_points: int | None
+    :return: Packed selected reconstruction.
+    :rtype: InverseSpectrumBatch
+    """
+    positive = torch.isfinite(values) & (values > 0)  # (B, G)
+    if max_points is None or max_points >= values.shape[1]:
+        return _pack(batch, axis, values, positive)
+    ranked = torch.where(positive, values, torch.full_like(values, float("-inf")))
+    indices = torch.topk(ranked, k=max_points, dim=1).indices  # (B, K)
+    selected = torch.zeros_like(positive)
+    selected.scatter_(1, indices, True)
+    return _pack(batch, axis, values, selected & positive)

@@ -64,8 +64,8 @@ class PyImzMLReader(MSIBaseReader):
         values: list[np.ndarray | None] = [None] * len(sample_ids)
         for position in read_order:
             axis, intensities = self._parser.getspectrum(int(sample_ids[position]))
-            axes[position] = np.asarray(axis)
-            values[position] = np.asarray(intensities)
+            axes[position] = np.asarray(axis, dtype=np.float32)
+            values[position] = np.asarray(intensities, dtype=np.float32)
         return SpectrumReadBatch(
             sample_ids=sample_ids,
             mass_values=tuple(axis for axis in axes if axis is not None),
@@ -97,14 +97,14 @@ class PyImzMLReader(MSIBaseReader):
         elif isinstance(target, tuple):
             spectrum_index = self._coordinate_lookup.get(tuple(target))
             if spectrum_index is None:
-                return np.array([], dtype=np.float64), np.array([], dtype=np.float32)
+                return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
         else:
             raise_incompatible_interface_error(
                 context_name="PyImzMLReader",
                 message="Spectrum target must be an index or three-dimensional coordinate.",
             )
         axis, intensities = self._parser.getspectrum(spectrum_index)
-        return np.asarray(axis), np.asarray(intensities)
+        return np.asarray(axis, dtype=np.float32), np.asarray(intensities, dtype=np.float32)
 
     def GetSpectrumPosition(self, idx: int) -> Tuple[int, int, int]:
         coordinate = self._parser.coordinates[idx]

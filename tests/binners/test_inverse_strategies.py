@@ -29,18 +29,18 @@ def _row(result, index: int) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def test_quantile_projects_selected_points_to_irregular_axis(binner) -> None:
-    axis = torch.tensor([100.1, 100.6, 101.7, 104.6, 109.7], dtype=torch.float64)
+    axis = torch.tensor([100.1, 100.6, 101.7, 104.6, 109.7], dtype=torch.float32)
     inverse = BinnerManager.get_inverse_binner(
         "QuantileInverseBinner", binner=binner, quantile=0.75,
         reconstruction_mass_axis=axis,
     )
-    batch = _batch(binner, torch.tensor([[0.0, 1.0, 2.0, 3.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=torch.float64))
+    batch = _batch(binner, torch.tensor([[0.0, 1.0, 2.0, 3.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype=torch.float32))
 
     result = inverse(batch)
     masses, intensities = _row(result, 0)
 
-    assert torch.equal(masses, torch.tensor([101.7, 104.6], dtype=torch.float64))
-    assert torch.equal(intensities, torch.tensor([2.0, 13.0], dtype=torch.float64))
+    assert torch.equal(masses, torch.tensor([101.7, 104.6], dtype=torch.float32))
+    assert torch.equal(intensities, torch.tensor([2.0, 13.0], dtype=torch.float32))
     assert torch.equal(result.reconstruction_space.mass_axis, axis)
 
 
@@ -118,8 +118,58 @@ def test_empty_batch_is_supported(binner) -> None:
     assert result.mass_values.numel() == 0
 
 
+def test_passthrough_inverse_binner_returns_every_input_coordinate(binner) -> None:
+    values = torch.tensor(
+        [[0.0, 5.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+        dtype=torch.float32,
+    )
+    batch = _batch(binner, values)
+    inverse = BinnerManager.get_inverse_binner("PassthroughInverseBinner", binner=binner)
+
+    result = inverse(batch)
+
+    assert torch.equal(result.mass_values, batch.space.mass_axis)
+    assert torch.equal(result.intensities, values[0])
+    assert result.offsets.tolist() == [0, values.shape[1]]
+
+
+def test_statistical_inverse_binner_learns_shared_sparse_axis(binner) -> None:
+    class Reader:
+        @staticmethod
+        def GetNumberOfSpectra() -> int:
+            return 1
+
+        @staticmethod
+        def GetSpectrum(index: int):
+            assert index == 0
+            return (
+                torch.tensor([100.1, 100.4, 101.7]).numpy(),
+                torch.tensor([1.0, 3.0, 2.0]).numpy(),
+            )
+
+    inverse = BinnerManager.get_inverse_binner(
+        "StatisticalInverseBinner",
+        binner=binner,
+        reader=Reader(),
+        sample_fraction=1.0,
+        mz_resolution=0.5,
+        reconstruction_axis_size=10,
+    )
+    values = torch.zeros((1, binner.GetXAxisDepth()), dtype=torch.float32)
+    values[0, 0] = 4.0
+    values[0, 1] = 2.0
+
+    result = inverse(_batch(binner, values))
+
+    assert torch.equal(
+        result.reconstruction_space.mass_axis,
+        torch.tensor([100.0, 100.5, 101.5], dtype=torch.float32),
+    )
+    assert torch.allclose(result.intensities, torch.tensor([1.0, 3.0, 2.0], dtype=torch.float32))
+
+
 def test_shared_reader_axis_is_the_default_reconstruction_axis(binner) -> None:
-    expected = torch.tensor([100.0, 100.4, 101.3, 109.9], dtype=torch.float64)
+    expected = torch.tensor([100.0, 100.4, 101.3, 109.9], dtype=torch.float32)
 
     class Reader:
         capabilities = type("Capabilities", (), {"shared_mass_axis": True})()
@@ -134,6 +184,34 @@ def test_shared_reader_axis_is_the_default_reconstruction_axis(binner) -> None:
     )
 
     assert torch.equal(inverse.reconstruction_mass_axis, expected)
+
+
+def test_processed_reader_does_not_supply_an_invented_reconstruction_axis(binner) -> None:
+    class Reader:
+        capabilities = type("Capabilities", (), {"shared_mass_axis": False})()
+
+        @staticmethod
+        def GetXAxis():
+            raise AssertionError("A processed reader axis must not be used as shared.")
+
+        @staticmethod
+        def GetNumberOfSpectra():
+            raise AssertionError("The base inverse binner must not scan spectra.")
+
+        @staticmethod
+        def GetSpectrum(index):
+            raise AssertionError(f"Unexpected spectrum read: {index}")
+
+    context = type("Context", (), {"reader": Reader(), "binner": binner})()
+
+    inverse = BinnerManager.get_inverse_binner(
+        "TopPeaksInverseBinner", binner=binner, active_context=context
+    )
+
+    assert torch.equal(
+        inverse.reconstruction_mass_axis,
+        torch.as_tensor(binner.GetXAxis(), dtype=torch.float32),
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")

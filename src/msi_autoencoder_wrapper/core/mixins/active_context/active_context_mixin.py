@@ -245,7 +245,10 @@ class ActiveContextProxy(LatentContextMixin):
             raise_validation_error(
                 "ActiveContext", "The cohort model reference is not an autoencoder."
             )
-        model.to(getattr(self._wrapper, "device", "cpu"))
+        model.to(
+            device=getattr(self._wrapper, "device", "cpu"),
+            dtype=getattr(self._wrapper, "dtype", torch.float32),
+        )
         return AutoencoderContextInterface(
             torch_model=model,
             active_context=self,

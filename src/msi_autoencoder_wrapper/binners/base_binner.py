@@ -21,6 +21,9 @@ class MSIBaseBinner(ConfigurableComponent, ABC):
         """
         self._config: dict[str, Any] = {}
         self.active_context = active_context
+        self.dtype = getattr(
+            getattr(active_context, "_wrapper", None), "dtype", torch.float32
+        )
 
     def __call__(self, batch: Any) -> Any:
         """Apply the canonical batched Torch transformation."""
@@ -39,8 +42,8 @@ class MSIBaseBinner(ConfigurableComponent, ABC):
         """Transform one spectrum through the canonical ``B=1`` batch path."""
         from ..data import RawSpectrumBatch
 
-        mass_tensor = mass_values if isinstance(mass_values, torch.Tensor) else torch.tensor(np.asarray(mass_values))
-        intensity_tensor = intensities if isinstance(intensities, torch.Tensor) else torch.tensor(np.asarray(intensities))
+        mass_tensor = torch.as_tensor(mass_values, dtype=self.dtype)
+        intensity_tensor = torch.as_tensor(intensities, dtype=self.dtype)
         point_count = int(mass_tensor.numel())
         batch = RawSpectrumBatch(
             sample_ids=torch.zeros(1, dtype=torch.long, device=intensity_tensor.device),

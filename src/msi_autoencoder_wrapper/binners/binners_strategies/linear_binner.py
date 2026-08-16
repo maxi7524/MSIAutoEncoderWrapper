@@ -11,8 +11,10 @@ from ...data import RawSpectrumBatch, SharedAxisRawBatch, SpectrumBatch, Spectru
 class LinearBinning(MSIBaseBinner):
     """Accumulate irregular MSI points into equidistant mass-to-charge bins.
 
-    Bin centers form the shared output axis. Intensities assigned to the same
-    interval are summed without normalization.
+    Bin centers form the shared output axis. A point maps to its unique interval
+    ``[x_min + k * bin_step, x_min + (k + 1) * bin_step)``; the final interval
+    also includes ``x_max``. There is no nearest-centre tolerance. Points below
+    ``x_min`` or above ``x_max`` are discarded.
     """
 
     # Binner configuration and axis construction
@@ -82,7 +84,7 @@ class LinearBinning(MSIBaseBinner):
         ### Construct the regular binning axis
 
         #### Bin edges define the intervals into which original mass values are accumulated
-        self.bin_edges = np.arange(self.x_min, self.x_max + self.bin_step, self.bin_step, dtype=np.float64)
+        self.bin_edges = np.arange(self.x_min, self.x_max + self.bin_step, self.bin_step, dtype=np.float32)
 
         #### Bin centers form the physical mass axis of the dense output spectrum
         self.grid = (self.bin_edges[:-1] + self.bin_edges[1:]) / 2.0
@@ -111,8 +113,8 @@ class LinearBinning(MSIBaseBinner):
         ### Read the packed spectral points
 
         #### Raw points from all spectra are stored in common one-dimensional tensors
-        mz = batch.mass_values
-        intensity = batch.intensities
+        mz = batch.mass_values.to(self.dtype)
+        intensity = batch.intensities.to(self.dtype)
 
         ### Map each mass value to a bin
 
@@ -135,6 +137,8 @@ class LinearBinning(MSIBaseBinner):
         valid = (
             torch.isfinite(mz)
             & torch.isfinite(intensity)
+            & (mz >= self.x_min)
+            & (mz <= self.x_max)
             & (bin_indices >= 0)
             & (bin_indices < self.GetXAxisDepth())
         )
@@ -171,7 +175,7 @@ class LinearBinning(MSIBaseBinner):
         ### Construct the transformed batch
 
         #### Convert the NumPy bin centers to a tensor compatible with the input device
-        axis = torch.as_tensor(self.grid, device=mz.device, dtype=mz.dtype)
+        axis = torch.as_tensor(self.grid, device=mz.device, dtype=self.dtype)
 
         #### Preserve sample identifiers and supervised targets from the raw batch
         return SpectrumBatch(
@@ -197,7 +201,8 @@ class LinearBinning(MSIBaseBinner):
         ### Map the shared physical axis to output bins
 
         #### The same mass coordinate vector describes every row of the intensity matrix
-        mz = batch.mass_axis
+        mz = batch.mass_axis.to(self.dtype)
+        intensities = batch.intensities.to(self.dtype)
 
         #### Bin indices are therefore computed only once for all spectra
         bin_indices = torch.floor((mz - self.bin_edges[0]) / self.bin_step).to(
@@ -217,6 +222,8 @@ class LinearBinning(MSIBaseBinner):
         #### coordinates must not contribute to any spectrum
         valid = (
             torch.isfinite(mz)
+            & (mz >= self.x_min)
+            & (mz <= self.x_max)
             & (bin_indices >= 0)
             & (bin_indices < self.GetXAxisDepth())
         )
@@ -229,9 +236,9 @@ class LinearBinning(MSIBaseBinner):
 
         #### Invalid axis positions and non-finite intensities are replaced with zero
         source = torch.where(
-            valid.unsqueeze(0) & torch.isfinite(batch.intensities),
-            batch.intensities,
-            torch.zeros_like(batch.intensities),
+            valid.unsqueeze(0) & torch.isfinite(intensities),
+            intensities,
+            torch.zeros_like(intensities),
         )
 
         ### Aggregate all spectra using the common bin mapping
@@ -239,8 +246,8 @@ class LinearBinning(MSIBaseBinner):
         #### Allocate one dense output row for every spectrum
         spectra = torch.zeros(
             (batch.batch_size, self.GetXAxisDepth()),
-            device=batch.intensities.device,
-            dtype=batch.intensities.dtype,
+            device=intensities.device,
+            dtype=self.dtype,
         )
 
         #### Expand the shared bin indices across rows and sum intensities per bin
@@ -249,14 +256,14 @@ class LinearBinning(MSIBaseBinner):
         #### Mean aggregation uses one validity count per row and destination bin
         if self.aggregation == "mean":
             counts = torch.zeros_like(spectra)
-            valid_source = (valid.unsqueeze(0) & torch.isfinite(batch.intensities)).to(spectra.dtype)
+            valid_source = (valid.unsqueeze(0) & torch.isfinite(intensities)).to(spectra.dtype)
             counts.scatter_add_(1, safe_indices.unsqueeze(0).expand_as(valid_source), valid_source)
             spectra = torch.where(counts > 0, spectra / counts.clamp_min(1), spectra)
 
         ### Construct the transformed batch
 
         #### Bin centers define the shared physical axis of the dense spectra
-        axis = torch.as_tensor(self.grid, device=mz.device, dtype=mz.dtype)
+        axis = torch.as_tensor(self.grid, device=mz.device, dtype=self.dtype)
 
         #### Preserve identifiers and targets associated with the input spectra
         return SpectrumBatch(
