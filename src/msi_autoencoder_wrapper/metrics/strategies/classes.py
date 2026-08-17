@@ -61,9 +61,9 @@ class PerClassClassification(ClassMetric):
                 )
             predicted = predicted & available
             truth = truth & available
-        tp = (predicted & truth).sum(dim=0, dtype=torch.float64)
-        fp = (predicted & ~truth).sum(dim=0, dtype=torch.float64)
-        fn = (~predicted & truth).sum(dim=0, dtype=torch.float64)
+        tp = (predicted & truth).sum(dim=0, dtype=torch.float32)
+        fp = (predicted & ~truth).sum(dim=0, dtype=torch.float32)
+        fn = (~predicted & truth).sum(dim=0, dtype=torch.float32)
         if self.true_positive.numel() == 0:
             self.true_positive, self.false_positive, self.false_negative = tp, fp, fn
         else:
