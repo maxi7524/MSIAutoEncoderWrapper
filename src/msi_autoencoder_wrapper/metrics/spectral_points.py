@@ -30,7 +30,7 @@ class SpectralPointMatch:
 
 
 def _inputs(axis: np.ndarray, intensity: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray]:
-    x, y = np.asarray(axis, dtype=np.float64), np.asarray(intensity, dtype=np.float64)
+    x, y = np.asarray(axis, dtype=np.float32), np.asarray(intensity, dtype=np.float32)
     if x.ndim != 1 or y.ndim != 1 or x.size != y.size or np.any(np.diff(x) < 0):
         raise_validation_error("SpectralPointMetric", f"{name} axis and intensity must be equal, one-dimensional, and sorted.")
     valid = np.isfinite(x) & np.isfinite(y)
@@ -268,8 +268,8 @@ def peak_collision_rate(reference_mz: np.ndarray, reference_intensity: np.ndarra
     :param min_relative_height: Drop contributors below this fraction of the tallest
         contributor before checking for a collision, to ignore negligible/noise peaks.
     """
-    rx = np.asarray(reference_mz, dtype=np.float64); ry = np.asarray(reference_intensity, dtype=np.float64)
-    cx = np.asarray(candidate_mz, dtype=np.float64)
+    rx = np.asarray(reference_mz, dtype=np.float32); ry = np.asarray(reference_intensity, dtype=np.float32)
+    cx = np.asarray(candidate_mz, dtype=np.float32)
     match = match_spectral_points(cx, np.asarray(candidate_intensity), rx, ry, tolerance, tolerance_unit, "local_mass")
     radii = np.full(cx.size, tolerance) if tolerance_unit == "Da" else cx * tolerance * 1e-6
     contributing = [group for group in match.candidate_groups if group.size]
@@ -299,7 +299,7 @@ def signal_retention_by_quantile(reference_intensity: np.ndarray, match: Spectra
     of the signal) means real peaks are missing; recall dropping only near q=0.99 means
     the loss is concentrated in low-intensity, likely-noise points.
     """
-    ry = np.asarray(reference_intensity, dtype=np.float64)
+    ry = np.asarray(reference_intensity, dtype=np.float32)
     matched_mask = np.zeros(ry.size, dtype=bool)
     if match.matched_reference_indices.size:
         matched_mask[match.matched_reference_indices] = True

@@ -10,7 +10,6 @@ from ...autoencoder_base_criterions import MSIReconstructionCriterion
 from ...criterions_manager import CriterionsManager
 from .....data import SpectrumBatch
 from .....metrics.strategies.masserstein import SpectrumMasserstein
-from .....metrics.compatibility import validate_metric_compatibility
 from .....models.datasets.base_dataset import MSIBaseDataset
 
 
@@ -39,7 +38,7 @@ class MSIMassersteinLoss(MSIReconstructionCriterion):
 
     @_mass_axis.setter
     def _mass_axis(self, value: torch.Tensor) -> None:
-        self.metric._mass_axis = value
+        self.metric.set_mass_axis(value)
 
     def on_phase_start(
         self,
@@ -47,12 +46,14 @@ class MSIMassersteinLoss(MSIReconstructionCriterion):
         dataset: MSIBaseDataset,
         transient_cache: Dict[str, Any],
     ) -> None:
-        """Capture the dataset axis once for legacy tuple training batches."""
+        """Prepare cached transport geometry from the dataset binner once."""
         del model, transient_cache
         binner = getattr(getattr(dataset, "active_context", None), "binner", None)
         axis_getter = getattr(binner, "GetXAxis", None)
         if callable(axis_getter):
-            self.metric._mass_axis = torch.as_tensor(axis_getter(), dtype=torch.float64)
+            self.metric.set_mass_axis(
+                torch.as_tensor(axis_getter(), dtype=torch.float32)
+            )
 
     def forward(
         self,
@@ -63,14 +64,19 @@ class MSIMassersteinLoss(MSIReconstructionCriterion):
         """Evaluate the shared metric using typed or legacy batch inputs."""
         del kwargs
         reconstruction, original = self.reconstruction_pair(model_outputs, batch_data)
-        if isinstance(batch_data, SpectrumBatch):
-            validate_metric_compatibility(
-                self.metric.requirements,
-                batch_data.normalization_trace,
-            )
-        mass_axis = (
-            batch_data.space.mass_axis
+        if isinstance(batch_data, SpectrumBatch) and not self.metric.has_mass_axis:
+            self.metric.set_mass_axis(batch_data.space.mass_axis)
+        normalization_trace = (
+            batch_data.normalization_trace
             if isinstance(batch_data, SpectrumBatch)
             else None
         )
-        return self.metric(reconstruction, original, mass_axis=mass_axis)
+        return self.metric(
+            reconstruction,
+            original,
+            normalization_trace=normalization_trace,
+            inputs_tic_normalized=(
+                isinstance(batch_data, SpectrumBatch)
+                and batch_data.space.normalization == "tic"
+            ),
+        )
