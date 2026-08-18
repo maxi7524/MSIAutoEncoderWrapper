@@ -57,6 +57,79 @@ class ContextManagerProxy:
     # --------------------------------------------------
 
     # --------------------------------------------------
+    # Section: Portable component loaders
+    # --------------------------------------------------
+
+    def load_reader(
+        self,
+        config: Dict[str, Any],
+        img_name_or_path: Optional[str] = None,
+        *,
+        reader_instance: Optional[MSIBaseReader] = None,
+    ) -> Any:
+        """Restore one reader from its exported component descriptor.
+
+        :param config: Descriptor returned by ``get_component_config``.
+        :type config: Dict[str, Any]
+        :param img_name_or_path: Image context or imzML path receiving the reader.
+        :type img_name_or_path: str | None
+        :param reader_instance: Existing native reader to rebind to the context.
+        :type reader_instance: MSIBaseReader | None
+        :return: Restored reader bound to the requested image context.
+        :rtype: Any
+        """
+        parameters = self._loadable_parameters(
+            config,
+            excluded={"file_path", "active_context"},
+        )
+        return self.set_reader(
+            reader_instance or config["type"],
+            img_name_or_path=img_name_or_path,
+            auto_load_annotations=False,
+            **({} if reader_instance is not None else parameters),
+        )
+
+    def load_binner(
+        self,
+        config: Dict[str, Any],
+        img_name_or_path: Optional[str] = None,
+    ) -> Any:
+        """Restore one forward binner from its exported component descriptor.
+
+        :param config: Descriptor returned by ``get_component_config``.
+        :type config: Dict[str, Any]
+        :param img_name_or_path: Image context or imzML path receiving the binner.
+        :type img_name_or_path: str | None
+        :return: Restored forward binner.
+        :rtype: Any
+        """
+        return self.set_binner(
+            config["type"],
+            img_name_or_path=img_name_or_path,
+            **self._loadable_parameters(config, excluded={"active_context"}),
+        )
+
+    def load_inverse_binner(
+        self,
+        config: Dict[str, Any],
+        img_name_or_path: Optional[str] = None,
+    ) -> Any:
+        """Restore one inverse binner from its exported component descriptor.
+
+        :param config: Descriptor returned by ``get_component_config``.
+        :type config: Dict[str, Any]
+        :param img_name_or_path: Image context or imzML path receiving the inverse binner.
+        :type img_name_or_path: str | None
+        :return: Restored inverse binner with the active forward binner injected.
+        :rtype: Any
+        """
+        return self.set_inverse_binner(
+            config["type"],
+            img_name_or_path=img_name_or_path,
+            **self._loadable_parameters(config, excluded={"active_context", "binner"}),
+        )
+
+    # --------------------------------------------------
     # Subsection: Setters - reader
     # --------------------------------------------------
 
@@ -742,6 +815,7 @@ class ContextManagerProxy:
         config: Dict[str, Any],
         img_name_or_path: Optional[str] = None,
         base_path: Optional[Path] = None,
+        reader_instance: Optional[MSIBaseReader] = None,
     ) -> Dict[str, Any]:
         """Restore the reader and binner pipeline owned by an image context.
 
@@ -753,6 +827,9 @@ class ContextManagerProxy:
         :param img_name_or_path: Optional image override. Uses the workspace
             default image when omitted.
         :type img_name_or_path: str | None
+        :param reader_instance: Initialized reader to bind instead of loading a
+            new native reader from the descriptor.
+        :type reader_instance: MSIBaseReader | None
         :return: Restored component instances keyed by component role.
         :rtype: Dict[str, Any]
         :raises ValidationError: If required configuration sections are invalid.
@@ -792,15 +869,10 @@ class ContextManagerProxy:
                     workspace_path = None
             if workspace_path is None and candidate.is_file():
                 context_target = str(candidate.resolve())
-        reader_parameters = self._loadable_parameters(
+        restored["reader"] = self.load_reader(
             reader_config,
-            excluded={"file_path", "active_context"},
-        )
-        restored["reader"] = self.set_reader(
-            reader_config["type"],
             img_name_or_path=context_target,
-            auto_load_annotations=False,
-            **reader_parameters,
+            reader_instance=reader_instance,
         )
 
         annotation_config = components.get("annotation_reader")
@@ -815,24 +887,16 @@ class ContextManagerProxy:
             )
 
         binner_config = components["binner"]
-        restored["binner"] = self.set_binner(
-            binner_config["type"],
+        restored["binner"] = self.load_binner(
+            binner_config,
             img_name_or_path=context_target,
-            **self._loadable_parameters(
-                binner_config,
-                excluded={"active_context"},
-            ),
         )
 
         inverse_config = components.get("inverse_binner")
         if isinstance(inverse_config, dict):
-            restored["inverse_binner"] = self.set_inverse_binner(
-                inverse_config["type"],
+            restored["inverse_binner"] = self.load_inverse_binner(
+                inverse_config,
                 img_name_or_path=context_target,
-                **self._loadable_parameters(
-                    inverse_config,
-                    excluded={"active_context", "binner"},
-                ),
             )
         normalization_config = config.get("normalization")
         if isinstance(normalization_config, dict):
