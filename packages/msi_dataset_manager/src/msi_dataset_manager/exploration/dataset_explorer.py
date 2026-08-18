@@ -208,19 +208,29 @@ class DatasetExplorer:
         )
 
     def select_mz_range(self, min_mz: float, max_mz: float) -> pd.DataFrame:
-        """Select discovered datasets covering the complete requested range."""
+        """Preview discovered datasets covering the complete requested range.
+
+        This helper does not modify the active filters or manual exclusions.
+        To apply the range to a query, pass ``mz_min`` and ``mz_max`` to
+        :meth:`filter` instead.
+
+        :param min_mz: Requested lower m/z bound.
+        :type min_mz: float
+        :param max_mz: Requested upper m/z bound.
+        :type max_mz: float
+        :return: Currently accepted datasets covering the complete range.
+        :rtype: pandas.DataFrame
+        :raises ValueError: If the range is invalid.
+        """
         lower = float(min_mz)
         upper = float(max_mz)
         if lower < 0 or lower >= upper:
             raise ValueError("m/z range requires 0 <= min_mz < max_mz.")
-        results = self.results(include_excluded=True)
+        results = self.results()
         minima = pd.to_numeric(results["mz_min"], errors="coerce")
         maxima = pd.to_numeric(results["mz_max"], errors="coerce")
         matching = minima.le(lower) & maxima.ge(upper)
-        rejected_ids = results.loc[~matching, "dataset_id"].astype(str).tolist()
-        self._excluded_ids.update(rejected_ids)
-        self._filters["mz_range"] = {"min": lower, "max": upper, "mode": "covers"}
-        return self.results()
+        return results.loc[matching].reset_index(drop=True)
 
     def exclude(self, dataset_ids: str | Iterable[str]) -> pd.DataFrame:
         """Exclude one or more reviewed dataset IDs from exported filters.
