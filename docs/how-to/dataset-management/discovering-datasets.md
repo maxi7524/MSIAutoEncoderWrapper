@@ -134,13 +134,11 @@ table with `pandas.DataFrame.pivot()` for a matrix view.
 matching = explorer.select_mz_range(min_mz=200, max_mz=900)
 ```
 
-`select_mz_range()` excludes datasets from the current result that do not
-cover `[min_mz, max_mz]` and records the range as `filters["mz_range"]`. It
-operates on the explorer's current in-memory results; a later `filter()` call
-runs a new provider query and replaces those results. To have m/z coverage
-enforced during that provider query itself — before annotation counts or
-molecular statistics are requested — pass `mz_min`/`mz_max` directly in the
-`filters` mapping instead, as shown above.
+`select_mz_range()` previews datasets from the current result that cover
+`[min_mz, max_mz]`; it does not modify the active filters or exclusions. To
+have m/z coverage enforced during the provider query itself — before
+annotation counts or molecular statistics are requested — pass
+`mz_min`/`mz_max` directly in the `filters` mapping instead, as shown above.
 
 ## Calculate molecular statistics
 

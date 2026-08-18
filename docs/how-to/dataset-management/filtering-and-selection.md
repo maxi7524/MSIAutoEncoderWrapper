@@ -31,8 +31,9 @@ An ID must exist in the current accepted result before it can be excluded.
 `include()` removes the ID from the manual exclusion set; it does not bypass a
 provider or local filter rejection. `explorer.select_mz_range(min_mz, max_mz)`
 (see [Discover external datasets](discovering-datasets.md#explore-mz-coverage-interactively))
-excludes datasets the same way and records the applied range in the exported
-filters.
+only previews coverage on the current results. Apply m/z coverage through
+`mz_min`/`mz_max` or `mz_range` in the filter mapping when it should affect the
+query and exported filters.
 
 The `SUMMARY` row is calculated from the records visible in the returned table.
 With `include_excluded=False`, manually excluded records do not contribute to

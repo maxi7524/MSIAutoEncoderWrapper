@@ -129,13 +129,17 @@ def test_explorer_exposes_filter_help_and_rejection_links() -> None:
     assert explorer.rejected().loc[0, "project_url"].endswith("PXD000002")
 
 
-def test_explorer_counts_selects_and_exports_mz_ranges(tmp_path: Path) -> None:
-    """Range analysis is reusable and the frozen selection retains metadata."""
+def test_explorer_previews_and_filters_mz_ranges(tmp_path: Path) -> None:
+    """Range preview is non-mutating and query filters retain the selection."""
     explorer = DatasetExplorer(FakeExplorationSource())
     explorer.search({})
 
     coverage = explorer.count_mz_range_coverage([100, 200], [800, 900])
     selected = explorer.select_mz_range(200, 900)
+    assert explorer.filters == {}
+    assert explorer.accepted()["dataset_id"].tolist() == ["one", "two"]
+
+    explorer.filter({"mz_min": 200, "mz_max": 900})
     exported = explorer.export_selection(
         tmp_path / "kidney",
         sort_by="download_size_bytes",
@@ -145,13 +149,13 @@ def test_explorer_counts_selects_and_exports_mz_ranges(tmp_path: Path) -> None:
     assert coverage["dataset_count"].tolist() == [1, 1, 1, 1]
     assert selected["dataset_id"].tolist() == ["one"]
     payload = json.loads(exported["selection"].read_text(encoding="utf-8"))
-    assert payload["filters"]["mz_range"] == {
-        "min": 200.0,
-        "max": 900.0,
-        "mode": "covers",
-    }
-    assert payload["datasets"][0]["metadata"]["mz_min"] == 100
-    assert payload["dataset_ids"] == ["one"]
+    assert payload["filters"]["mz_min"] == 200
+    assert payload["filters"]["mz_max"] == 900
+    # The fake source does not implement provider-side filtering; this test
+    # verifies explorer state and export semantics, while source filtering is
+    # covered by the METASPACE source tests.
+    assert payload["datasets"][0]["metadata"]["mz_min"] == 250
+    assert payload["dataset_ids"] == ["two", "one"]
     assert "rejected" not in payload
     assert payload["exported_at"]
 
