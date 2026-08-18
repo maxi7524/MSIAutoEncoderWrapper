@@ -29,7 +29,7 @@ class IonImageViewer:
         theme: VisualizationTheme | str | None = None,
         renderer: Optional[Callable[[float, Mapping[str, np.ndarray]], Any]] = None,
     ) -> None:
-        self.mass_axis = np.asarray(mass_axis, dtype=np.float64)
+        self.mass_axis = np.asarray(mass_axis, dtype=np.float32)
         self.image_provider = image_provider
         self.theme = resolve_theme(theme)
         self.renderer = renderer

@@ -353,25 +353,7 @@ class TrainingResourceEstimator:
         for name, config in entries:
             target = config.get("target", name) if isinstance(config, dict) else config
             if target == "MassersteinLoss":
-                params = config.get("params", {}) if isinstance(config, dict) else {}
-                penalty = float(params.get("denoising_penalty", 0.5))
-                entropy = float(params.get("entropy_regularization", 0.02))
-                tolerance = float(params.get("kernel_tolerance", 1e-7))
-                axis_step = float(params.get("axis_step", 1.0))
-                radius = max(
-                    1,
-                    math.ceil(
-                        (
-                            2.0 * penalty
-                            - entropy * math.log(tolerance)
-                        )
-                        / axis_step
-                    ),
-                )
-                masserstein_workspace = (
-                    14 * batch_size * (bins + 1)
-                    + 4 * (2 * radius + 1)
-                ) * element_size
+                masserstein_workspace = 4 * batch_size * bins * element_size
                 workspace = max(workspace, masserstein_workspace)
             if target == "InfoNCELoss":
                 workspace += 3 * (2 * batch_size) ** 2 * element_size
