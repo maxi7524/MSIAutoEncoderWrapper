@@ -63,13 +63,21 @@ class DatasetManager:
             "Resolving and instantiating dataset strategy '%s' from global registry.",
             name,
         )
-        return resolve_component(
+        dataset = resolve_component(
             target=name,
             registry=cls._REGISTRY,
             component_type="Dataset",
             expected_type=MSIBaseDataset,
             **kwargs,
         )
+        subset = kwargs.get("subset")
+        if subset is not None:
+            if not isinstance(subset, dict):
+                raise_validation_error(
+                    "DatasetConfiguration", "subset must be a dictionary or null."
+                )
+            dataset.subset(subset)
+        return dataset
 
     @classmethod
     def load_config(

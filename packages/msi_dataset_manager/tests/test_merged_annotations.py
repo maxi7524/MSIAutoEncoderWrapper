@@ -133,6 +133,7 @@ def test_writer_and_reader_preserve_classes_references_and_segments(
     assert annotations[1]["spectrum_ids"] == [0, 1, 2]
     assert reader.get_spectrum_metadata(1)["source_spectrum_id"] == 2
     assert reader.get_spectrum_metadata(2)["dataset_id"] == "b"
+    assert reader.get_spectrum_groups([0, 1, 2]) == [("a",), ("a",), ("b",)]
     reference = reader.get_spectrum_annotations(2)[0]
     assert reference["mz"] == 181.0711
     assert reference["database_name"] == "Core"
