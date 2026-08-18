@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 from ..dataset_manager import DatasetManager
-from ..base_dataset import MSIBaseDataset
+from ..base_dataset import RawMSIBaseDataset
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 from ....core.mixins.active_context.active_context_mixin import ActiveContextProxy
@@ -26,7 +26,7 @@ logger = get_custom_logger(__name__)
 
 
 @DatasetManager.register_dataset("PixelDataset")
-class PixelDataset(MSIBaseDataset):
+class PixelDataset(RawMSIBaseDataset):
     """
     Concrete single-pixel sampling strategy that pulls raw arrays and maps them onto uniform grids.
     """
@@ -88,7 +88,7 @@ class PixelDataset(MSIBaseDataset):
             "split": self.get_split_config(),
         }
 
-    def get_split_target(self, idx: int, target_field: str, **_: Any) -> Any:
+    def _get_source_split_target(self, idx: int, target_field: str, **_: Any) -> Any:
         """Return one available single-label target for stratified splitting."""
         spec = self.target_specs.get(target_field)
         if spec is None:
@@ -105,7 +105,7 @@ class PixelDataset(MSIBaseDataset):
             return None
         return int(sample.values[target_field].item())
 
-    def get_split_mask(self, idx: int, mask: str, **_: Any) -> Any:
+    def _get_source_split_mask(self, idx: int, mask: str, **_: Any) -> Any:
         """Return one named target-availability or annotation mask value."""
         if mask in self.target_specs:
             sample = self._target_sample(idx)
@@ -118,7 +118,7 @@ class PixelDataset(MSIBaseDataset):
             "PixelDataset", f"The active annotation reader does not expose mask '{mask}'."
         )
 
-    def get_split_group(self, idx: int, group_fields: Any, **_: Any) -> Any:
+    def _get_source_split_group(self, idx: int, group_fields: Any, **_: Any) -> Any:
         """Return a metadata group key, including merged-source provenance."""
         annotation_reader = getattr(self.active_context, "annotation_reader", None)
         if annotation_reader is None:
@@ -128,10 +128,33 @@ class PixelDataset(MSIBaseDataset):
         fields = [group_fields] if isinstance(group_fields, str) else list(group_fields)
         values = tuple(metadata.get(field, nested.get(field)) for field in fields)
         if any(value is None or value == "" for value in values):
-            return ("__ungrouped__", self.get_sample_id(idx))
+            return ("__ungrouped__", self._get_source_sample_id(idx))
         return values
 
-    def __len__(self) -> int:
+    def _source_subset_groups(self, indices: range, **parameters: Any) -> list[Any]:
+        """Return subset strata through a reader-level bulk metadata API."""
+        indices = list(indices)
+        annotation_reader = getattr(self.active_context, "annotation_reader", None)
+        bulk_getter = getattr(annotation_reader, "get_spectrum_groups", None)
+        if callable(bulk_getter):
+            return list(bulk_getter(indices, **parameters))
+        metadata = (
+            annotation_reader.get_dataset_metadata()
+            if annotation_reader is not None
+            else {}
+        )
+        nested = metadata.get("metadata", {}) if isinstance(metadata, Mapping) else {}
+        fields = parameters.get("group_fields") or (
+            "source_dataset_id",
+            "dataset_id",
+            "image_key",
+        )
+        fields = [fields] if isinstance(fields, str) else list(fields)
+        values = tuple(metadata.get(field, nested.get(field)) for field in fields)
+        values = tuple(value for value in values if value is not None and value != "")
+        return [values or ("__all_samples__",) for _ in indices]
+
+    def _source_length(self) -> int:
         """
         Retrieves total pixel coordinates count exposed by the underlying storage loader.
 
@@ -148,7 +171,7 @@ class PixelDataset(MSIBaseDataset):
             
         return self.active_context.get_data_reader(self.source).GetNumberOfSpectra()
 
-    def __getitem__(self, idx: int) -> Tuple[Any, ...]:
+    def _get_source_item(self, idx: int) -> Tuple[Any, ...]:
         """
         Extracts and resolves a singular experimental spectrum onto the active target grid.
 
@@ -187,7 +210,7 @@ class PixelDataset(MSIBaseDataset):
         ## Attach configured annotation targets after spectrum transformation
         return self._sample(idx, torch.from_numpy(self._normalize(mapped_values)))
 
-    def get_raw_item(self, idx: int) -> RawSpectrumSample:
+    def _get_raw_source_item(self, idx: int) -> RawSpectrumSample:
         """Return one unbinned spectrum for packed CPU or CUDA preprocessing.
 
         :param idx: Stable spectrum identifier.
@@ -221,7 +244,7 @@ class PixelDataset(MSIBaseDataset):
             targets=self._target_sample(idx),
         )
 
-    def get_raw_batch(
+    def _get_raw_source_batch(
         self,
         indices: list[int],
     ) -> Any:
@@ -233,7 +256,7 @@ class PixelDataset(MSIBaseDataset):
         :rtype: SharedAxisRawBatch | RawSpectrumBatch
         """
         if self.source != "image":
-            return [self[index] for index in indices]
+            return [self._get_source_item(index) for index in indices]
         reader_batch = self.active_context.get_data_reader(self.source).GetSpectrumBatch(
             indices
         )

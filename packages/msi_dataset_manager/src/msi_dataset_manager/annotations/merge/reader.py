@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional
@@ -141,6 +142,36 @@ class MergedAnnotationReader:
                 "source_spectrum_id": source_pixel,
             }
         )
+        return result
+
+    def get_spectrum_groups(
+        self,
+        spectrum_ids: List[int],
+        group_fields: Any = None,
+    ) -> List[Any]:
+        """Return source-dataset groups for many merged pixels in one query."""
+        fields = group_fields or ("source_dataset_id", "dataset_id", "image_key")
+        fields = [fields] if isinstance(fields, str) else list(fields)
+        with self._connection() as connection:
+            segments = connection.execute(
+                """
+                SELECT pixel_segments.*, datasets_metadata.*
+                FROM pixel_segments
+                JOIN datasets_metadata USING (dataset_index)
+                ORDER BY merged_pixel_start
+                """
+            ).fetchall()
+        starts = [int(row["merged_pixel_start"]) for row in segments]
+        result = []
+        for pixel in spectrum_ids:
+            position = bisect_right(starts, int(pixel)) - 1
+            row = segments[position] if position >= 0 else None
+            if row is None or int(pixel) >= int(row["merged_pixel_start"]) + int(row["segment_length"]):
+                result.append(("__all_samples__",))
+                continue
+            metadata = _decode_dataset(row)
+            values = tuple(metadata.get(field) for field in fields)
+            result.append(tuple(value for value in values if value is not None and value != "") or ("__all_samples__",))
         return result
 
     def get_spectrum_mask(self, spectrum_id: int, mask: str) -> bool:

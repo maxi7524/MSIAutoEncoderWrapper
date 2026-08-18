@@ -64,6 +64,28 @@ def test_cohort_dataset_preserves_member_identity_and_saves_definition(
     assert wrapper.cohorts.save("study") == tmp_path / "models" / "cohort_study" / "cohort.json"
 
 
+def test_cohort_subset_preserves_one_dataset_instance_and_member_ids(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A cohort selection maps public pixels to immutable member source IDs."""
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path))
+    _register(wrapper, "image-a", msi_fixture_path)
+    _register(wrapper, "image-b", msi_fixture_path)
+    wrapper.cohorts.create("study")
+    context = wrapper.cohorts.set_images(["image-a", "image-b"], name="study")
+    dataset = CohortPixelDataset(context, normalization="none")
+    selected = dataset.subset({"fraction": 0.5, "seed": 4, "method": "random"})
+
+    assert selected is dataset
+    assert len(dataset) == 6
+    image_key, spectrum_id = dataset[0][0]
+    assert dataset.get_sample_id(0) == {
+        "image_key": image_key,
+        "spectrum_id": spectrum_id,
+    }
+
+
 def test_common_autoencoder_is_loaded_lazily_without_replacing_active_model(
     tmp_path: Path, msi_fixture_path: Path
 ) -> None:

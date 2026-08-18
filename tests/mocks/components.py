@@ -88,10 +88,10 @@ class MockActiveContext:
 class MockDataset(MSIBaseDataset):
     """Dataset using the compact MSI reader and an injected binner."""
 
-    def __len__(self) -> int:
+    def _source_length(self) -> int:
         return self.active_context.reader.GetNumberOfSpectra()
 
-    def __getitem__(self, idx: int) -> Tuple[int, torch.Tensor]:
+    def _get_source_item(self, idx: int) -> Tuple[int, torch.Tensor]:
         mass_axis, intensities = self.active_context.reader.GetSpectrum(idx)
         binned = self.active_context.binner(mass_axis, intensities)
         return idx, torch.as_tensor(binned, dtype=torch.float32)

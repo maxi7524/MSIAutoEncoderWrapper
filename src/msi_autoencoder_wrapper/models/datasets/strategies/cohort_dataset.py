@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple
 
-from ..base_dataset import MSIBaseDataset
+from ..base_dataset import RawMSIBaseDataset
 from ..dataset_manager import DatasetManager
 from ....core.mixins.cohort.context import CohortContext, CohortMember
 from ....utils.exceptions import raise_validation_error
@@ -36,7 +36,7 @@ class _MemberContext:
         return self.member.get_reader(source)
 
 
-class CohortDataset(MSIBaseDataset):
+class CohortDataset(RawMSIBaseDataset):
     """Concatenate member datasets while retaining stable image/sample identity."""
 
     source: Literal["image", "latent"]
@@ -79,15 +79,16 @@ class CohortDataset(MSIBaseDataset):
             "split": self.get_split_config(),
         }
 
-    def __len__(self) -> int:
+    def _source_length(self) -> int:
+        """Return the total number of source pixels across cohort members."""
         return self._offsets[-1]
 
-    def __getitem__(self, idx: int) -> Tuple[Any, ...]:
+    def _get_source_item(self, idx: int) -> Tuple[Any, ...]:
         member_index, local_index = self._resolve_index(idx)
         sample = self._datasets[member_index][local_index]
         return ((self.cohort_context.members[member_index].image_key, sample[0]), *sample[1:])
 
-    def get_raw_item(self, idx: int) -> Any:
+    def _get_raw_source_item(self, idx: int) -> Any:
         member_index, local_index = self._resolve_index(idx)
         sample = self._datasets[member_index].get_raw_item(local_index)
         sample_id = (self.cohort_context.members[member_index].image_key, sample.sample_id)
@@ -98,7 +99,7 @@ class CohortDataset(MSIBaseDataset):
             targets=sample.targets,
         )
 
-    def get_sample_id(self, index: int) -> Any:
+    def _get_source_sample_id(self, index: int) -> Any:
         member_index, local_index = self._resolve_index(index)
         return {
             "image_key": self.cohort_context.members[member_index].image_key,
@@ -115,25 +116,42 @@ class CohortDataset(MSIBaseDataset):
                 )
         return schemas
 
-    def get_split_target(self, idx: int, **parameters: Any) -> Any:
+    def _get_source_split_target(self, idx: int, **parameters: Any) -> Any:
         member, local = self._resolve_index(idx)
-        return self._datasets[member].get_split_target(local, **parameters)
+        return self._datasets[member]._get_source_split_target(local, **parameters)
 
-    def get_split_mask(self, idx: int, **parameters: Any) -> Any:
+    def _get_source_split_mask(self, idx: int, **parameters: Any) -> Any:
         member, local = self._resolve_index(idx)
-        return self._datasets[member].get_split_mask(local, **parameters)
+        return self._datasets[member]._get_source_split_mask(local, **parameters)
 
-    def get_split_group(self, idx: int, **parameters: Any) -> Any:
+    def _get_source_split_group(self, idx: int, **parameters: Any) -> Any:
         member, local = self._resolve_index(idx)
         group_fields = parameters.get("group_fields")
         if group_fields == "image_key" or group_fields == ["image_key"]:
             return self.cohort_context.members[member].image_key
-        return self._datasets[member].get_split_group(local, **parameters)
+        return self._datasets[member]._get_source_split_group(local, **parameters)
+
+    def _source_subset_groups(self, source_indices: range, **parameters: Any) -> list[Any]:
+        """Stratify cohort sampling by source image unless overridden."""
+        group_fields = parameters.get("group_fields")
+        groups = []
+        for source_index in source_indices:
+            member, local = self._resolve_index(source_index)
+            if group_fields == "image_key" or group_fields == ["image_key"]:
+                groups.append(self.cohort_context.members[member].image_key)
+            else:
+                groups.append(
+                    self._datasets[member]._get_source_split_group(
+                        local,
+                        **parameters,
+                    )
+                )
+        return groups
 
     def _resolve_index(self, idx: int) -> tuple[int, int]:
         if idx < 0:
-            idx += len(self)
-        if idx < 0 or idx >= len(self):
+            idx += self._source_length()
+        if idx < 0 or idx >= self._source_length():
             raise IndexError(idx)
         member_index = bisect_right(self._offsets, idx)
         start = 0 if member_index == 0 else self._offsets[member_index - 1]
