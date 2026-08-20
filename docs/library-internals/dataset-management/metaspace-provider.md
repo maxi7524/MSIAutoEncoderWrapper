@@ -361,7 +361,7 @@ record's `metadata`. The `SUMMARY` presentation row is not persisted.
 
 ### Materialization and annotation persistence
 
-[`materialize_selection()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/download.py)
+[`download_from_manifest()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/download.py)
 reads the fixed selection. For each accepted ID it:
 
 ```text

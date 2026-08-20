@@ -23,7 +23,7 @@ filesystem check, not a working-catalog status.
 
 ### Download sources
 
-[`materialize_selection()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/download.py)
+[`download_from_manifest()`](../../../packages/msi_dataset_manager/src/msi_dataset_manager/operations/download.py)
 validates the selection, optionally restricts IDs, calls the adapter,
 validates the imzML pair, retrieves annotations, and writes them as a CSV pair
 next to the image — it upserts working-catalog dataset rows for file status

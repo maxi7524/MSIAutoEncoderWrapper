@@ -19,13 +19,13 @@ node-local staging root, then checksum-restore declared results.
 
 ### Load and merge configuration
 
-[`execution/configuration.py`](../../../src/msi_autoencoder_wrapper/execution/configuration.py)
+[`runtime/configuration/loading.py`](../../../src/msi_autoencoder_wrapper/runtime/configuration/loading.py)
 loads schema-v1 YAML and recursively merges an optional execution profile.
 Internal `_config_path` and `_config_directory` fields retain resolution roots.
 
 ### Build deterministic tasks
 
-[`build_plan()`](../../../src/msi_autoencoder_wrapper/execution/planning.py)
+[`build_plan()`](../../../src/msi_autoencoder_wrapper/runtime/planning/plan.py)
 calculates the Cartesian grid and repetitions. A SHA-256-derived repetition seed
 is shared across grid variants in the same repetition. Dotted grid paths must
 already exist in task parameters.
@@ -38,6 +38,6 @@ failed and retain task/result context.
 
 ### Stage and report
 
-[`staging.py`](../../../src/msi_autoencoder_wrapper/execution/staging.py)
+[`staging.py`](../../../src/msi_autoencoder_wrapper/runtime/staging.py)
 copies declared paths with checksum verification and guards cleanup by execution
 identity. Reporting executes ordered notebooks and writes a report manifest.

@@ -26,7 +26,7 @@ required.
 
 ### Two-phase materialization
 
-`materialize_selection()` processes the whole selection in two passes: it
+`download_from_manifest()` processes the whole manifest in two passes: it
 downloads or reuses every dataset's imzML/ibd pair first, then retrieves or
 reuses every materialized dataset's annotation CSVs. A provider quota error
 during the first pass stops further file downloads but does not skip the
