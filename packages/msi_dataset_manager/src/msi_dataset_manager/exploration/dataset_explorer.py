@@ -13,6 +13,12 @@ from ..utils.logger import get_custom_logger
 from ..sources.base import DatasetSource
 from ..sources.source_manager import DatasetSourceManager
 from ..validators import validate_source_record
+from .dataset_review import (
+    DatasetReview,
+    DatasetReviewProfile,
+    build_dataset_review,
+    resolve_review_profile,
+)
 
 
 logger = get_custom_logger(__name__)
@@ -232,6 +238,95 @@ class DatasetExplorer:
         matching = minima.le(lower) & maxima.ge(upper)
         return results.loc[matching].reset_index(drop=True)
 
+    def filter_current(self, filters: Mapping[str, Any]) -> pd.DataFrame:
+        """Preview filters applied to the current result without re-querying.
+
+        This method is intended for iterative notebook review after one broad
+        provider query. It does not modify active source filters, exclusions,
+        or provider state. Lists use logical OR within one field; different
+        fields use logical AND.
+
+        :param filters: Supported result-table filters. ``mz_min`` and
+            ``mz_max`` retain datasets covering the complete requested range;
+            ``min_*`` and ``max_*`` annotation or molecule constraints are
+            also supported.
+        :type filters: Mapping[str, Any]
+        :return: Matching datasets from the current accepted result.
+        :rtype: pandas.DataFrame
+        :raises ValueError: If a filter is unsupported or invalid.
+        """
+        results = self.results()
+        return _filter_current_results(results, filters).reset_index(drop=True)
+
+    def apply_current_filters(self, filters: Mapping[str, Any]) -> pd.DataFrame:
+        """Exclude current records rejected by local review filters.
+
+        The provider is not queried again. Rejected IDs are added to the
+        existing manual exclusion set, so they are retained by
+        :meth:`export_config` and :meth:`export_selection`.
+
+        :param filters: Filters accepted by :meth:`filter_current`.
+        :type filters: Mapping[str, Any]
+        :return: Remaining accepted records.
+        :rtype: pandas.DataFrame
+        """
+        current = self.results()
+        matching = _filter_current_results(current, filters)
+        rejected_ids = sorted(
+            set(current["dataset_id"].astype(str))
+            - set(matching["dataset_id"].astype(str))
+        )
+        if not rejected_ids:
+            return self.results()
+        return self.exclude(rejected_ids)
+
+    def review_current(
+        self,
+        profile: str | DatasetReviewProfile | Mapping[str, Any] | None = None,
+        *,
+        mz_precision: int = 3,
+    ) -> DatasetReview:
+        """Review current datasets for duplicate and name-based signals.
+
+        The review runs only on the current accepted result and never changes
+        exclusions. Use :meth:`apply_review` to apply explicitly selected
+        recommendations.
+
+        :param profile: Built-in profile name (``"brain"`` or ``"liver"``),
+            custom profile, mapping, or ``None`` for generic duplicate review.
+        :type profile: str | DatasetReviewProfile | Mapping[str, Any] | None
+        :param mz_precision: Decimal precision used in duplicate m/z grouping.
+        :type mz_precision: int
+        :return: Review table and explicit exclusion recommendations.
+        :rtype: DatasetReview
+        """
+        return build_dataset_review(
+            self.results(),
+            profile=resolve_review_profile(profile),
+            mz_precision=mz_precision,
+        )
+
+    def apply_review(
+        self,
+        review: DatasetReview,
+        *,
+        rules: Iterable[str],
+    ) -> pd.DataFrame:
+        """Apply explicit review recommendations as current exclusions.
+
+        :param review: Result returned by :meth:`review_current`.
+        :type review: DatasetReview
+        :param rules: Recommendation rules to apply.
+        :type rules: Iterable[str]
+        :return: Remaining accepted records.
+        :rtype: pandas.DataFrame
+        :raises ValueError: If the review references an unknown dataset ID.
+        """
+        dataset_ids = review.exclusion_ids(rules)
+        if not dataset_ids:
+            return self.results()
+        return self.exclude(dataset_ids)
+
     def exclude(self, dataset_ids: str | Iterable[str]) -> pd.DataFrame:
         """Exclude one or more reviewed dataset IDs from exported filters.
 
@@ -340,6 +435,113 @@ class DatasetExplorer:
 def _metadata_value(record: Mapping[str, Any], field: str) -> Any:
     """Return one top-level or nested metadata value for selection sorting."""
     return record.get(field, _mapping(record.get("metadata")).get(field))
+
+
+_CURRENT_FILTER_ALIASES = {
+    "organism": "organisms",
+    "organism_part": "organism_parts",
+    "status": "processing_status",
+}
+_CURRENT_MINIMUM_FILTERS = {
+    "min_annotation_count": "annotation_count",
+    "min_molecule_count": "molecule_count",
+    "min_unique_molecule_count": "unique_molecule_count",
+}
+_CURRENT_MAXIMUM_FILTERS = {
+    "max_annotation_count": "annotation_count",
+}
+
+
+def _filter_current_results(
+    results: pd.DataFrame,
+    filters: Mapping[str, Any],
+) -> pd.DataFrame:
+    """Apply source-free, table-level filters to one explorer result."""
+    unknown = set(filters) - {
+        *results.columns,
+        *(_CURRENT_FILTER_ALIASES),
+        *(_CURRENT_MINIMUM_FILTERS),
+        *(_CURRENT_MAXIMUM_FILTERS),
+        "dataset_ids",
+        "exclude_dataset_ids",
+        "mz_min",
+        "mz_max",
+        "mz_range",
+        "has_optical_image",
+    }
+    if unknown:
+        raise ValueError(f"Unsupported current-result filters: {sorted(unknown)}")
+    if "mz_range" in filters and (
+        filters.get("mz_min") is not None or filters.get("mz_max") is not None
+    ):
+        raise ValueError("Use either mz_range or mz_min/mz_max, not both")
+
+    matching = pd.Series(True, index=results.index, dtype=bool)
+    range_filter = filters.get("mz_range")
+    if range_filter is not None:
+        if not isinstance(range_filter, Mapping):
+            raise ValueError("mz_range must be a mapping with min and max values")
+        lower = float(range_filter["min"])
+        upper = float(range_filter["max"])
+    elif filters.get("mz_min") is not None or filters.get("mz_max") is not None:
+        if filters.get("mz_min") is None or filters.get("mz_max") is None:
+            raise ValueError("mz_min and mz_max must be provided together")
+        lower = float(filters["mz_min"])
+        upper = float(filters["mz_max"])
+    else:
+        lower = upper = None
+    if lower is not None:
+        if lower < 0 or lower >= upper:
+            raise ValueError("m/z range requires 0 <= min_mz < max_mz")
+        minima = pd.to_numeric(results["mz_min"], errors="coerce")
+        maxima = pd.to_numeric(results["mz_max"], errors="coerce")
+        matching &= minima.le(lower) & maxima.ge(upper)
+
+    for filter_key, column in _CURRENT_MINIMUM_FILTERS.items():
+        limit = filters.get(filter_key)
+        if limit is not None:
+            matching &= pd.to_numeric(results[column], errors="coerce").ge(float(limit))
+    for filter_key, column in _CURRENT_MAXIMUM_FILTERS.items():
+        limit = filters.get(filter_key)
+        if limit is not None:
+            matching &= pd.to_numeric(results[column], errors="coerce").le(float(limit))
+
+    ignored = {
+        "mz_min", "mz_max", "mz_range", *_CURRENT_MINIMUM_FILTERS, *_CURRENT_MAXIMUM_FILTERS
+    }
+    for filter_key, expected in filters.items():
+        if filter_key in ignored or expected is None:
+            continue
+        if filter_key == "dataset_ids":
+            allowed = _as_values(expected)
+            matching &= results["dataset_id"].astype(str).isin(allowed)
+            continue
+        if filter_key == "exclude_dataset_ids":
+            denied = _as_values(expected)
+            matching &= ~results["dataset_id"].astype(str).isin(denied)
+            continue
+        column = _CURRENT_FILTER_ALIASES.get(filter_key, filter_key)
+        if column not in results:
+            raise ValueError(f"Current results do not contain '{column}'")
+        if column == "has_optical_image":
+            matching &= results[column].eq(bool(expected))
+            continue
+        allowed = {_normalise_current_value(value) for value in _as_values(expected)}
+        actual = results[column].map(_normalise_current_value)
+        matching &= actual.isin(allowed)
+    return results.loc[matching]
+
+
+def _as_values(value: Any) -> set[str]:
+    """Normalize one scalar or iterable current-filter value."""
+    if isinstance(value, str) or not isinstance(value, Iterable):
+        return {str(value)}
+    return {str(item) for item in value}
+
+
+def _normalise_current_value(value: Any) -> str:
+    """Normalize scalar display values for exact local comparison."""
+    return " ".join(str(value or "").split()).casefold()
 
 
 _RESULT_COLUMNS = [
