@@ -62,7 +62,7 @@ def masserstein_distances(
     """
     original = np.asarray(inputs)
     reconstructed = np.asarray(outputs)
-    axis = np.asarray(mass_axis, dtype=np.float64)
+    axis = np.asarray(mass_axis, dtype=np.float32)
     if original.ndim != 2 or original.shape != reconstructed.shape:
         raise_validation_error(
             "ReconstructionAnalysis",
@@ -79,7 +79,7 @@ def masserstein_distances(
     options = dict(criterion_options or {})
     options["reduction"] = "none"
     metric = SpectrumMasserstein(**options).to(device)
-    axis_tensor = torch.as_tensor(axis, dtype=torch.float64, device=device)
+    axis_tensor = torch.as_tensor(axis, dtype=torch.float32, device=device)
 
     # Bounded inference
     ## Chunking avoids transferring the complete retained image to the device.
@@ -95,7 +95,7 @@ def masserstein_distances(
                 mass_axis=axis_tensor,
             )
             costs.append(values.detach().cpu().numpy())
-    return np.concatenate(costs).astype(np.float64, copy=False)
+    return np.concatenate(costs).astype(np.float32, copy=False)
 
 
 def reconstruction_metrics(
@@ -119,8 +119,8 @@ def reconstruction_metrics(
             "AutoencoderAnalysis",
             "Reconstruction metrics require equal two-dimensional arrays.",
         )
-    target = torch.as_tensor(original, dtype=torch.float64)
-    prediction = torch.as_tensor(reconstructed, dtype=torch.float64)
+    target = torch.as_tensor(original, dtype=torch.float32)
+    prediction = torch.as_tensor(reconstructed, dtype=torch.float32)
     feature_values = feature_errors(prediction, target)
     input_tic = target.sum(dim=1)
     reconstruction_tic = prediction.sum(dim=1)
@@ -144,7 +144,7 @@ def summarize(values: np.ndarray) -> Dict[str, float]:
     :return: Count, moments, extrema, and selected quantiles.
     :rtype: Dict[str, float]
     """
-    array = np.asarray(values, dtype=np.float64)
+    array = np.asarray(values, dtype=np.float32)
     return {
         "count": float(array.size),
         "mean": float(np.mean(array)),
@@ -167,7 +167,7 @@ def feature_error_distribution(
     """Calculate per-feature distribution bands without a second full matrix.
 
     Features are processed in chunks so quantile calculation does not create a
-    complete float64 contribution matrix in addition to retained inputs and
+    complete float32 contribution matrix in addition to retained inputs and
     reconstructions.
 
     :param inputs: Retained input spectra.
@@ -200,17 +200,17 @@ def feature_error_distribution(
             "ReconstructionAnalysis", "Invalid quantiles or feature chunk size."
         )
     profiles = {
-        name: np.empty(original.shape[1], dtype=np.float64)
+        name: np.empty(original.shape[1], dtype=np.float32)
         for name in ("mean", "median", "lower", "upper")
     }
     for start in range(0, original.shape[1], chunk_size):
         stop = min(start + chunk_size, original.shape[1])
-        # Match the core reconstruction metrics' float64 accumulation while
+        # Match the core reconstruction metrics' float32 accumulation while
         # limiting conversion to one feature chunk instead of duplicating both
         # complete retained matrices.
         residual = original[:, start:stop].astype(
-            np.float64, copy=False
-        ) - reconstructed[:, start:stop].astype(np.float64, copy=False)
+            np.float32, copy=False
+        ) - reconstructed[:, start:stop].astype(np.float32, copy=False)
         contribution = residual**2 if metric == "mse" else np.abs(residual)
         profiles["mean"][start:stop] = np.mean(contribution, axis=0)
         profiles["median"][start:stop] = np.median(contribution, axis=0)

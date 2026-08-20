@@ -10,11 +10,18 @@ import numpy as np
 from ....readers.spatial import Aggregation, SpatialImage, aggregate_window
 from ....utils.exceptions import raise_validation_error
 from ....visualization.interactive import IonImageViewer
-from .metrics import feature_error_distribution, rank_models, summarize
+from .metrics import (
+    feature_error_distribution,
+    masserstein_distances,
+    metric_order,
+    rank_models,
+    summarize,
+)
 from .overviews import plot_selected_spectra as render_selected_spectra
 from .views import (
     plot_error_images,
     plot_feature_profiles,
+    plot_ion_image_comparison,
     plot_metric_distributions,
 )
 
@@ -40,11 +47,16 @@ class ReconstructionAnalysis:
         :return: One summary or model-keyed summaries.
         :rtype: Mapping[str, float] | Mapping[str, Mapping[str, float]]
         """
+        self._ensure_metric(metric)
         summaries = {
             model_name: summarize(prepared.metric_array(metric))
             for model_name, prepared in self.owner.iter_prepared()
         }
-        return summaries if self.owner.is_multi else summaries[self.owner.default_model_name]
+        return (
+            summaries
+            if self.owner.is_multi
+            else summaries[self.owner.default_model_name]
+        )
 
     def compare_metric(self, metric: str = "mse") -> list[Dict[str, Any]]:
         """Return ranked model summaries for one metric.
@@ -54,6 +66,7 @@ class ReconstructionAnalysis:
         :return: Best-to-worst summary records.
         :rtype: list[Dict[str, Any]]
         """
+        self._ensure_metric(metric)
         summaries = {
             model_name: summarize(prepared.metric_array(metric))
             for model_name, prepared in self.owner.iter_prepared()
@@ -63,6 +76,35 @@ class ReconstructionAnalysis:
             {"model": name, "rank": index + 1, **summaries[name]}
             for index, name in enumerate(ranking)
         ]
+
+    def compare_metrics(
+        self,
+        metrics: Sequence[str] = (
+            "mse",
+            "mae",
+            "masserstein",
+            "cosine_similarity",
+            "spectral_angle",
+            "tic_error",
+        ),
+        masserstein_options: Optional[Mapping[str, Any]] = None,
+    ) -> list[Dict[str, Any]]:
+        """Return one ranked table record per metric and analyzed model.
+
+        :param metrics: Metrics compared across every prepared model.
+        :type metrics: Sequence[str]
+        :param masserstein_options: Options matching the training criterion.
+        :type masserstein_options: Mapping[str, Any] | None
+        :return: Metric/model records ordered by metric and rank.
+        :rtype: list[Dict[str, Any]]
+        """
+        records: list[Dict[str, Any]] = []
+        for metric in metrics:
+            self._ensure_metric(metric, masserstein_options)
+            records.extend(
+                {"metric": metric, **record} for record in self.compare_metric(metric)
+            )
+        return records
 
     def metric_image(
         self,
@@ -89,6 +131,7 @@ class ReconstructionAnalysis:
                 "ReconstructionAnalysis",
                 "annotation_filter must be all, annotated, or unannotated.",
             )
+        self._ensure_metric(metric)
         selected_models = [model_name] if model_name else list(self.owner.model_names)
         images: Dict[str, SpatialImage] = {}
         for name in selected_models:
@@ -128,12 +171,14 @@ class ReconstructionAnalysis:
                 "ReconstructionAnalysis",
                 "selection must be best, median, or worst and count must be positive.",
             )
+        self._ensure_metric(metric)
         prepared = self.owner.prepared_for(selection_model)
         values = prepared.metric_array(metric)
+        ordered = metric_order(values, metric)
         if selection == "best":
-            rows = np.argsort(values)[:count]
+            rows = ordered[:count]
         elif selection == "worst":
-            rows = np.argsort(values)[-count:][::-1]
+            rows = ordered[-count:][::-1]
         else:
             rows = np.argsort(np.abs(values - np.median(values)))[:count]
         return prepared.spectrum_ids[rows]
@@ -188,6 +233,35 @@ class ReconstructionAnalysis:
         """Extract one ion image directly from the raw reader."""
         return self.owner.reader.GetIonImage(mz, tolerance, aggregation=aggregation)
 
+    def plot_ion_images(
+        self,
+        mz: float,
+        tolerance: float = 0.0,
+        aggregation: Aggregation = "mean",
+        target_field: Optional[str] = None,
+    ) -> Any:
+        """Plot shared input/labels and model reconstruction/residual rows."""
+        images = self.ion_images(mz, tolerance, aggregation)
+        first = self.owner.prepared_for()
+        annotation = self.owner.map_prepared_rows(
+            first,
+            self.owner.annotation_mask(first, target_field).astype(float),
+        ).values
+        return plot_ion_image_comparison(
+            images["input"].values,
+            annotation,
+            {
+                name: images[f"{name}: reconstruction"].values
+                for name in self.owner.model_names
+            },
+            {
+                name: images[f"{name}: residual"].values
+                for name in self.owner.model_names
+            },
+            mz,
+            self.owner.theme,
+        )
+
     def feature_distribution(
         self,
         metric: str = "mse",
@@ -214,6 +288,7 @@ class ReconstructionAnalysis:
         ax: Any = None,
     ) -> Any:
         """Plot one overlaid metric distribution for all models."""
+        self._ensure_metric(metric)
         return plot_metric_distributions(
             {
                 name: prepared.metric_array(metric)
@@ -230,6 +305,7 @@ class ReconstructionAnalysis:
         metric: str = "mse",
         annotation_filter: str = "all",
         target_field: Optional[str] = None,
+        show_annotation_mask: bool = True,
     ) -> Any:
         """Plot filtered spatial error maps on a common scale."""
         images = self.metric_image(metric, annotation_filter, target_field)
@@ -238,9 +314,17 @@ class ReconstructionAnalysis:
             if isinstance(images, Mapping)
             else {self.owner.default_model_name: images}
         )
+        first = self.owner.prepared_for()
+        annotation_image = None
+        if show_annotation_mask and first.target_masks:
+            annotation_image = self.owner.map_prepared_rows(
+                first,
+                self.owner.annotation_mask(first, target_field).astype(float),
+            ).values
         return plot_error_images(
             {name: image.values for name, image in mapping.items()},
             metric,
+            annotation_mask=annotation_image,
             theme=self.owner.theme,
         )
 
@@ -262,7 +346,10 @@ class ReconstructionAnalysis:
         first = self.owner.prepared_for()
         input_array = self.owner.require_array("inputs")
         row_maps = {
-            name: {int(identifier): row for row, identifier in enumerate(prepared.spectrum_ids)}
+            name: {
+                int(identifier): row
+                for row, identifier in enumerate(prepared.spectrum_ids)
+            }
             for name, prepared in self.owner.iter_prepared()
         }
         first_rows = row_maps[self.owner.default_model_name]
@@ -293,7 +380,43 @@ class ReconstructionAnalysis:
             selection,
             clip_reconstruction,
             self.owner.theme,
+            self._selection_labels(first, spectrum_ids),
         )
+
+    def plot_selected_spectra_comparison(
+        self,
+        metric: str = "mse",
+        selection: str = "worst",
+        count: int = 5,
+        selection_models: Optional[Sequence[str]] = None,
+        clip_reconstruction: bool = True,
+    ) -> Mapping[str, Any]:
+        """Plot every model on populations selected independently per model.
+
+        :param metric: Metric defining best, median, or worst spectra.
+        :type metric: str
+        :param selection: Population selection strategy.
+        :type selection: str
+        :param count: Spectra selected for each selection model.
+        :type count: int
+        :param selection_models: Models defining populations, or all models.
+        :type selection_models: Sequence[str] | None
+        :param clip_reconstruction: Clip reconstruction before mirroring it.
+        :type clip_reconstruction: bool
+        :return: Figures keyed by the model which selected each population.
+        :rtype: Mapping[str, Any]
+        """
+        names = list(selection_models or self.owner.model_names)
+        return {
+            name: self.plot_selected_spectra(
+                metric=metric,
+                selection=selection,
+                count=count,
+                selection_model=name,
+                clip_reconstruction=clip_reconstruction,
+            )
+            for name in names
+        }
 
     def plot_feature_error_overview(
         self,
@@ -314,21 +437,54 @@ class ReconstructionAnalysis:
             theme=self.owner.theme,
         )
 
+    def rank_features(
+        self,
+        metric: str = "mse",
+        top_n: int = 10,
+        quantiles: tuple[float, float] = (0.05, 0.95),
+        chunk_size: int = 2048,
+    ) -> list[Dict[str, Any]]:
+        """Return the highest-error m/z positions independently per model."""
+        if top_n < 1:
+            raise_validation_error("ReconstructionAnalysis", "top_n must be positive.")
+        profiles = self.feature_distribution(metric, quantiles, chunk_size)
+        mass_axis = np.asarray(self.owner.binner.GetXAxis())
+        records: list[Dict[str, Any]] = []
+        for model_name, profile in profiles.items():
+            selected = np.argsort(profile["mean"])[-top_n:][::-1]
+            records.extend(
+                {
+                    "model": model_name,
+                    "rank": rank,
+                    "feature_index": int(index),
+                    "mz": float(mass_axis[index]),
+                    "mean": float(profile["mean"][index]),
+                    "median": float(profile["median"][index]),
+                    "lower_quantile": float(profile["lower"][index]),
+                    "upper_quantile": float(profile["upper"][index]),
+                }
+                for rank, index in enumerate(selected, 1)
+            )
+        return records
+
     def ion_viewer(
         self,
         tolerance: float = 0.0,
         aggregation: Aggregation = "mean",
+        target_field: Optional[str] = None,
+        mz_values: Optional[Sequence[float]] = None,
     ) -> IonImageViewer:
         """Return an interactive viewer over the active binner axis."""
         return IonImageViewer(
-            self.owner.binner.GetXAxis(),
-            lambda mass: {
-                name: image.values
-                for name, image in self.ion_images(
-                    mass, tolerance=tolerance, aggregation=aggregation
-                ).items()
-            },
+            mz_values if mz_values is not None else self.owner.binner.GetXAxis(),
+            lambda mass: {},
             theme=self.owner.theme,
+            renderer=lambda mass, _: self.plot_ion_images(
+                mass,
+                tolerance=tolerance,
+                aggregation=aggregation,
+                target_field=target_field,
+            ),
         )
 
     def overview(
@@ -350,6 +506,53 @@ class ReconstructionAnalysis:
                 metric, top_n=top_features
             ),
         }
+
+    def _ensure_metric(
+        self,
+        metric: str,
+        masserstein_options: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        """Calculate an optional expensive metric once per prepared model."""
+        normalized = "masserstein" if metric == "wasserstein" else metric
+        if normalized != "masserstein":
+            return
+        for model_name, prepared in self.owner.iter_prepared():
+            if all(normalized in values for values in prepared.pixel_metrics.values()):
+                continue
+
+            # Per-spectrum transport metric
+            ## Reuse retained arrays and the exact differentiable training loss.
+            values = masserstein_distances(
+                self.owner.require_array("inputs", model_name),
+                self.owner.require_array("reconstructions", model_name),
+                self.owner.binner.GetXAxis(),
+                batch_size=getattr(self.owner.wrapper.models_manager, "batch_size", 32),
+                device=self.owner._device(),
+                criterion_options=masserstein_options,
+            )
+            for spectrum_id, value in zip(prepared.spectrum_ids, values):
+                prepared.pixel_metrics[int(spectrum_id)][normalized] = float(value)
+                prepared.pixel_metrics[int(spectrum_id)]["wasserstein"] = float(value)
+
+    @staticmethod
+    def _selection_labels(prepared: Any, spectrum_ids: Sequence[int]) -> Dict[int, str]:
+        """Build compact target summaries for selected spectrum titles."""
+        row_by_id = {
+            int(spectrum_id): row
+            for row, spectrum_id in enumerate(prepared.spectrum_ids)
+        }
+        labels: Dict[int, str] = {}
+        for spectrum_id in spectrum_ids:
+            fields = []
+            row = row_by_id[int(spectrum_id)]
+            for field, targets in prepared.targets.items():
+                value = np.asarray(targets[row])
+                active = (
+                    np.flatnonzero(value) if value.ndim else np.asarray([int(value)])
+                )
+                fields.append(f"{field}={active.tolist()}")
+            labels[int(spectrum_id)] = ", ".join(fields) or "no retained labels"
+        return labels
 
 
 def _aggregate_rows(values: np.ndarray, aggregation: Aggregation) -> np.ndarray:

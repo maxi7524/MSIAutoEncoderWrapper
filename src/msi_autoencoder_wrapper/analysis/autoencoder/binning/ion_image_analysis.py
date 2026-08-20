@@ -40,7 +40,7 @@ def ion_image_from_raw(reader: MSIBaseReader, precompute: BinningPrecompute, mz:
     regardless of any ``x_min``/``x_max`` restriction used for a region's binner.
     """
     total = reader.GetNumberOfSpectra()
-    values = np.full(total, np.nan, dtype=np.float64)
+    values = np.full(total, np.nan, dtype=np.float32)
     for spectrum_id in precompute.spectrum_ids:
         raw_mz, raw_y = precompute.raw(spectrum_id)
         selected = np.abs(raw_mz - mz) <= tolerance
@@ -54,10 +54,10 @@ def ion_image_from_forward(
 ) -> SpatialImage:
     """Ion image of ``B(X)`` (forward-binned) for the sampled spectra; NaN elsewhere."""
     binner, forward_cache = precompute.forward(delta_m, x_min, x_max)
-    grid_mz = np.asarray(binner.GetXAxis(), dtype=np.float64)
+    grid_mz = np.asarray(binner.GetXAxis(), dtype=np.float32)
     selected = np.abs(grid_mz - mz) <= tolerance
     total = reader.GetNumberOfSpectra()
-    values = np.full(total, np.nan, dtype=np.float64)
+    values = np.full(total, np.nan, dtype=np.float32)
     for spectrum_id in precompute.spectrum_ids:
         values[int(spectrum_id)] = _aggregate_window_or_zero(forward_cache[int(spectrum_id)][selected], aggregation)
     return reader.MapSpectrumValuesToImage(values, fill_value=np.nan)
@@ -71,7 +71,7 @@ def ion_image_from_inverse(
     label, method, params = method_grid_point["label"], method_grid_point["method"], dict(method_grid_point.get("params", {}))
     _, _, inverse_cache = precompute.inverse(delta_m, inverse_binner_factory(method, **params), x_min, x_max, cache_key=label)
     total = reader.GetNumberOfSpectra()
-    values = np.full(total, np.nan, dtype=np.float64)
+    values = np.full(total, np.nan, dtype=np.float32)
     for spectrum_id in precompute.spectrum_ids:
         result = inverse_cache[int(spectrum_id)]
         selected = np.abs(result.mz - mz) <= tolerance

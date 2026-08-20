@@ -51,7 +51,7 @@ def inverse_binner_factory(method: str, **params: Any) -> Callable[[Any], Any]:
     """Build a ``(binner) -> inverse_binner`` factory for :meth:`BinningPrecompute.inverse`.
 
     :param method: A name registered in ``BinnerManager.INVERSE_REGISTRY`` (e.g.
-        ``"ThresholdInverseBinner"``).
+        ``"QuantileInverseBinner"``).
     :param params: Constructor kwargs forwarded as-is (excluding ``binner``/``active_context``,
         which :meth:`BinningPrecompute.inverse` injects).
     """
@@ -138,7 +138,7 @@ def inverse_sweep_records(
         factory = inverse_binner_factory(method, **params)
         forward_binner, inverse_binner, inverse_cache = precompute.inverse(delta_m, factory, x_min, x_max, cache_key=label)
         _, forward_cache = precompute.forward(delta_m, x_min, x_max)
-        grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float64)
+        grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float32)
         label_started = time.perf_counter()
         for spectrum_id in tqdm(precompute.spectrum_ids, desc=f"Matching {label}", unit="spectrum"):
             raw_mz, raw_y = crop_spectrum(*precompute.raw(spectrum_id), forward_binner.x_min, forward_binner.x_max)
@@ -216,8 +216,8 @@ def plot_inverse_tradeoff(
 
     Visual encoding:
 
-    - **Color** = ``method`` (the inverse-binner class, e.g. all ``ThresholdInverseBinner``
-      grid points share a color, all ``CumulativeMassInverseBinner`` points share a
+    - **Color** = ``method`` (the inverse-binner class, e.g. all ``QuantileInverseBinner``
+      grid points share a color, all ``QuantileInverseBinner`` points share a
       different one) via ``theme.color_for_model`` — consistent across every call in a
       notebook run as long as the same method names keep appearing in the same order.
     - **Linestyle** = ``comparison`` (solid = ``inverse_binned``, dashed =
@@ -283,7 +283,7 @@ def plot_inverse_tradeoff(
             )
             if quantiles is not None:
                 bounds = np.asarray([
-                    np.quantile(np.asarray(record["_values"], dtype=np.float64), (lower_quantile, upper_quantile)) if record["_values"] else (np.nan, np.nan)
+                    np.quantile(np.asarray(record["_values"], dtype=np.float32), (lower_quantile, upper_quantile)) if record["_values"] else (np.nan, np.nan)
                     for record in selected_records
                 ])
                 ax.fill_between(xs, bounds[:, 0], bounds[:, 1], color=color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
@@ -352,7 +352,7 @@ def plot_ranked_spectra(
 
     forward_binner, inverse_binner, inverse_cache = precompute.inverse(resolved_delta_m, inverse_binner_factory(method, **params), x_min, x_max, cache_key=label)
     _, forward_cache = precompute.forward(resolved_delta_m, x_min, x_max)
-    grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float64)
+    grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float32)
 
     figure, axes = plt.subplots(2 * len(chosen), 1, figsize=(resolved.figure_size[0], 4 * len(chosen)), dpi=resolved.figure_dpi, squeeze=False)
     for row, record in enumerate(chosen):
@@ -437,7 +437,7 @@ def plot_ranked_spectra_across_methods(
         point_label, point_method, point_params = point["label"], point["method"], dict(point.get("params", {}))
         forward_binner, _, inverse_caches[point_label] = precompute.inverse(resolved_delta_m, inverse_binner_factory(point_method, **point_params), x_min, x_max, cache_key=point_label)
     _, forward_cache = precompute.forward(resolved_delta_m, x_min, x_max)
-    grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float64)
+    grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float32)
 
     figure, axes = plt.subplots(2 * len(chosen), 1, figsize=(resolved.figure_size[0], 4 * len(chosen)), dpi=resolved.figure_dpi, squeeze=False)
     for row, (position, record) in enumerate(chosen):

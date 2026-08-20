@@ -101,7 +101,7 @@ class BinningPrecompute:
         started = time.perf_counter()
         for spectrum_id in tqdm(self.spectrum_ids, desc="Reading raw spectra", unit="spectrum"):
             mz, intensity = self.reader.GetSpectrum(int(spectrum_id))
-            self._raw[int(spectrum_id)] = (np.asarray(mz, dtype=np.float64), np.asarray(intensity, dtype=np.float64))
+            self._raw[int(spectrum_id)] = (np.asarray(mz, dtype=np.float32), np.asarray(intensity, dtype=np.float32))
         logger.info("DONE reading %s raw spectra in %.2fs.", len(self._raw), time.perf_counter() - started)
         return self
 
@@ -172,7 +172,7 @@ class BinningPrecompute:
         cache: dict[int, np.ndarray] = {}
         for spectrum_id in tqdm(self.spectrum_ids, desc=f"Forward binning Δm={bin_step:g}", unit="spectrum"):
             mz, intensity = self.raw(spectrum_id)
-            cache[int(spectrum_id)] = np.asarray(binner(xs=mz, ys=intensity), dtype=np.float64)
+            cache[int(spectrum_id)] = binner.transform_spectrum(mz, intensity).cpu().numpy().astype(np.float32, copy=False)
         self._forward_cache[key] = cache
         logger.info("DONE forward-binning at bin_step=%s in %.2fs.", bin_step, time.perf_counter() - started)
         return binner, cache
@@ -200,7 +200,7 @@ class BinningPrecompute:
 
         :param inverse_binner_factory: Callable taking the resolved forward binner and
             returning a configured inverse-binner instance (e.g.
-            ``lambda binner: BinnerManager.get_inverse_binner("ThresholdInverseBinner", binner=binner, threshold_strategy="quantile", threshold_options={"quantile": 0.9})``).
+            ``lambda binner: BinnerManager.get_inverse_binner("QuantileInverseBinner", binner=binner, quantile=0.9)``).
         :param cache_key: Explicit cache key for this parameter point. Defaults to
             ``repr(inverse_binner.get_config())`` — sufficient whenever the config is
             a faithful, distinguishing summary of the strategy's behavior.
@@ -223,9 +223,12 @@ class BinningPrecompute:
         cache: dict[int, InverseResult] = {}
         for spectrum_id in tqdm(self.spectrum_ids, desc=f"Inverse binning {resolved_key}", unit="spectrum"):
             grid_y = forward_cache[int(spectrum_id)]
-            mz, intensity = inverse_binner(grid_y)
+            inverse_result = inverse_binner.transform_spectra(grid_y)
+            end = int(inverse_result.offsets[1])
+            mz = inverse_result.mass_values[:end].cpu().numpy()
+            intensity = inverse_result.intensities[:end].cpu().numpy()
             diagnostics = dict(getattr(inverse_binner, "last_diagnostics", {}) or {})
-            cache[int(spectrum_id)] = InverseResult(np.asarray(mz, dtype=np.float64), np.asarray(intensity, dtype=np.float64), diagnostics)
+            cache[int(spectrum_id)] = InverseResult(np.asarray(mz, dtype=np.float32), np.asarray(intensity, dtype=np.float32), diagnostics)
         self._inverse_cache[key] = cache
         logger.info("DONE inverse-binning %s (%s) in %.2fs.", type(inverse_binner).__name__, resolved_key, time.perf_counter() - started)
         return binner, inverse_binner, cache

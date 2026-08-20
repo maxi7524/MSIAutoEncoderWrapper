@@ -82,7 +82,7 @@ class PreparedAnalysis:
         """
         return np.asarray(
             [self.pixel_metrics[int(index)][metric] for index in self.spectrum_ids],
-            dtype=np.float64,
+            dtype=np.float32,
         )
 
 

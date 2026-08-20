@@ -160,6 +160,75 @@ def test_explorer_previews_and_filters_mz_ranges(tmp_path: Path) -> None:
     assert payload["exported_at"]
 
 
+def test_explorer_previews_and_applies_current_filters_without_requery() -> None:
+    """Current-result filters reuse records from the preceding broad query."""
+    source = FakeExplorationSource()
+    explorer = DatasetExplorer(source)
+    explorer.filter({})
+
+    preview = explorer.filter_current({"mz_min": 200, "mz_max": 900})
+    accepted = explorer.apply_current_filters({"mz_min": 200, "mz_max": 900})
+
+    assert preview["dataset_id"].tolist() == ["one"]
+    assert accepted["dataset_id"].tolist() == ["one"]
+    assert source.seen_filters == {}
+    assert explorer.results(include_excluded=True).loc[1, "excluded"]
+
+
+def test_explorer_reviews_current_records_and_applies_selected_rules() -> None:
+    """Review flags are visible before explicit exclusion recommendations apply."""
+
+    class ReviewSource(FakeExplorationSource):
+        def filter(self, filters: Mapping[str, Any]) -> List[Dict[str, Any]]:
+            self.seen_filters = dict(filters)
+            self._accepted = [
+                {
+                    "dataset_id": "technical-copy",
+                    "name": "2024-01-01_mouse_brain_5ppm",
+                    "metadata": {"pixel_count": 1000, "mz_min": 100, "mz_max": 900},
+                },
+                {
+                    "dataset_id": "keeper",
+                    "name": "mouse_brain",
+                    "metadata": {"pixel_count": 1000, "mz_min": 100, "mz_max": 900},
+                },
+                {
+                    "dataset_id": "qc",
+                    "name": "mouse_brain_null_mz_shift",
+                    "metadata": {"pixel_count": 1000, "mz_min": 100, "mz_max": 910},
+                },
+                {
+                    "dataset_id": "fragment",
+                    "name": "granular_layer_mouse_brain",
+                    "metadata": {"pixel_count": 2000, "mz_min": 100, "mz_max": 900},
+                },
+            ]
+            return self.get_accepted_records()
+
+    explorer = DatasetExplorer(ReviewSource())
+    explorer.filter({})
+    review = explorer.review_current(profile="brain")
+
+    assert review.exclusion_ids(["high_confidence_duplicates"]) == [
+        "technical-copy"
+    ]
+    assert review.exclusion_ids(["mz_shift_qc_variants"]) == ["qc"]
+    assert review.exclusion_ids(["explicit_regional_fragments"]) == ["fragment"]
+    assert explorer.accepted()["dataset_id"].tolist() == [
+        "technical-copy",
+        "keeper",
+        "qc",
+        "fragment",
+    ]
+
+    accepted = explorer.apply_review(
+        review,
+        rules=["high_confidence_duplicates", "mz_shift_qc_variants"],
+    )
+
+    assert accepted["dataset_id"].tolist() == ["keeper", "fragment"]
+
+
 def test_explorer_supports_metaspace_filters_and_metadata() -> None:
     """The same explorer reports and searches native METASPACE fields."""
 

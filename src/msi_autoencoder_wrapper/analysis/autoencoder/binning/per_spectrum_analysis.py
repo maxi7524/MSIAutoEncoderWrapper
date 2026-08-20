@@ -61,7 +61,7 @@ def bucket_by_property(properties: Mapping[int, Mapping[str, float]], property_n
         actual distribution shape.
     """
     ids = list(properties.keys())
-    values = np.asarray([properties[spectrum_id][property_name] for spectrum_id in ids], dtype=np.float64)
+    values = np.asarray([properties[spectrum_id][property_name] for spectrum_id in ids], dtype=np.float32)
     edges = np.unique(np.quantile(values, np.linspace(0, 1, n_buckets + 1)))
     if edges.size < 2:
         return {spectrum_id: "Q1 (low)" for spectrum_id in ids}

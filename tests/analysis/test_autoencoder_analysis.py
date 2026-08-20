@@ -415,7 +415,6 @@ def test_masserstein_analysis_reuses_per_spectrum_training_criterion() -> None:
         reconstructions,
         np.asarray([100.0, 101.0, 102.0]),
         batch_size=2,
-        criterion_options={"sinkhorn_iterations": 5},
     )
 
     assert values.shape == (2,)
