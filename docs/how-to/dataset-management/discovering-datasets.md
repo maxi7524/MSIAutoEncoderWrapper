@@ -140,6 +140,54 @@ have m/z coverage enforced during the provider query itself — before
 annotation counts or molecular statistics are requested — pass
 `mz_min`/`mz_max` directly in the `filters` mapping instead, as shown above.
 
+## Refine an already discovered result
+
+When a broad provider query is expensive, refine its current accepted table
+without contacting the provider again:
+
+```python
+preview = explorer.filter_current(
+    {
+        "analyzer_type": ["FTICR", "Orbitrap"],
+        "mz_min": 200,
+        "mz_max": 900,
+    }
+)
+display(preview)
+
+# Add every non-matching current dataset to exclude_dataset_ids.
+final = explorer.apply_current_filters(
+    {"analyzer_type": ["FTICR", "Orbitrap"]}
+)
+```
+
+`filter_current()` is a non-mutating preview. `apply_current_filters()` does
+not repeat the provider query; it records rejected current IDs as manual
+exclusions, which are included in later configuration and selection exports.
+
+For name-based review and conservative duplicate detection, inspect a review
+before applying only the rules you approve:
+
+```python
+review = explorer.review_current(profile="brain")
+display(review.table)
+display(review.summary())
+
+final = explorer.apply_review(
+    review,
+    rules=[
+        "high_confidence_duplicates",
+        "mz_shift_qc_variants",
+        "explicit_regional_fragments",
+    ],
+)
+```
+
+Built-in `brain` and `liver` profiles provide their notebook-derived advisory
+morphology and low-pixel rules. The only recommendations eligible for direct
+application are explicit high-confidence duplicate, QC, and regional-fragment
+rules; advisory flags remain visible in `review.table` for manual review.
+
 ## Calculate molecular statistics
 
 Set `include_molecule_stats=True` to populate:
