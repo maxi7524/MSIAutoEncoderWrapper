@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from msi_autoencoder_wrapper.execution.staging import (
+from msi_autoencoder_wrapper.runtime.staging import (
     cleanup_staging_directory,
     copy_verified,
     create_staging_directory,

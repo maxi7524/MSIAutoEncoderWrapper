@@ -56,7 +56,7 @@ class LatentImzMLStore:
 
         target = Path(output_path).with_suffix(".imzML")
         target.parent.mkdir(parents=True, exist_ok=True)
-        latent_axis = np.arange(values.shape[1], dtype=np.float64)
+        latent_axis = np.arange(values.shape[1], dtype=np.float32)
         source_metadata = escape(
             json.dumps(source_reader.GetMetaData(), default=str),
             {'"': "&quot;"},
