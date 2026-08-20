@@ -1,0 +1,117 @@
+# Full experiment example for the grid/run execution module (`msi-wrapper` CLI).
+#
+# `local.yaml` and `slurm.example.yaml` in this same directory are execution
+# *profiles*: they only hold an `execution:` block and are pulled in from an
+# experiment file via `execution.profile`. This file is the other half — a
+# complete, top-level experiment config that is passed directly to the CLI:
+#
+#   .venv/bin/msi-wrapper validate assets/configs/execution/experiment.example.yaml
+#   .venv/bin/msi-wrapper plan     assets/configs/execution/experiment.example.yaml --output workspace/executions/demo
+#   .venv/bin/msi-wrapper run      assets/configs/execution/experiment.example.yaml --dry-run
+#   .venv/bin/msi-wrapper run      assets/configs/execution/experiment.example.yaml
+#
+# Full field reference: docs/how-to/experiment-execution/experiment-configuration.md
+#
+# Only `task.parameters.factory` below is a placeholder. Everything else
+# (schema, grid expansion, seeding, profile reuse, reporting) is real and can
+# be copied as-is. Replace `factory` with your own "module:function" that
+# returns an MSIAutoEncoderWrapper with `.active_model` / `.active_dataset`
+# already configured — see the contract in
+# src/msi_autoencoder_wrapper/runtime/workflows/wrapper.py (_build_wrapper).
+# Until you do, `validate`/`run` will fail with a ModuleNotFoundError
+# pointing exactly at that placeholder — everything before it (grid
+# expansion, seeding, task materialization) has already run successfully by
+# that point.
+
+schema_version: 1
+
+experiment:
+  name: autoencoder-grid-demo
+
+task:
+  # Ready-made entrypoints shipped with this repo. They call your `factory`
+  # once per task and then run `models_manager.fit(...)` /
+  # `estimate_training_resources(...)` on the resulting wrapper.
+  entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
+  preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
+  parameters:
+    # REPLACE with your own factory, e.g. "my_project.experiments:build_wrapper".
+    factory: your_project.experiments:build_wrapper
+    factory_parameters:
+      # Every dotted path listed under `grid:` below must already exist here
+      # with some placeholder scalar value: planning only overwrites existing
+      # keys, it never creates new ones (a typo'd grid path raises
+      # "Grid path does not exist" instead of silently doing nothing).
+      model_preset:
+        latent_dim: 64
+        projection_dim: 32
+    model_name: null  # null lets wrapper.workspace.save_model derive a name
+    training:
+      patience: 10
+      checkpoint:
+        enabled: true
+        restore_best: true
+      # `phases` is a list, and grid paths can only walk nested mappings, not
+      # list indices — so phase-level fields (epochs, batch_size, ...) can't
+      # be grid targets as written here. Sweep at the mapping level instead
+      # (factory_parameters.* or training.* directly, as done below).
+      phases:
+        - phase_name: reconstruction
+          epochs: 5
+          batch_size: 64
+          optimizer:
+            type: AdamW
+            params:
+              lr: 0.001
+              weight_decay: 0.0001
+          criterions:
+            reconstruction:
+              mse:
+                target: MSELoss
+                weight: 1.0
+                params: {}
+
+runs:
+  repetitions: 2  # every grid cell below is repeated twice, each with its own seed
+  base_seed: 42
+
+# Cartesian grid: 2 x 2 x 2 = 8 parameter combinations, x2 repetitions = 16
+# tasks in total. All grid variants that share a repetition also share one
+# seed (paired comparisons); different repetitions get different, but
+# deterministic, seeds derived from base_seed.
+grid:
+  factory_parameters.model_preset.latent_dim: [64, 128]
+  factory_parameters.model_preset.projection_dim: [32, 64]
+  training.patience: [5, 10]
+
+reproducibility:
+  controls:
+    - dataset_split
+    - dataloader
+    - sampler
+    - augmentation
+    - model_initialization
+    - training
+
+execution:
+  # Reuses the local profile from this same directory; any inline key here
+  # other than `profile` overrides the merged profile value.
+  profile: local.yaml
+  max_parallel_runs: 2
+  # work_directory: workspace/executions/autoencoder-grid-demo  # default shown
+
+  # To run the same grid on Slurm instead, swap the profile and drop the
+  # max_parallel_runs override (Slurm parallelism comes from
+  # execution.slurm.array_parallelism in that profile):
+  #
+  # execution:
+  #   profile: slurm.example.yaml
+
+reports: []
+# reports:
+#   - source: reports/latent_dim_sweep.qmd  # relative to this file's directory, .qmd/.rmd only
+#     name: latent-dim-sweep
+#     formats: [html]
+
+reporting:
+  continue_on_error: true
