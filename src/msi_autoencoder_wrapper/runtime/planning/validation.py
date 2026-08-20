@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 from dataclasses import asdict
 
-from .entrypoints import resolve_entrypoint
-from .planning import build_plan
+from ..workflows.entrypoints import resolve_entrypoint
+from .plan import build_plan
 
 
 def validate_preflight(
@@ -21,10 +21,20 @@ def validate_preflight(
     messages: list[str] = []
     resolve_entrypoint(config["task"]["entrypoint"])
     plan = build_plan(config)
-    messages.append(f"Prepared {len(plan.tasks)} tasks")
-    preflight = resolve_entrypoint(config["task"]["preflight_entrypoint"])
-    result = preflight(asdict(plan.tasks[0]))
-    messages.append(f"Pipeline preflight completed: {result!r}")
+    messages.append(
+        "Configuration validation passed: the grid expands to %s task(s)." % len(plan.tasks)
+    )
+    if config["task"].get("plan_entrypoint"):
+        resolve_entrypoint(config["task"]["plan_entrypoint"])
+        messages.append(
+            "Runtime components were not constructed by `validate`; run `plan` "
+            "or `run --dry-run` to resolve the reader, binners, dataset split, "
+            "and model configuration."
+        )
+    else:
+        preflight = resolve_entrypoint(config["task"]["preflight_entrypoint"])
+        result = preflight(asdict(plan.tasks[0]))
+        messages.append(f"Pipeline preflight completed: {result!r}")
     directory = Path(config["_config_directory"])
     for report in config.get("reports", []):
         definition = {"source": report} if isinstance(report, str) else report

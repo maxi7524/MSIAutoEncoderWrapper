@@ -4,6 +4,7 @@ Core multi-phase training execution engine handling optimization loops, gradient
 
 import random
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
@@ -107,12 +108,36 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             image_key = getattr(self._wrapper.workspace, "active_img_name", None)
         checkpoint_config = self._resolve_checkpoint_config(training_config)
 
-        global_history: List[Dict[str, Any]] = []
+        runtime_config = training_config.get("runtime", {})
+        runtime_model_name = runtime_config.get("model_name")
+        if runtime_model_name is not None and not isinstance(runtime_model_name, str):
+            raise_validation_error(
+                context_name="Trainer",
+                message="runtime.model_name must be a string when provided.",
+            )
+        if runtime_model_name:
+            # Runtime artifact identity
+            ## Checkpoints and histories must be isolated per task, while the
+            ## serialized model metadata continues to contain the architecture name.
+            model_name = runtime_model_name
+        runtime_checkpoint = None
+        if runtime_config.get("enabled", False) and runtime_config.get("resume", True) and not training_config.get("test_mode", False):
+            from ...runtime.checkpoints import load_training_checkpoint
+
+            runtime_checkpoint = load_training_checkpoint(
+                Path(runtime_config["checkpoint_path"]),
+                task_fingerprint=runtime_config["task_fingerprint"],
+            )
+        global_history: List[Dict[str, Any]] = (
+            list(runtime_checkpoint["history"]) if runtime_checkpoint else []
+        )
         phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
         transient_cache = getattr(self._wrapper.models_manager, "_training_transient_cache", {})
 
         # Heading 1 (Sequential Phase Processing Framework)
         for current_step, phase_config in enumerate(phases_list):
+            if runtime_checkpoint and current_step < int(runtime_checkpoint["phase_index"]):
+                continue
             phase_name = phase_config.get("phase_name", f"phase_{current_step + 1}")
             epochs = phase_config.get("epochs", 10)
             compute_device = torch.device(
@@ -173,6 +198,17 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             optimizer_class = getattr(torch.optim, opt_type)
             optimizer = optimizer_class(trainable_params, **opt_params)
 
+            # Runtime continuation
+            ## Restore the exact optimizer, weights and random streams for this phase
+            start_epoch = 0
+            if runtime_checkpoint and current_step == int(runtime_checkpoint["phase_index"]):
+                from ...runtime.checkpoints import restore_random_state
+
+                model.load_state_dict(runtime_checkpoint["model_state"])
+                optimizer.load_state_dict(runtime_checkpoint["optimizer_state"])
+                restore_random_state(runtime_checkpoint)
+                start_epoch = int(runtime_checkpoint["epoch"]) + 1
+
             ## Heading 2 (Lifecycle Hook Initialization Pass)
             ### Trigger broad pre-computations hooks across individual sub-criterions matrices blocks
             for loss_fn in composite_loss.loss_functions.values():
@@ -220,16 +256,40 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     ),
                 )
             
-            self.best_loss = float("inf")
-            self.patience_counter = 0
+            max_batches = phase_config.get("max_batches")
+            if max_batches is not None and (not isinstance(max_batches, int) or max_batches < 1):
+                raise_validation_error("Trainer", "max_batches must be a positive integer.")
+            processed_batches_limit = min(total_batches, max_batches or total_batches)
+            self.best_loss = (
+                float(runtime_checkpoint["best_loss"])
+                if runtime_checkpoint and current_step == int(runtime_checkpoint["phase_index"])
+                else float("inf")
+            )
+            self.patience_counter = (
+                int(runtime_checkpoint["patience_counter"])
+                if runtime_checkpoint and current_step == int(runtime_checkpoint["phase_index"])
+                else 0
+            )
+            task_progress = None
+            if runtime_config and not training_config.get("test_mode", False):
+                from ...runtime.progress import create_terminal_progress
 
-            for epoch in range(epochs):
+                task_progress = create_terminal_progress(
+                    total=(epochs - start_epoch) * processed_batches_limit,
+                    description=runtime_config.get("task_label", model_name),
+                    position=1,
+                    leave=False,
+                )
+
+            for epoch in range(start_epoch, epochs):
                 model.train()
                 epoch_start_time = time.time()
                 accumulated_metrics: Dict[str, float] = {}
 
                 ### Heading 3 (Batch Data Stream Execution Pass)
                 for step_idx, batch in enumerate(dataloader):
+                    if step_idx >= processed_batches_limit:
+                        break
                     if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
                         if batch_preprocessor is None:
                             raise_validation_error(
@@ -313,6 +373,8 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                                 ),
                             )
                     optimizer.step()
+                    if task_progress is not None:
+                        task_progress.update(1)
 
                     #### Accumulate numerical step tracking parameters metrics into localized registries
                     for key, scalar_val in loss_logs.items():
@@ -320,29 +382,61 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
                     #### Evaluate step progress and calculate mathematical timeline approximations
                     ##### Setup log interval reporting limits dynamically to prevent excessive output
-                    log_interval = max(1, total_batches // 5)
-                    if step_idx % log_interval == 0 or step_idx == total_batches - 1:
+                    log_interval = max(1, processed_batches_limit // 5)
+                    if step_idx % log_interval == 0 or step_idx == processed_batches_limit - 1:
                         batches_completed = step_idx + 1
                         elapsed_seconds = time.time() - epoch_start_time
                         avg_seconds_per_batch = elapsed_seconds / batches_completed
-                        remaining_batches = total_batches - batches_completed
+                        remaining_batches = processed_batches_limit - batches_completed
                         eta_seconds = remaining_batches * avg_seconds_per_batch
-                        
-                        eta_minutes = int(eta_seconds // 60)
-                        eta_secs = int(eta_seconds % 60)
+                        remaining_epoch_count = epochs - epoch - 1
+                        task_eta_seconds = eta_seconds + (
+                            remaining_epoch_count
+                            * processed_batches_limit
+                            * avg_seconds_per_batch
+                        )
                         
                         logger.info(
-                            "[%s] Epoch %s/%s | Batch %s/%s | Loss: %s | Elapsed: %s s | ETA: %02d:%02d",
+                            "[%s] Epoch %s/%s | Batch %s/%s | Loss: %s | Epoch elapsed: %s s | Model ETA: %02d:%02d:%02d",
                             phase_name,
                             epoch + 1,
                             epochs,
                             batches_completed,
-                            total_batches,
+                            processed_batches_limit,
                             f"{loss.item():.4f}",
                             f"{elapsed_seconds:.1f}",
-                            eta_minutes,
-                            eta_secs
+                            int(task_eta_seconds // 3600),
+                            int((task_eta_seconds % 3600) // 60),
+                            int(task_eta_seconds % 60),
                         )
+                        if task_progress is not None:
+                            task_progress.set_postfix(
+                                epoch=f"{epoch + 1}/{epochs}",
+                                batch=f"{batches_completed}/{processed_batches_limit}",
+                                loss=f"{loss.item():.4f}",
+                                eta=f"{int(task_eta_seconds // 60)}m",
+                                refresh=False,
+                            )
+                        if runtime_config and not training_config.get("test_mode", False):
+                            from ...runtime.progress import update_progress
+
+                            update_progress(
+                                Path(runtime_config["progress_path"]),
+                                {
+                                    "status": "running",
+                                    "phase": phase_name,
+                                    "phase_index": current_step,
+                                    "epoch": epoch + 1,
+                                    "epochs_total": epochs,
+                                    "batch": batches_completed,
+                                    "batches_total": processed_batches_limit,
+                                    "elapsed_seconds": elapsed_seconds,
+                                    "estimated_remaining_seconds": eta_seconds,
+                                    "estimated_task_remaining_seconds": task_eta_seconds,
+                                    "loss": float(loss.item()),
+                                    "task_label": runtime_config.get("task_label"),
+                                },
+                            )
 
                 ### Heading 3 (Epoch Performance Summarization Pass)
                 mean_metrics: Dict[str, Any] = {
@@ -350,7 +444,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     "duration": time.time() - epoch_start_time
                 }
                 for key, running_sum in accumulated_metrics.items():
-                    mean_metrics[key] = running_sum / total_batches
+                    mean_metrics[key] = running_sum / processed_batches_limit
 
                 if validation_loader is not None:
                     validation_metrics = self._evaluate_loader(
@@ -385,11 +479,12 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
                 ### Heading 3 (Workspace Metrics Stream Flushing Pass)
                 #### Delegate file appending directly to the workspace manager to maintain absolute decoupling
-                self._wrapper.workspace.save_history(
-                    img_name=image_key,
-                    model_name=model_name,
-                    history_dict=global_history,
-                )
+                if not training_config.get("test_mode", False):
+                    self._wrapper.workspace.save_history(
+                        img_name=image_key,
+                        model_name=model_name,
+                        history_dict=global_history,
+                    )
 
                 ### Heading 3 (Early Stopping Validation Checkpoints)
                 if improved and checkpoint_config["enabled"]:
@@ -415,9 +510,46 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     f"{mean_metrics['duration']:.2f}"
                 )
 
+                # Runtime state persistence
+                ## Persist continuation state after every successfully completed epoch
+                checkpoint_interval = int(runtime_config.get("checkpoint_every_epochs", 1))
+                if (
+                    runtime_config.get("enabled", False)
+                    and not training_config.get("test_mode", False)
+                    and (epoch + 1) % checkpoint_interval == 0
+                ):
+                    from ...runtime.checkpoints import save_training_checkpoint
+                    from ...runtime.progress import update_progress
+
+                    save_training_checkpoint(
+                        Path(runtime_config["checkpoint_path"]),
+                        model=model,
+                        optimizer=optimizer,
+                        phase_index=current_step,
+                        epoch=epoch,
+                        history=global_history,
+                        best_loss=self.best_loss,
+                        patience_counter=self.patience_counter,
+                        task_fingerprint=runtime_config["task_fingerprint"],
+                    )
+                    update_progress(
+                        Path(runtime_config["progress_path"]),
+                        {
+                            "status": "running",
+                            "phase": phase_name,
+                            "phase_index": current_step,
+                            "epoch": epoch + 1,
+                            "epochs_total": epochs,
+                            "global_epochs_completed": len(global_history),
+                        },
+                    )
+
                 if self.patience_counter >= self.patience_limit:
                     logger.info("Early stopping barrier triggered. Terminating active optimization loop sequence.")
                     break
+
+            if task_progress is not None:
+                task_progress.close()
 
             if checkpoint_config["enabled"] and checkpoint_config["restore_best"]:
                 best_weights = self._wrapper.workspace.load_model_weights(
@@ -542,9 +674,12 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         loader_config.setdefault("num_workers", int(default_workers))
         loader_config.setdefault("pin_memory", str(device).startswith("cuda"))
         loader_config.setdefault("drop_last", False)
-        seed = phase_config.get("seed", self._config.get("training", {}).get("seed"))
+        seed = phase_config.get(
+            "dataloader_seed",
+            phase_config.get("seed", self._config.get("training", {}).get("seed")),
+        )
         if seed is not None:
-            from ...execution.seeds import seed_worker
+            from ...runtime.reproducibility import seed_worker
 
             generator = torch.Generator()
             generator.manual_seed(int(seed))

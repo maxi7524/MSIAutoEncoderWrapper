@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from msi_autoencoder_wrapper.execution.reporting import render_reports
+from msi_autoencoder_wrapper.runtime.output.reporting import render_reports
 
 
 def test_reports_run_in_order_and_continue_after_a_failure(

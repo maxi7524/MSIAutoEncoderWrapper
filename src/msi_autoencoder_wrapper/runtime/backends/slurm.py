@@ -38,7 +38,7 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
     directives.extend(
         [
             f'TASK_FILE=$(printf {task_pattern} "$SLURM_ARRAY_TASK_ID")',
-            f'{python} -m msi_autoencoder_wrapper.execution.cli task "$TASK_FILE"',
+            f'{python} -m msi_autoencoder_wrapper.runtime.cli task "$TASK_FILE"',
         ]
     )
     path = plan_directory / "run.sbatch"
@@ -71,7 +71,7 @@ def write_finalize_script(
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         f"#SBATCH --dependency=afterany:{job_id}",
-        f"{python} -m msi_autoencoder_wrapper.execution.cli finalize "
+        f"{python} -m msi_autoencoder_wrapper.runtime.cli finalize "
         f"{config} --staging-directory {staging} "
         f"--output {persistent} --execution-id {identifier}",
     ]

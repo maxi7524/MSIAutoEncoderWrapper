@@ -1,4 +1,4 @@
-"""Plan and execute reproducible MSI experiment campaigns."""
+"""Plan and run reproducible MSI experiment campaigns."""
 
 from .configuration import load_experiment_config
 from .planning import ExperimentPlan, PlannedTask, build_plan

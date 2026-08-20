@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from msi_autoencoder_wrapper.execution.backends.slurm import (
+from msi_autoencoder_wrapper.runtime.backends.slurm import (
     build_sbatch_command,
     write_finalize_script,
     write_sbatch_script,

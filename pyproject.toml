@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-msi-wrapper = "msi_autoencoder_wrapper.execution.cli:main"
+msi-wrapper = "msi_autoencoder_wrapper.runtime.cli:main"
 
 [project.optional-dependencies]
 cpu = [

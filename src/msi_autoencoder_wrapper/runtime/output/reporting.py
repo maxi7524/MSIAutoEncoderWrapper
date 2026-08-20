@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ..utils.logger import get_custom_logger
+from ...utils.logger import get_custom_logger
 from .manifests import update_manifest
 
 logger = get_custom_logger(__name__)
