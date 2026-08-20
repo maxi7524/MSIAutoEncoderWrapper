@@ -56,7 +56,7 @@ workspace/
         └── <cohort_id>/
             ├── <cohort_id>.sqlite       # working catalog
             └── materialization.json     # DatasetWorkspaceLayout.materialization_path();
-                                          # materialize_selection() itself defaults
+                                          # download_from_manifest() itself defaults
                                           # its own report next to the selection file
                                           # instead, unless --manifest overrides it
 ```

@@ -60,7 +60,7 @@ owns numerical measures independent of presentation.
 
 [`configuration`](../../src/msi_autoencoder_wrapper/configuration/__init__.py) defines
 component and consolidated configuration contracts. Workspace `ModelStore`
-writes model artifacts. [`execution`](../../src/msi_autoencoder_wrapper/execution/__init__.py)
+writes model artifacts. [`runtime`](../../src/msi_autoencoder_wrapper/runtime/__init__.py)
 turns schema-v1 campaign YAML into tasks for local or Slurm execution.
 
 [`msi_dataset_manager`](../../packages/msi_dataset_manager/src/msi_dataset_manager/__init__.py)
