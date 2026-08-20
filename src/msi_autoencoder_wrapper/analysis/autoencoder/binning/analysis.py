@@ -20,6 +20,16 @@ from .metrics import normalize_intensity, summaries
 BINNING_COMPARISONS = ("binned_original", "inverse_binned", "inverse_original")
 
 
+def _inverse_arrays(inverse: Any, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Unpack one row transformed through the canonical inverse batch path."""
+    result = inverse.transform_spectra(values)
+    end = int(result.offsets[1])
+    return (
+        result.mass_values[:end].cpu().numpy(),
+        result.intensities[:end].cpu().numpy(),
+    )
+
+
 class BinningAnalysis:
     """Orchestrate matching, metric records, sweeps, and views for MSI binning."""
 
@@ -37,8 +47,8 @@ class BinningAnalysis:
         inverse = inverse_binner or getattr(self.owner.context, "inverse_binner", None)
         if inverse is None: raise_validation_error("BinningAnalysis", "The active context has no inverse binner.")
         raw_x, raw_y = (np.asarray(values, dtype=float) for values in self.owner.reader.GetSpectrum(int(spectrum_id)))
-        grid_x = np.asarray(forward_binner.GetXAxis(), dtype=float); forward_y = np.asarray(forward_binner(xs=raw_x, ys=raw_y), dtype=float)
-        inverse_x, inverse_y = (np.asarray(values, dtype=float) for values in inverse(forward_y))
+        grid_x = np.asarray(forward_binner.GetXAxis(), dtype=float); forward_y = forward_binner.transform_spectrum(raw_x, raw_y).cpu().numpy()
+        inverse_x, inverse_y = _inverse_arrays(inverse, forward_y)
         return {"binned_original": (raw_x, raw_y, grid_x, forward_y), "inverse_binned": (grid_x, forward_y, inverse_x, inverse_y), "inverse_original": (raw_x, raw_y, inverse_x, inverse_y)}
 
     def forward_representation(self, spectrum_id: int, binner: Any | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -46,7 +56,7 @@ class BinningAnalysis:
         forward_binner = binner or self.owner.binner
         raw_x, raw_y = (np.asarray(values, dtype=float) for values in self.owner.reader.GetSpectrum(int(spectrum_id)))
         grid_x = np.asarray(forward_binner.GetXAxis(), dtype=float)
-        forward_y = np.asarray(forward_binner(xs=raw_x, ys=raw_y), dtype=float)
+        forward_y = forward_binner.transform_spectrum(raw_x, raw_y).cpu().numpy()
         return raw_x, raw_y, grid_x, forward_y
 
     def records(self, spectrum_ids: Optional[Sequence[int]] = None, tolerance: float = 0.01, tolerance_unit: str = "Da", matching_strategy: str = "local_mass", normalizations: Sequence[str] = ("raw", "tic", "max"), binner: Any | None = None, inverse_binner: Any | None = None) -> list[dict[str, Any]]:
@@ -84,7 +94,7 @@ class BinningAnalysis:
         """Compatibility report restricted to forward-binner comparisons."""
         finite, ratios = [], []
         for spectrum_id in self._selected(spectrum_ids):
-            raw_x, raw_y = self.owner.reader.GetSpectrum(int(spectrum_id)); values = np.asarray(self.owner.binner(xs=raw_x, ys=raw_y), dtype=float); total = float(np.sum(raw_y))
+            raw_x, raw_y = self.owner.reader.GetSpectrum(int(spectrum_id)); values = self.owner.binner.transform_spectrum(raw_x, raw_y).cpu().numpy(); total = float(np.sum(raw_y))
             finite.append(float(np.mean(np.isfinite(values)))); ratios.append(float(np.sum(values)) / total if total else np.nan)
         return {"spectrum_count": float(len(finite)), "finite_fraction": float(np.mean(finite)), "mean_tic_ratio": float(np.nanmean(ratios)), "min_tic_ratio": float(np.nanmin(ratios)), "max_tic_ratio": float(np.nanmax(ratios))}
 
@@ -94,7 +104,7 @@ class BinningAnalysis:
         inverse = getattr(self.owner.context, "inverse_binner", None)
         for spectrum_id in self._selected(spectrum_ids):
             _, _, _, forward = self.representations(int(spectrum_id))["binned_original"]
-            inverse_x, inverse_y = inverse(forward); round_trip = np.asarray(self.owner.binner(xs=inverse_x, ys=inverse_y), dtype=float); residual = forward - round_trip; total = float(np.sum(forward))
+            inverse_x, inverse_y = _inverse_arrays(inverse, forward); round_trip = self.owner.binner.transform_spectrum(inverse_x, inverse_y).cpu().numpy(); residual = forward - round_trip; total = float(np.sum(forward))
             mse_values.append(float(np.mean(residual ** 2))); mae_values.append(float(np.mean(np.abs(residual)))); ratios.append(float(np.sum(round_trip)) / total if total else np.nan)
         return {"spectrum_count": float(len(mse_values)), "mean_mse": float(np.mean(mse_values)), "mean_mae": float(np.mean(mae_values)), "mean_tic_ratio": float(np.nanmean(ratios))}
 

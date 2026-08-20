@@ -220,3 +220,54 @@ def test_fit_checkpoints_and_reloads_named_heads(
         "molecule_primary": {"target_field": "molecule"},
     }
     assert outputs["head_molecule_primary"].shape == (2, 2)
+
+
+def test_runtime_checkpoint_resumes_at_the_next_epoch(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A second trainer restores state and continues after the saved epoch."""
+    checkpoint_path = tmp_path / "runtime" / "task.pt"
+
+    def build_wrapper() -> MSIAutoEncoderWrapper:
+        wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path))
+        wrapper.context_manager.set_reader(MockMSIReader(msi_fixture_path), str(msi_fixture_path))
+        wrapper.workspace.set_active_image(str(msi_fixture_path))
+        wrapper.active_dataset = _TrainingDataset()
+        wrapper.models_manager.attach_model(build_small_autoencoder(), model_name="runtime-ae")
+        return wrapper
+
+    def config(epochs: int) -> dict:
+        return {
+            "checkpoint": {"enabled": False, "restore_best": False},
+            "runtime": {
+                "enabled": True,
+                "resume": True,
+                "checkpoint_every_epochs": 1,
+                "checkpoint_path": str(checkpoint_path),
+                "progress_path": str(tmp_path / "runtime" / "progress.yaml"),
+                "task_fingerprint": "task-fingerprint",
+            },
+            "phases": [
+                {
+                    "phase_name": "reconstruction",
+                    "epochs": epochs,
+                    "batch_size": 4,
+                    "dataloader": {"num_workers": 0, "shuffle": False},
+                    "optimizer": {"type": "AdamW", "params": {"lr": 1e-3}},
+                    "criterions": {
+                        "reconstruction": {
+                            "mse": {"target": "MSELoss", "params": {}},
+                        }
+                    },
+                }
+            ],
+        }
+
+    first_history = build_wrapper().models_manager.fit(config(1))
+    resumed_history = build_wrapper().models_manager.fit(config(2))
+
+    assert checkpoint_path.is_file()
+    assert len(first_history) == 1
+    assert len(resumed_history) == 2
+    assert resumed_history[-1]["metrics"]["epoch"] == 2

@@ -11,7 +11,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from ....visualization import VisualizationTheme, resolve_theme
-from ....visualization.spatial import plot_image_grid
+from ....visualization.spatial import plot_spatial_image
 
 
 def plot_metric_distributions(
@@ -76,6 +76,7 @@ def plot_metric_distributions(
 def plot_error_images(
     images_by_model: Mapping[str, np.ndarray],
     metric: str,
+    annotation_mask: Optional[np.ndarray] = None,
     theme: VisualizationTheme | str | None = None,
 ) -> tuple[Figure, np.ndarray]:
     """Display spatial metric images using a shared scale.
@@ -84,22 +85,55 @@ def plot_error_images(
     :type images_by_model: Mapping[str, numpy.ndarray]
     :param metric: Metric name used in panel titles.
     :type metric: str
+    :param annotation_mask: Optional spatial annotation-availability mask.
+    :type annotation_mask: numpy.ndarray | None
     :param theme: Global graphical strategy.
     :type theme: VisualizationTheme | str | None
     :return: Figure and flattened axes.
     :rtype: tuple[matplotlib.figure.Figure, numpy.ndarray]
     """
     resolved = resolve_theme(theme)
-    named = {
-        f"{model_name}: {metric}": values
-        for model_name, values in images_by_model.items()
-    }
-    return plot_image_grid(
-        named,
-        shared_scale=True,
-        cmap=resolved.error_colormap,
-        theme=resolved,
+    error_values = [
+        np.asarray(values)[np.isfinite(values)] for values in images_by_model.values()
+    ]
+    finite = np.concatenate(error_values) if error_values else np.asarray([])
+    error_range = (
+        (float(np.min(finite)), float(np.max(finite))) if finite.size else None
     )
+    rows = len(images_by_model) + int(annotation_mask is not None)
+    figure, created = plt.subplots(
+        rows,
+        1,
+        figsize=(7, 5 * rows),
+        dpi=resolved.figure_dpi,
+        squeeze=False,
+        sharex=True,
+        sharey=True,
+    )
+    axes = created.ravel()
+    row = 0
+    if annotation_mask is not None:
+        plot_spatial_image(
+            annotation_mask,
+            title="annotation availability",
+            ax=axes[row],
+            cmap="Greys",
+            value_range=(0.0, 1.0),
+            theme=resolved,
+        )
+        row += 1
+    for model_name, values in images_by_model.items():
+        plot_spatial_image(
+            values,
+            title=f"{model_name}: {metric}",
+            ax=axes[row],
+            cmap=resolved.error_colormap,
+            value_range=error_range,
+            theme=resolved,
+        )
+        row += 1
+    figure.tight_layout()
+    return figure, axes
 
 
 def plot_feature_profiles(
@@ -128,25 +162,42 @@ def plot_feature_profiles(
     :rtype: tuple[matplotlib.figure.Figure, matplotlib.axes.Axes, Mapping[str, numpy.ndarray]]
     """
     resolved = resolve_theme(theme)
+    model_count = len(profiles_by_model)
     if ax is None:
-        figure, ax = plt.subplots(
-            figsize=resolved.figure_size,
+        figure, created = plt.subplots(
+            1,
+            model_count,
+            figsize=(7 * model_count, 6),
             dpi=resolved.figure_dpi,
+            squeeze=False,
+            sharex=True,
+            sharey=True,
         )
+        axes = created.ravel()
     else:
         figure = ax.figure
+        axes = np.asarray([ax])
     selected: dict[str, np.ndarray] = {}
     for index, (model_name, profile) in enumerate(profiles_by_model.items()):
+        current_axis = axes[min(index, len(axes) - 1)]
         color = resolved.color_for_model(model_name, index)
         mean = np.asarray(profile["mean"])
-        ax.plot(
+        current_axis.plot(
             mass_axis,
             mean,
             color=color,
             linewidth=resolved.reconstruction_line_width,
             label=model_name,
         )
-        ax.fill_between(
+        current_axis.plot(
+            mass_axis,
+            profile["median"],
+            color=color,
+            linewidth=resolved.reference_line_width,
+            linestyle=resolved.baseline_line_style,
+            label="median",
+        )
+        current_axis.fill_between(
             mass_axis,
             profile["lower"],
             profile["upper"],
@@ -156,7 +207,7 @@ def plot_feature_profiles(
         count = min(top_n, len(mean))
         indices = np.argsort(mean)[-count:][::-1]
         selected[model_name] = indices
-        ax.scatter(
+        current_axis.scatter(
             mass_axis[indices],
             mean[indices],
             color=color,
@@ -164,18 +215,102 @@ def plot_feature_profiles(
             zorder=resolved.annotation_zorder,
         )
         for feature_index in indices:
-            ax.annotate(
+            current_axis.annotate(
                 f"{mass_axis[feature_index]:.3f}",
                 (mass_axis[feature_index], mean[feature_index]),
                 fontsize=resolved.tick_font_size,
                 color=color,
                 rotation=45,
             )
-    ax.set(
-        xlabel="m/z",
-        ylabel=metric,
-        title=f"Global {metric} profile with distribution interval",
+        current_axis.set(
+            xlabel="m/z",
+            ylabel=metric,
+            title=f"{model_name}: global {metric} distribution",
+        )
+        current_axis.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
+        current_axis.legend(
+            loc=resolved.legend_location,
+            frameon=resolved.legend_frame,
+        )
+    return figure, axes, selected
+
+
+def plot_ion_image_comparison(
+    input_image: np.ndarray,
+    annotation_mask: np.ndarray,
+    reconstructions: Mapping[str, np.ndarray],
+    residuals: Mapping[str, np.ndarray],
+    mz: float,
+    theme: VisualizationTheme | str | None = None,
+) -> tuple[Figure, np.ndarray]:
+    """Plot shared input/labels beside model reconstruction and residual rows."""
+    resolved = resolve_theme(theme)
+    model_names = list(reconstructions)
+    rows = max(2, len(model_names))
+    figure, axes = plt.subplots(
+        rows,
+        3,
+        figsize=(16, 5 * rows),
+        dpi=resolved.figure_dpi,
+        squeeze=False,
+        sharex=True,
+        sharey=True,
     )
-    ax.grid(resolved.grid_visible, alpha=resolved.grid_alpha)
-    ax.legend(loc=resolved.legend_location, frameon=resolved.legend_frame)
-    return figure, ax, selected
+
+    # Shared reference column
+    ## Input and labels are invariant across models and therefore rendered once.
+    intensity_arrays = [input_image, *reconstructions.values()]
+    finite_intensity = np.concatenate(
+        [np.asarray(values)[np.isfinite(values)] for values in intensity_arrays]
+    )
+    intensity_range = (
+        float(np.min(finite_intensity)),
+        float(np.max(finite_intensity)),
+    )
+    plot_spatial_image(
+        input_image,
+        title=f"input: {mz:.5f} m/z",
+        ax=axes[0, 0],
+        value_range=intensity_range,
+        theme=resolved,
+    )
+    plot_spatial_image(
+        annotation_mask,
+        title="annotation availability",
+        ax=axes[1, 0],
+        cmap="Greys",
+        value_range=(0.0, 1.0),
+        theme=resolved,
+    )
+
+    # Model-dependent columns
+    ## Residual limits are shared and symmetric so color intensity is directly
+    ## comparable between every autoencoder row.
+    finite_residual = np.concatenate(
+        [np.asarray(values)[np.isfinite(values)] for values in residuals.values()]
+    )
+    residual_limit = float(np.max(np.abs(finite_residual), initial=0.0))
+    residual_range = (-residual_limit, residual_limit)
+    for row, model_name in enumerate(model_names):
+        plot_spatial_image(
+            reconstructions[model_name],
+            title=f"{model_name}: reconstruction",
+            ax=axes[row, 1],
+            value_range=intensity_range,
+            theme=resolved,
+        )
+        plot_spatial_image(
+            residuals[model_name],
+            title=f"{model_name}: residual",
+            ax=axes[row, 2],
+            cmap=resolved.residual_colormap,
+            value_range=residual_range,
+            theme=resolved,
+        )
+    for row in range(len(model_names), rows):
+        axes[row, 1].set_visible(False)
+        axes[row, 2].set_visible(False)
+    for row in range(2, rows):
+        axes[row, 0].set_visible(False)
+    figure.tight_layout()
+    return figure, axes

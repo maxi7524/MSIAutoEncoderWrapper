@@ -183,10 +183,10 @@ class BaseAutoencoderAnalysis:
         count = len(runtime.dataset)
         sizes: Dict[str, int] = {
             "spectrum_ids": count * np.dtype(np.int64).itemsize,
-            "pixel_metrics": count * 7 * np.dtype(np.float64).itemsize,
+            "pixel_metrics": count * 7 * np.dtype(np.float32).itemsize,
             "feature_metrics": spectrum.shape[-1]
             * 3
-            * np.dtype(np.float64).itemsize,
+            * np.dtype(np.float32).itemsize,
         }
         output_names = {
             "inputs": spectrum,
@@ -401,7 +401,7 @@ class BaseAutoencoderAnalysis:
         :return: Native spatial image.
         :rtype: SpatialImage
         """
-        full = np.full(self.reader.GetNumberOfSpectra(), np.nan, dtype=np.float64)
+        full = np.full(self.reader.GetNumberOfSpectra(), np.nan, dtype=np.float32)
         full[prepared.spectrum_ids] = np.asarray(values)
         return self.reader.MapSpectrumValuesToImage(full)
 

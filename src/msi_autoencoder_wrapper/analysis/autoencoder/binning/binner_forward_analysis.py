@@ -70,11 +70,11 @@ def rescale_match(base_match, normalized_reference: np.ndarray, normalized_candi
         ``matched_reference_intensity``/``matched_candidate_intensity``.
     """
     matched_reference_intensity = (
-        normalized_reference[base_match.matched_reference_indices] if base_match.matched_reference_indices.size else np.asarray([], dtype=np.float64)
+        normalized_reference[base_match.matched_reference_indices] if base_match.matched_reference_indices.size else np.asarray([], dtype=np.float32)
     )
     matched_candidate_intensity = np.asarray(
-        [float(np.sum(normalized_candidate[group])) for group in base_match.candidate_groups], dtype=np.float64
-    ) if base_match.candidate_groups else np.asarray([], dtype=np.float64)
+        [float(np.sum(normalized_candidate[group])) for group in base_match.candidate_groups], dtype=np.float32
+    ) if base_match.candidate_groups else np.asarray([], dtype=np.float32)
     return replace(base_match, matched_reference_intensity=matched_reference_intensity, matched_candidate_intensity=matched_candidate_intensity)
 
 
@@ -133,7 +133,7 @@ def forward_sweep_records(
     records: list[dict[str, Any]] = []
     for delta_m in delta_m_grid:
         binner, forward_cache = precompute.forward(delta_m, x_min, x_max)
-        grid_mz = np.asarray(binner.GetXAxis(), dtype=np.float64)
+        grid_mz = np.asarray(binner.GetXAxis(), dtype=np.float32)
         dimension = binner.GetXAxisDepth()
         delta_m_started = time.perf_counter()
         for spectrum_id in tqdm(precompute.spectrum_ids, desc=f"Matching Δm={delta_m:g}", unit="spectrum"):
@@ -276,9 +276,9 @@ def plot_forward_tradeoff(
         lower_quantile, upper_quantile = (float(value) for value in quantiles)
         if not 0.0 <= lower_quantile <= upper_quantile <= 1.0:
             raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
-        xs = np.asarray([record[x] for record in selected], dtype=np.float64)
+        xs = np.asarray([record[x] for record in selected], dtype=np.float32)
         bounds = np.asarray([
-            np.quantile(np.asarray(record["_values"], dtype=np.float64), (lower_quantile, upper_quantile)) if record["_values"] else (np.nan, np.nan)
+            np.quantile(np.asarray(record["_values"], dtype=np.float32), (lower_quantile, upper_quantile)) if record["_values"] else (np.nan, np.nan)
             for record in selected
         ])
         color = ax.lines[-1].get_color()

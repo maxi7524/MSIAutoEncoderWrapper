@@ -55,7 +55,7 @@ def localization_profile(
     label, method, params = method_grid_point["label"], method_grid_point["method"], dict(method_grid_point.get("params", {}))
     forward_binner, inverse_binner, inverse_cache = precompute.inverse(delta_m, inverse_binner_factory(method, **params), x_min, x_max, cache_key=label)
     _, forward_cache = precompute.forward(delta_m, x_min, x_max)
-    grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float64)
+    grid_mz = np.asarray(forward_binner.GetXAxis(), dtype=np.float32)
     logger.info("Building localization profile for label=%s, comparison=%s, bin width=%s.", label, comparison, mz_bin_width)
 
     all_reference_mz: list[np.ndarray] = []
@@ -98,7 +98,7 @@ def localization_profile(
                 continue
             spectrum_matched_count = int(np.sum((spectrum_matched_mz >= start) & (spectrum_matched_mz < end)))
             per_spectrum_unmatched.append(1.0 - spectrum_matched_count / spectrum_reference_count)
-        unmatched_values = np.asarray(per_spectrum_unmatched, dtype=np.float64)
+        unmatched_values = np.asarray(per_spectrum_unmatched, dtype=np.float32)
         records.append({
             "mz_bin_start": float(start), "mz_bin_end": float(end), "mz_bin_mid": float((start + end) / 2),
             "reference_point_count": reference_count, "matched_count": matched_count,
@@ -183,10 +183,10 @@ def plot_localization_profile(
             raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
         bounds = []
         for record in profile:
-            values = np.asarray(record[f"_error_{unit}_values"], dtype=np.float64)
+            values = np.asarray(record[f"_error_{unit}_values"], dtype=np.float32)
             values = values[np.isfinite(values)]
             bounds.append(np.quantile(values, (lower_quantile, upper_quantile)) if values.size else (np.nan, np.nan))
-        resolved_bounds = np.asarray(bounds, dtype=np.float64)
+        resolved_bounds = np.asarray(bounds, dtype=np.float32)
         ax.fill_between(xs, resolved_bounds[:, 0], resolved_bounds[:, 1], color=line_color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
     ax.plot(xs, ys, marker="o", color=line_color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=line_color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label=label or f"{statistic} |error| ({unit})")
     ax.set(xlabel="m/z", ylabel=f"localization error ({unit})")
@@ -244,10 +244,10 @@ def plot_unmatched_fraction_profile(
             raise ValueError("quantiles must satisfy 0 <= lower <= upper <= 1.")
         bounds = []
         for record in profile:
-            values = np.asarray(record["_unmatched_fraction_values"], dtype=np.float64)
+            values = np.asarray(record["_unmatched_fraction_values"], dtype=np.float32)
             values = values[np.isfinite(values)]
             bounds.append(np.quantile(values, (lower_quantile, upper_quantile)) if values.size else (np.nan, np.nan))
-        resolved_bounds = np.asarray(bounds, dtype=np.float64)
+        resolved_bounds = np.asarray(bounds, dtype=np.float32)
         ax.fill_between(xs, resolved_bounds[:, 0], resolved_bounds[:, 1], color=line_color, alpha=resolved.distribution_fill_alpha, linewidth=0.0)
     ax.plot(xs, ys, marker="o", color=line_color, linewidth=resolved.line_width, markersize=resolved.marker_size, markerfacecolor=line_color, markeredgecolor=resolved.panel_color, markeredgewidth=resolved.marker_edge_width, alpha=resolved.primary_alpha, label=label or "unmatched reference fraction")
     ax.set(xlabel="m/z", ylabel="unmatched fraction")

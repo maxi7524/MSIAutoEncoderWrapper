@@ -38,7 +38,7 @@ def metric_spatial_values(
     part of the precompute's sample).
     """
     total = reader.GetNumberOfSpectra()
-    values = np.full(total, np.nan, dtype=np.float64)
+    values = np.full(total, np.nan, dtype=np.float32)
     covered = 0
     for record in records:
         if record["label"] == label and record["metric"] == metric and record["comparison"] == comparison and record["normalization"] == normalization:

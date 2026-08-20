@@ -101,3 +101,21 @@ def test_rotating_source_retries_same_operation_with_next_key() -> None:
     assert result == Path("/tmp/dataset")
     assert created == ["limited", "active"]
     assert source.exhausted_profile_count == 1
+
+
+def test_rotating_source_counts_the_final_exhausted_profile() -> None:
+    """The report includes the last profile when no fallback remains."""
+    def factory(key: str, profile: Mapping[str, str]) -> DatasetSource:
+        return ProfileSource("limited")
+
+    source = RotatingDatasetSource(
+        [{"key": "first"}, {"key": "second"}],
+        factory,
+        initial_source=ProfileSource("limited"),
+    )
+
+    with pytest.raises(DownloadLimitError):
+        source.call("download_dataset", "dataset", "/tmp/dataset")
+
+    assert source.exhausted_profile_count == 2
+    assert source.remaining_profile_count == 0

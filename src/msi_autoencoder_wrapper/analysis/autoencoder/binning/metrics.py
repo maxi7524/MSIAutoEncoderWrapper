@@ -10,7 +10,7 @@ import numpy as np
 
 def normalize_intensity(values: np.ndarray, normalization: str) -> np.ndarray:
     """Return raw, TIC-normalized, or maximum-normalized intensity values."""
-    array = np.asarray(values, dtype=np.float64)
+    array = np.asarray(values, dtype=np.float32)
     if normalization == "raw": return array
     denominator = float(np.sum(array)) if normalization == "tic" else float(np.max(array, initial=0.0)) if normalization == "max" else None
     if denominator is None: raise ValueError("normalization must be raw, tic, or max")
