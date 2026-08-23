@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from msi_autoencoder_wrapper.runtime import build_plan, load_experiment_config
-from msi_autoencoder_wrapper.runtime.cli import _has_complete_plan, main
+from msi_autoencoder_wrapper.runtime.cli import (
+    _has_complete_plan,
+    _set_experiment_directory,
+    main,
+)
 
 
 def preflight_entrypoint(task: dict) -> dict:
@@ -17,7 +22,10 @@ def preflight_entrypoint(task: dict) -> dict:
 
 def task_entrypoint(task: dict) -> dict:
     """Represent one completed lightweight experiment task."""
-    return {"task_id": task["task_id"]}
+    return {
+        "task_id": task["task_id"],
+        "model_name": task["runtime"]["model_name"],
+    }
 
 
 def probe_entrypoint(task: dict) -> dict:
@@ -104,6 +112,18 @@ def test_run_reuses_complete_materialized_plan(tmp_path: Path, monkeypatch) -> N
     )
     main(["run", str(config), "--output", str(output)])
 
+    first_status = yaml.safe_load(
+        (output / "status" / "task_000000.yaml").read_text(encoding="utf-8")
+    )
+    model_name = first_status["records"]["task_000000"]["result"]["model_name"]
+    manifest = yaml.safe_load(
+        (output / "resolved-experiment.yaml").read_text(encoding="utf-8")
+    )
+    assert model_name == (
+        "cli-smoke__cfg_"
+        f"{manifest['config_fingerprint'][:12]}__grid_0000__rep_00"
+    )
+
 
 def test_changed_yaml_invalidates_a_materialized_plan(tmp_path: Path) -> None:
     """Plan reuse requires the exact experiment configuration fingerprint."""
@@ -118,6 +138,44 @@ def test_changed_yaml_invalidates_a_materialized_plan(tmp_path: Path) -> None:
 
     changed_plan = build_plan(load_experiment_config(config))
     assert not _has_complete_plan(output, changed_plan)
+
+    with pytest.raises(FileExistsError, match="different configuration"):
+        main(["run", str(config), "--output", str(output), "--dry-run"])
+
+
+def test_default_campaign_directory_contains_configuration_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Changed settings receive a sibling campaign instead of overwriting output."""
+    config_path = tmp_path / "experiment.yaml"
+    _write_config(config_path)
+    config = load_experiment_config(config_path)
+
+    first = _set_experiment_directory(config, None)
+    config["runs"]["repetitions"] = 3
+    second = _set_experiment_directory(config, None)
+
+    assert first.parent == second.parent
+    assert first.name.startswith("cli-smoke__cfg_")
+    assert first != second
+
+
+def test_run_id_creates_an_independent_instance_of_the_same_configuration(
+    tmp_path: Path,
+) -> None:
+    """An explicit run identity isolates repeated execution without changing YAML."""
+    config_path = tmp_path / "experiment.yaml"
+    _write_config(config_path)
+    config = load_experiment_config(config_path)
+
+    default = _set_experiment_directory(config, None)
+    first = _set_experiment_directory(config, None, "trial-a")
+    second = _set_experiment_directory(config, None, "trial-b")
+
+    assert first.name == f"{default.name}__run_trial-a"
+    assert second.name == f"{default.name}__run_trial-b"
+    with pytest.raises(ValueError, match="cannot be used together"):
+        _set_experiment_directory(config, tmp_path / "output", "trial-a")
 
 
 def test_run_test_run_probes_every_grid_cell_without_training_status(tmp_path: Path) -> None:

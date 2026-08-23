@@ -139,6 +139,26 @@ def test_writer_and_reader_preserve_classes_references_and_segments(
     assert reference["database_name"] == "Core"
     assert "intensity" not in reference
 
+    index = reader.get_spectrum_annotation_index([0, 1, 2, 3])
+    assert index.identities_for_spectrum(0) == (("C6H12O6", "+H"),)
+    assert index.identities_for_spectrum(1) == (
+        ("C2H4O2", "-H"),
+        ("C6H12O6", "+H"),
+    )
+    assert index.mz_for_spectrum(1).tolist() == [59.0139, 181.0707]
+    assert index.mz_for_spectrum(2).tolist() == [181.0711]
+    assert index.identities_for_spectrum(3) == ()
+    assert reader.get_spectrum_annotation_index([0, 1, 2, 3]) is index
+
+    annotated_only = reader.get_spectrum_annotation_index(None)
+    assert annotated_only.spectrum_ids.tolist() == [0, 1, 2]
+    assert annotated_only.identities_for_spectrum(3) == ()
+
+    strict_index = reader.get_spectrum_annotation_index(
+        [0, 1, 2, 3], filters={"max_fdr": 0.05}
+    )
+    assert strict_index.identities_for_spectrum(2) == ()
+
     with sqlite3.connect(store) as connection:
         tables = {
             row[0]

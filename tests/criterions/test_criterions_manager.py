@@ -10,6 +10,10 @@ from msi_autoencoder_wrapper.training.criterions.criterions_manager import (
 )
 from msi_autoencoder_wrapper.training.criterions.autoencoder.contrastive.infoNCE_loss import (
     MSIInfoNCELoss,
+    ProtectedIntervalIndex,
+)
+from msi_autoencoder_wrapper.training.criterions.autoencoder.regularization.contractive_loss import (
+    MSIContractiveLoss,
 )
 from msi_autoencoder_wrapper.utils.exceptions import IncompatibleInterfaceError
 
@@ -19,11 +23,19 @@ def test_criterion_discovery_returns_uniform_component_information() -> None:
     CriterionsManager.discover_criterions()
     available = CriterionsManager.get_available_criterions("autoencoder")
 
-    assert set(available) == {"reconstruction", "contrastive", "head"}
+    assert set(available) == {
+        "reconstruction",
+        "contrastive",
+        "head",
+        "regularization",
+    }
     assert "MSELoss" in available["reconstruction"]
     assert "SobolevLoss" in available["reconstruction"]
     assert "InfoNCELoss" in available["contrastive"]
+    assert "ContractiveLoss" in available["regularization"]
     assert "MultiLabelBCELoss" in available["head"]
+    assert "ClassBalancedMultiLabelBCELoss" in available["head"]
+    assert "NNPUMultiLabelLoss" in available["head"]
     assert "MaskedCrossEntropyLoss" in available["head"]
     assert set(available["reconstruction"]["MSELoss"]) == {
         "docstring",
@@ -169,3 +181,74 @@ def test_info_nce_builds_peak_bank_and_routes_augmented_projection() -> None:
     assert augmented_batch[1].shape == (8, 16)
     assert torch.isfinite(value)
     assert projection.grad is not None
+
+
+@pytest.mark.parametrize(
+    "calculation_method",
+    ["exact_autograd_jacobian", "approximate_hutchinson_vjp"],
+)
+def test_contractive_loss_matches_linear_encoder_jacobian(
+    calculation_method: str,
+) -> None:
+    """Exact and one-dimensional Hutchinson methods recover the analytic norm."""
+    encoder = torch.nn.Linear(3, 1, bias=False)
+    encoder.weight.data.copy_(torch.tensor([[1.0, -2.0, 0.5]]))
+    spectra = torch.randn(4, 3)
+    batch = (torch.arange(4), spectra)
+    criterion = MSIContractiveLoss(
+        calculation_method=calculation_method,
+        num_probes=5,
+    )
+    batch = criterion.on_batch_start(batch, {})
+    latent = encoder(batch[1])  # (B=4, D=1)
+
+    loss = criterion({"latent_space": latent}, batch)  # ()
+    loss.backward()
+
+    assert loss.item() == pytest.approx(5.25)
+    assert encoder.weight.grad is not None
+    assert torch.isfinite(encoder.weight.grad).all()
+
+
+@pytest.mark.parametrize(
+    ("method", "protected"),
+    [
+        ("permutation_random", None),
+        (
+            "permutation_label_invariant",
+            ProtectedIntervalIndex(
+                spectrum_ids=torch.tensor([7]).numpy(),
+                offsets=torch.tensor([0, 1]).numpy(),
+                left=torch.tensor([0], dtype=torch.int32).numpy(),
+                right=torch.tensor([3], dtype=torch.int32).numpy(),
+            ),
+        ),
+    ],
+)
+def test_peak_permutation_preserves_tic_and_spectrum_specific_annotations(
+    method: str,
+    protected: ProtectedIntervalIndex | None,
+) -> None:
+    """Peak permutation preserves TIC and never modifies protected intervals."""
+    criterion = MSIInfoNCELoss(
+        peak_selection_method=method,
+        permuted_peaks_per_view=2,
+        preserve_input_normalization=True,
+    )
+    spectrum = torch.tensor(
+        [[1.0, 3.0, 2.0, 0.0, 4.0, 1.0, 0.0, 2.0, 2.0]]
+    )  # (B=1, M=9)
+    batch = (torch.tensor([7]), spectrum)
+    cache = {
+        criterion._cache_key: {
+            "catalogue": ((0, 3), (3, 6), (6, 9)),
+            "protected": protected,
+        }
+    }
+
+    augmented_batch = criterion.on_batch_start(batch, cache)
+    augmented = augmented_batch[1][1:]  # (B=1, M=9)
+
+    assert augmented.sum().item() == pytest.approx(spectrum.sum().item())
+    if protected is not None:
+        assert torch.equal(augmented[0, :3], spectrum[0, :3])

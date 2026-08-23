@@ -95,7 +95,11 @@ def run_wrapper_training(task: dict[str, Any]) -> dict[str, Any]:
     set_execution_seed(training["seed"])
     # Training and persistence
     history = wrapper.models_manager.fit(training)
-    model_name = task["parameters"].get("model_name") or task["task_id"]
+    model_name = (
+        task["parameters"].get("model_name")
+        or task.get("runtime", {}).get("model_name")
+        or task["task_id"]
+    )
     model_path = wrapper.workspace.save_model(model_name=model_name, history=history)
     return {"model_path": str(Path(model_path).resolve()), "epochs": len(history)}
 

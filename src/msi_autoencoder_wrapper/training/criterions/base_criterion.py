@@ -28,6 +28,8 @@ class MSIBaseCriterion(nn.Module, ConfigurableComponent, ABC):
         super().__init__()
         self._config: Dict[str, Any] = {}
 
+    requires_input_grad = False
+
     def on_phase_start(
         self,
         model: nn.Module,
@@ -80,4 +82,3 @@ class MSIBaseCriterion(nn.Module, ConfigurableComponent, ABC):
         :rtype: torch.Tensor
         """
         raise NotImplementedError
-

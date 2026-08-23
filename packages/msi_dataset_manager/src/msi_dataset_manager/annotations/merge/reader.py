@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import math
 from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 from ...utils.exceptions import raise_validation_error
 from ..blobs import decode_pixel_indices
+from ..index import SpectrumAnnotationIndex, build_annotation_index
 
 
 class MergedAnnotationReader:
@@ -33,6 +35,10 @@ class MergedAnnotationReader:
         self.default_filters = dict(default_filters or {})
         self.active_context: Any = None
         self._pixel_to_classes: Optional[Dict[int, List[int]]] = None
+        self._spectrum_annotation_indices: Dict[
+            tuple[tuple[int, ...] | None, tuple[tuple[str, str], ...]],
+            SpectrumAnnotationIndex,
+        ] = {}
         self._validate_schema()
         self._config = {
             "type": "merge",
@@ -128,6 +134,112 @@ class MergedAnnotationReader:
             )
             results.append(record)
         return results
+
+    def get_spectrum_annotation_index(
+        self,
+        spectrum_ids: Any,
+        filters: Optional[Mapping[str, Any]] = None,
+    ) -> SpectrumAnnotationIndex:
+        """Return source-specific molecular m/z evidence in one bulk read.
+
+        Every global table is scanned once and every dataset-specific reference
+        table is queried once. Pixel-to-dataset routing uses the compressed
+        ``pixel_segments`` ranges; no per-spectrum SQLite query is executed.
+
+        :param spectrum_ids: Merged spectrum identifiers to represent. ``None``
+            stores annotated rows only, while missing lookups remain empty.
+        :type spectrum_ids: Iterable[int] | None
+        :param filters: Optional class and source-reference filters.
+        :type filters: Mapping[str, Any] | None
+        :return: Cached CSR spectrum annotation index.
+        :rtype: SpectrumAnnotationIndex
+        """
+        selected = (
+            None
+            if spectrum_ids is None
+            else tuple(sorted({int(value) for value in spectrum_ids}))
+        )
+        effective = {**self.default_filters, **dict(filters or {})}
+        filter_key = tuple(sorted((str(key), repr(value)) for key, value in effective.items()))
+        cache_key = (selected, filter_key)
+        cached = self._spectrum_annotation_indices.get(cache_key)
+        if cached is not None:
+            return cached
+
+        selected_set = set(selected) if selected is not None else None
+        entries: Dict[int, List[tuple[tuple[str, str], float]]] = {}
+        with self._connection() as connection:
+            segments = connection.execute(
+                """
+                SELECT pixel_segments.*, datasets_metadata.reference_table_name
+                FROM pixel_segments
+                JOIN datasets_metadata USING (dataset_index)
+                ORDER BY merged_pixel_start
+                """
+            ).fetchall()
+            class_rows = connection.execute(
+                """
+                SELECT merged_annotation_id, formula, adduct, charge,
+                       pixel_indices_blob
+                FROM merged_annotations
+                ORDER BY merged_annotation_id
+                """
+            ).fetchall()
+
+            # Source-reference preload
+            ## One scan per source table replaces one query per spectrum.
+            references: Dict[tuple[int, int], list[float]] = {}
+            loaded_datasets: set[int] = set()
+            for segment in segments:
+                dataset_index = int(segment["dataset_index"])
+                table_name = str(segment["reference_table_name"])
+                if dataset_index in loaded_datasets:
+                    continue
+                loaded_datasets.add(dataset_index)
+                rows = connection.execute(
+                    f"SELECT * FROM {table_name} ORDER BY merged_annotation_id, reference_annotation_id"
+                ).fetchall()
+                for row in rows:
+                    record = _decode_reference(row)
+                    if not _matches_reference_filters(record, effective):
+                        continue
+                    mz = record.get("mz")
+                    resolved_mz = (
+                        float(mz)
+                        if mz is not None and math.isfinite(float(mz))
+                        else float("nan")
+                    )
+                    references.setdefault(
+                        (dataset_index, int(row["merged_annotation_id"])), []
+                    ).append(resolved_mz)
+
+        starts = [int(row["merged_pixel_start"]) for row in segments]
+        for row in class_rows:
+            record = _decode_merged_annotation(row)
+            if not _matches_class_filters(record, effective):
+                continue
+            class_id = int(row["merged_annotation_id"])
+            identity = (str(row["formula"]), str(row["adduct"]))
+            for pixel in record["spectrum_ids"]:
+                if selected_set is not None and pixel not in selected_set:
+                    continue
+                position = bisect_right(starts, pixel) - 1
+                segment = segments[position] if position >= 0 else None
+                if segment is None or pixel >= (
+                    int(segment["merged_pixel_start"]) + int(segment["segment_length"])
+                ):
+                    continue
+                mz_values = references.get(
+                    (int(segment["dataset_index"]), class_id),
+                    (),
+                )
+                for mz in dict.fromkeys(mz_values):
+                    entries.setdefault(pixel, []).append((identity, mz))
+
+        represented_ids = list(entries) if selected is None else list(selected)
+        index = build_annotation_index(represented_ids, entries)
+        self._spectrum_annotation_indices[cache_key] = index
+        return index
 
     def get_spectrum_metadata(self, spectrum_id: int) -> Dict[str, Any]:
         """Return source dataset metadata and source index for one merged pixel."""

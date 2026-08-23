@@ -454,6 +454,11 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                         composite_loss=composite_loss,
                         compute_device=compute_device,
                         transient_cache=transient_cache,
+                        max_batches=(
+                            processed_batches_limit
+                            if training_config.get("test_mode", False)
+                            else None
+                        ),
                     )
                     mean_metrics.update(
                         {f"validation_{name}": value for name, value in validation_metrics.items()}
@@ -726,12 +731,30 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         composite_loss: nn.Module,
         compute_device: torch.device,
         transient_cache: Dict[str, Any],
+        max_batches: int | None = None,
     ) -> Dict[str, float]:
-        """Evaluate one dataset split without gradients or state updates."""
+        """Evaluate one dataset split without parameter updates.
+
+        :param max_batches: Optional validation-batch bound used by test mode.
+        :type max_batches: int | None
+        :return: Mean criterion values over the processed validation batches.
+        :rtype: Dict[str, float]
+        """
         model.eval()
         accumulated: Dict[str, float] = {}
-        with torch.inference_mode():
-            for batch in dataloader:
+        processed_batches = 0
+        evaluation_context = (
+            torch.enable_grad()
+            if any(
+                loss.requires_input_grad
+                for loss in composite_loss.loss_functions.values()
+            )
+            else torch.inference_mode()
+        )
+        with evaluation_context:
+            for batch_index, batch in enumerate(dataloader):
+                if max_batches is not None and batch_index >= max_batches:
+                    break
                 if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
                     if preprocessor is None:
                         raise_validation_error("Trainer", "Raw batches require preprocessing.")
@@ -745,7 +768,9 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 _, logs = composite_loss(model_outputs=outputs, batch_data=batch)
                 for name, value in logs.items():
                     accumulated[name] = accumulated.get(name, 0.0) + value
-        return {name: value / len(dataloader) for name, value in accumulated.items()}
+                processed_batches += 1
+        denominator = max(processed_batches, 1)
+        return {name: value / denominator for name, value in accumulated.items()}
 
     @classmethod
     def _ensure_finite_tensors(cls, value: Any, location: str) -> None:

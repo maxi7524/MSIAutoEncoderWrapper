@@ -18,9 +18,21 @@ from .backends import (
     write_sbatch_script,
 )
 from .configuration import load_experiment_config
+from .naming import (
+    campaign_identifier,
+    campaign_instance_identifier,
+    run_identifier,
+    scoped_directory,
+)
 from .workflows import execute_task
 from .output import is_completed_task, render_reports, task_fingerprint, update_manifest
-from .planning import ExperimentPlan, build_plan, materialize_plan, resolve_plan
+from .planning import (
+    ExperimentPlan,
+    build_plan,
+    materialize_plan,
+    resolve_plan,
+)
+from .planning.plan import configuration_fingerprint
 from .staging import cleanup_staging_directory, copy_verified, restore_results, stage_plan
 from .planning import validate_preflight
 from .progress import create_terminal_progress, format_duration, update_progress
@@ -40,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("config", type=Path)
         if name in {"plan", "run"}:
             command.add_argument("--output", type=Path)
+            command.add_argument("--run-id")
         if name == "run":
             command.add_argument("--dry-run", action="store_true")
             command.add_argument("--test-run", action="store_true")
@@ -60,21 +73,37 @@ def build_parser() -> argparse.ArgumentParser:
 # Section: Campaign directory
 # --------------------------------------------------
 
-def _set_experiment_directory(config: dict, override: Path | None) -> Path:
+def _set_experiment_directory(
+    config: dict,
+    override: Path | None,
+    run_id: str | None = None,
+) -> Path:
     """Return the persistent working directory for one experiment campaign.
 
     :param config: Loaded experiment configuration.
     :type config: dict
     :param override: Explicit CLI output directory, if supplied.
     :type override: pathlib.Path | None
+    :param run_id: Optional independent instance identifier.
+    :type run_id: str | None
     :return: Absolute directory containing the materialized plan and its outputs.
     :rtype: pathlib.Path
     """
+    if override is not None and run_id is not None:
+        raise ValueError("--output and --run-id cannot be used together.")
     if override is not None:
         return override.resolve()
+    campaign_id = campaign_instance_identifier(
+        campaign_identifier(
+            config["experiment"]["name"],
+            configuration_fingerprint(config),
+        ),
+        run_id,
+    )
     configured = config.get("execution", {}).get("work_directory")
     if configured:
-        return (Path(config["_config_directory"]) / configured).resolve()
+        base = (Path(config["_config_directory"]) / configured).resolve()
+        return scoped_directory(base, campaign_id)
     workspace = (
         config.get("task", {})
         .get("parameters", {})
@@ -86,9 +115,9 @@ def _set_experiment_directory(config: dict, override: Path | None) -> Path:
             Path(workspace)
             / "configs"
             / "execution"
-            / config["experiment"]["name"]
+            / campaign_id
         ).resolve()
-    return (Path.cwd() / "workspace" / "executions" / config["experiment"]["name"]).resolve()
+    return (Path.cwd() / "workspace" / "executions" / campaign_id).resolve()
 
 
 def _load_task(path: Path) -> dict:
@@ -119,11 +148,26 @@ def _has_complete_plan(directory: Path, plan: ExperimentPlan) -> bool:
     materialized_ids = {task.get("task_id") for task in manifest.get("tasks", [])}
     return (
         manifest.get("runtime_schema_version") == 1
-        and manifest.get("config_path") == plan.config_path
         and manifest.get("config_fingerprint") == plan.config_fingerprint
         and materialized_ids == expected_ids
         and all((directory / "tasks" / f"{task_id}.yaml").is_file() for task_id in expected_ids)
     )
+
+
+def _runtime_campaign_identifier(runtime_root: Path) -> str:
+    """Resolve the campaign identity independently of an output path override."""
+    manifest_path = runtime_root / "resolved-experiment.yaml"
+    if not manifest_path.is_file():
+        return runtime_root.name
+    manifest = _load_task(manifest_path)
+    experiment_name = manifest.get("experiment_name")
+    fingerprint = manifest.get("config_fingerprint")
+    if isinstance(experiment_name, str) and isinstance(fingerprint, str):
+        configured_campaign = campaign_identifier(experiment_name, fingerprint)
+        if runtime_root.name.startswith(f"{configured_campaign}__run_"):
+            return runtime_root.name
+        return configured_campaign
+    return runtime_root.name
 
 # --------------------------------------------------
 # Section: Execute plan element
@@ -136,9 +180,10 @@ def _execute_task_file(path: Path, *, entrypoint: str | None = None, status_dire
     if entrypoint is not None:
         task["entrypoint"] = entrypoint
     runtime_root = path.parent.parent
+    model_name = run_identifier(_runtime_campaign_identifier(runtime_root), task)
     task["runtime"] = {
         "task_fingerprint": materialized_fingerprint,
-        "model_name": task["task_id"],
+        "model_name": model_name,
         "task_label": _task_label(task),
         "checkpoint_path": str(runtime_root / "checkpoints" / f"{task['task_id']}.pt"),
         "progress_path": str(runtime_root / status_directory / f"{task['task_id']}-progress.yaml"),
@@ -182,7 +227,17 @@ def _prepare_campaign(config: dict, args: argparse.Namespace) -> tuple[Experimen
     for message in messages:
         logger.info("%s", message)
     plan = build_plan(config)
-    directory = _set_experiment_directory(config, args.output)
+    directory = _set_experiment_directory(config, args.output, args.run_id)
+    manifest_path = directory / "resolved-experiment.yaml"
+    if manifest_path.is_file() and not _has_compatible_manifest(directory, plan):
+        raise FileExistsError(
+            "Experiment output contains a different configuration: "
+            f"{directory}. Choose another --output directory."
+        )
+    if directory.exists() and any(directory.iterdir()) and not manifest_path.is_file():
+        raise FileExistsError(
+            f"Experiment output is non-empty and has no runtime manifest: {directory}"
+        )
     if args.command == "run" and _has_complete_plan(directory, plan):
         logger.info("Reusing %s materialized tasks from %s.", len(plan.tasks), directory)
     else:
@@ -190,6 +245,19 @@ def _prepare_campaign(config: dict, args: argparse.Namespace) -> tuple[Experimen
         materialize_plan(plan, directory)
         logger.info("Materialized %s tasks in %s.", len(plan.tasks), directory)
     return plan, directory
+
+
+def _has_compatible_manifest(directory: Path, plan: ExperimentPlan) -> bool:
+    """Return whether an existing directory belongs to the same campaign."""
+    manifest_path = directory / "resolved-experiment.yaml"
+    if not manifest_path.is_file():
+        return False
+    manifest = _load_task(manifest_path)
+    return (
+        manifest.get("runtime_schema_version") == 1
+        and manifest.get("config_fingerprint") == plan.config_fingerprint
+        and manifest.get("experiment_name") == plan.experiment_name
+    )
 
 
 def _run_test_tasks(directory: Path, plan: ExperimentPlan, config: dict) -> None:
@@ -585,7 +653,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.command == "validate":
         _run_validate_command(config)
         return
-
     # Campaign commands: `plan` and `run`
     _run_campaign_command(config, args)
 

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from msi_autoencoder_wrapper.runtime import build_plan, load_experiment_config
 from msi_autoencoder_wrapper.runtime.cli import _set_experiment_directory
+from msi_autoencoder_wrapper.runtime.naming import campaign_identifier
+from msi_autoencoder_wrapper.runtime.planning.plan import configuration_fingerprint
 
 
 def test_architecture_binning_campaign_is_paired_across_five_seeds() -> None:
@@ -15,6 +17,7 @@ def test_architecture_binning_campaign_is_paired_across_five_seeds() -> None:
         repository
         / "assets"
         / "experiments"
+        / "08_26"
         / "13_08_26_architecture_and_binning"
         / "architecture_binning_experiment.yaml"
     )
@@ -26,7 +29,13 @@ def test_architecture_binning_campaign_is_paired_across_five_seeds() -> None:
     assert factory_parameters["project_path"] == str(workspace.resolve())
     assert factory_parameters["project_path_anchor"] == "repository"
     assert _set_experiment_directory(config, None) == (
-        workspace / "configs" / "execution" / "kidney-architecture-binning"
+        workspace
+        / "configs"
+        / "execution"
+        / campaign_identifier(
+            config["experiment"]["name"],
+            configuration_fingerprint(config),
+        )
     ).resolve()
     assert len(plan.tasks) == 60
     assert len(
