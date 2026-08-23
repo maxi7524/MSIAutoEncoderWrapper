@@ -13,6 +13,10 @@ import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
+from ....utils.hidden_normalization import (
+    build_hidden_normalization,
+    resolve_hidden_normalization,
+)
 from .base_encoder import MSIBaseEncoder
 
 
@@ -27,12 +31,22 @@ class VariationalLinearEncoder(MSIBaseEncoder):
         input_dim: int,
         latent_dim: int,
         hidden_dims: Sequence[int] = (256, 128),
+        normalization: str | None = None,
     ) -> None:
         super().__init__()
         dimensions = [int(input_dim), *(int(value) for value in hidden_dims)]
+        resolved_normalization = resolve_hidden_normalization(
+            normalization,
+            None,
+            context_name="VariationalLinearEncoder",
+        )
         layers = []
         for source, target in zip(dimensions, dimensions[1:]):
-            layers.extend((nn.Linear(source, target), nn.BatchNorm1d(target), nn.ReLU()))
+            layers.append(nn.Linear(source, target))
+            normalizer = build_hidden_normalization(resolved_normalization, target)
+            if normalizer is not None:
+                layers.append(normalizer)
+            layers.append(nn.ReLU())
         self.backbone = nn.Sequential(*layers)
         last_dim = dimensions[-1]
         self.mean = nn.Linear(last_dim, int(latent_dim))
@@ -41,6 +55,7 @@ class VariationalLinearEncoder(MSIBaseEncoder):
             "input_dim": int(input_dim),
             "latent_dim": int(latent_dim),
             "hidden_dims": list(hidden_dims),
+            "normalization": resolved_normalization,
         }
 
     def forward(self, spectra: torch.Tensor) -> Dict[str, torch.Tensor]:

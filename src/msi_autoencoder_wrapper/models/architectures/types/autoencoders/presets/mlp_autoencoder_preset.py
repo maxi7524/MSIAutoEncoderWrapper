@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, TYPE_CHECKING
 
 from ....architectures_manager import ArchitecturesManager
+from ....utils.hidden_normalization import resolve_hidden_normalization
 from ......utils.exceptions import raise_validation_error
 
 if TYPE_CHECKING:
@@ -18,7 +19,8 @@ def get_mlp_autoencoder_preset(
     latent_dim: int,
     encoder_hidden_dims: Sequence[int] = (512,),
     decoder_hidden_dims: Sequence[int] | None = None,
-    batch_normalization: bool = True,
+    batch_normalization: bool | None = None,
+    normalization: str | None = None,
     output_activation: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -37,8 +39,12 @@ def get_mlp_autoencoder_preset(
     :param decoder_hidden_dims: Ordered decoder hidden-layer widths. By default,
         use the reversed encoder dimensions.
     :type decoder_hidden_dims: Sequence[int] | None
-    :param batch_normalization: Apply BatchNorm before hidden ReLU activations.
-    :type batch_normalization: bool
+    :param batch_normalization: Deprecated compatibility flag. Use
+        ``normalization`` in new configurations.
+    :type batch_normalization: bool | None
+    :param normalization: Hidden-feature normalization: ``layer`` (default),
+        ``batch``, or ``none``.
+    :type normalization: str | None
     :param output_activation: Decoder output activation; defaults to Softplus.
     :type output_activation: Mapping[str, Any] | None
     :return: Architecture-manager component configuration.
@@ -55,6 +61,11 @@ def get_mlp_autoencoder_preset(
         if decoder_hidden_dims is None
         else _validate_hidden_dims("decoder_hidden_dims", decoder_hidden_dims)
     )
+    resolved_normalization = resolve_hidden_normalization(
+        normalization,
+        batch_normalization,
+        context_name="MLPAutoencoderPreset",
+    )
 
     input_dim = int(active_context.binner.GetXAxisDepth())
     activation = dict(
@@ -68,7 +79,7 @@ def get_mlp_autoencoder_preset(
                 "input_dim": input_dim,
                 "latent_dim": latent_dim,
                 "hidden_dims": resolved_encoder_dims,
-                "batch_normalization": batch_normalization,
+                "normalization": resolved_normalization,
             },
         },
         "decoder": {
@@ -78,7 +89,7 @@ def get_mlp_autoencoder_preset(
                 "output_dim": input_dim,
                 "hidden_dims": resolved_decoder_dims,
                 "output_activation": activation,
-                "batch_normalization": batch_normalization,
+                "normalization": resolved_normalization,
             },
         },
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn as nn
 
 from msi_autoencoder_wrapper.models.architectures.architectures_manager import (
     ArchitecturesManager,
@@ -47,6 +48,8 @@ def test_variational_components_round_trip_through_recursive_model_config() -> N
     assert outputs["latent_mean"].shape == (4, 3)
     assert outputs["latent_log_variance"].shape == (4, 3)
     assert outputs["reconstruction"].shape == (4, 16)
+    assert any(isinstance(layer, nn.LayerNorm) for layer in model.encoder.modules())
+    assert not any(isinstance(layer, nn.BatchNorm1d) for layer in model.encoder.modules())
     assert model_type == "autoencoder"
     assert name == "vae"
     assert set(restored(torch.rand(2, 16))) >= {
