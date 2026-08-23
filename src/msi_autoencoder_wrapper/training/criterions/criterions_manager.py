@@ -20,6 +20,7 @@ from .autoencoder_base_criterions import (
     MSIContrastiveCriterion,
     MSIHeadCriterion,
     MSIReconstructionCriterion,
+    MSIRegularizationCriterion,
 )
 
 # Logger initialization
@@ -88,6 +89,7 @@ class CriterionsManager:
         "reconstruction": MSIReconstructionCriterion,
         "contrastive": MSIContrastiveCriterion,
         "head": MSIHeadCriterion,
+        "regularization": MSIRegularizationCriterion,
     }
 
     # --------------------------------------------------

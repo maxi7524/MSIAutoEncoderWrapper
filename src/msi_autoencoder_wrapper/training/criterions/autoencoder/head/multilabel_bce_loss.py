@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from ...autoencoder_base_criterions import MSIHeadCriterion
 from ...criterions_manager import CriterionsManager
-from .....metrics import binary_cross_entropy
 from .....utils.exceptions import raise_validation_error
 
 
@@ -50,8 +50,13 @@ class MSIMultiLabelBCELoss(MSIHeadCriterion):
     ) -> torch.Tensor:
         """Return BCE loss for the configured head and target field."""
         del kwargs
-        logits, targets, mask = self.head_batch(model_outputs, batch_data)
+        logits, targets, mask = self.multilabel_batch(model_outputs, batch_data)
         if not bool(mask.any()):
             return logits.sum() * 0.0
-        values = binary_cross_entropy(logits[mask], targets[mask])
-        return values.sum() if self.reduction == "sum" else values.mean()
+        values = F.binary_cross_entropy_with_logits(
+            logits,
+            targets,
+            reduction="none",
+        )
+        selected = values[mask]
+        return selected.sum() if self.reduction == "sum" else selected.mean()

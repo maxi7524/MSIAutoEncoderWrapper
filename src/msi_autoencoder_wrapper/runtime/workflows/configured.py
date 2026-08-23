@@ -68,8 +68,41 @@ def _get_or_create_reader(
     )
 
 
+def _attach_annotation_reader(
+    wrapper: MSIAutoEncoderWrapper,
+    *,
+    image_path: Path,
+    definition: Any,
+) -> None:
+    """Attach the declared annotation source to the planning context.
+
+    :param wrapper: Planning wrapper owning the active image context.
+    :type wrapper: MSIAutoEncoderWrapper
+    :param image_path: Resolved source image path.
+    :type image_path: pathlib.Path
+    :param definition: ``auto`` discovery or an explicit reader descriptor.
+    :type definition: Any
+    """
+    if not isinstance(definition, dict):
+        return
+    strategy = definition.get("strategy", "auto")
+    parameters = deepcopy(definition.get("parameters", {}))
+    if strategy == "auto":
+        wrapper.context_manager.set_annotation_reader(
+            None,
+            img_name_or_path=str(image_path),
+            **parameters,
+        )
+        return
+    wrapper.context_manager.set_annotation_reader(
+        strategy,
+        img_name_or_path=str(image_path),
+        **parameters,
+    )
+
+
 def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoderWrapper:
-    """Build one unannotated autoencoder pipeline from portable parameters.
+    """Build one autoencoder pipeline with optional predictive components.
 
     :param parameters: Workspace, image, preprocessing, architecture, and dataset
         definitions supplied by the runtime configuration.
@@ -108,7 +141,6 @@ def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoder
     split_manifest = _read_yaml(Path(resolved["split_manifest"]))
     dataset = parameters["dataset"]
     dataset_parameters = deepcopy(dataset["parameters"])
-    dataset_parameters["target_specs"] = {}
     dataset_parameters["split"] = {
         "strategy": "predefined",
         "seed": int(split_manifest["seed"]),
@@ -162,8 +194,9 @@ def resolve_single_image_campaign(
         factory_parameters = parameters["factory_parameters"]
         binning = factory_parameters["binning"]
         variant = factory_parameters["variant"]
+        predictive = factory_parameters.get("predictive", {})
         binning_key = _freeze(binning)
-        model_key = (binning_key, _freeze(variant))
+        model_key = (binning_key, _freeze(variant), _freeze(predictive))
 
         if model_key not in model_paths:
             wrapper, dataset = _build_planning_pipeline(
@@ -176,17 +209,18 @@ def resolve_single_image_campaign(
                 wrapper.active_context,
                 **deepcopy(variant.get("parameters", {})),
             )
+            component_layout, model_parameters = _attach_predictive_components(
+                component_layout,
+                predictive,
+                dataset,
+            )
             model_config = {
                 "model": {
                     "name": variant["name"],
                     "type": "autoencoder",
-                    "parameters": {},
+                    "parameters": model_parameters,
                     "components": {
-                        category: {
-                            "type": descriptor["strategy"],
-                            "version": 1,
-                            "parameters": deepcopy(descriptor.get("params", {})),
-                        }
+                        category: _portable_component_descriptor(descriptor)
                         for category, descriptor in component_layout.items()
                     },
                 }
@@ -279,6 +313,11 @@ def _build_planning_pipeline(
         image_path=image_path,
         definition=parameters.get("reader", {}),
     )
+    _attach_annotation_reader(
+        wrapper,
+        image_path=image_path,
+        definition=parameters.get("annotations"),
+    )
     binning = parameters.get("binning", {})
     wrapper.context_manager.load_binner(
         {
@@ -293,7 +332,6 @@ def _build_planning_pipeline(
     ## Dataset construction has no model and initializes no neural-network weights
     dataset_definition = parameters.get("dataset", {})
     dataset_parameters = deepcopy(dataset_definition.get("parameters", {}))
-    dataset_parameters["target_specs"] = {}
     dataset_parameters["split"]["seed"] = split_seed
     dataset = wrapper.models_manager.load_dataset_config(
         {
@@ -302,6 +340,73 @@ def _build_planning_pipeline(
         }
     )
     return wrapper, dataset
+
+
+def _attach_predictive_components(
+    component_layout: dict[str, Any],
+    predictive: Any,
+    dataset: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve projector and head dimensions against dataset target schemas.
+
+    :param component_layout: Architecture preset component descriptors.
+    :type component_layout: dict[str, Any]
+    :param predictive: Optional predictive component configuration.
+    :type predictive: Any
+    :param dataset: Planning dataset exposing target schemas.
+    :type dataset: Any
+    :return: Extended components and model-level ``head_specs`` parameters.
+    :rtype: tuple[dict[str, Any], dict[str, Any]]
+    """
+    layout = deepcopy(component_layout)
+    if not isinstance(predictive, dict) or not predictive:
+        return layout, {}
+    projector = predictive.get("projector")
+    if isinstance(projector, dict):
+        layout["projector"] = {
+            "strategy": projector["strategy"],
+            "params": deepcopy(projector.get("parameters", {})),
+        }
+    schemas = dataset.get_target_schemas()
+    head_specs: dict[str, dict[str, str]] = {}
+    heads: dict[str, dict[str, Any]] = {}
+    for head_id, definition in predictive.get("heads", {}).items():
+        target_field = str(definition["target_field"])
+        if target_field not in schemas:
+            raise ValueError(
+                f"Predictive head '{head_id}' references unknown target '{target_field}'."
+            )
+        parameters = deepcopy(definition.get("parameters", {}))
+        if parameters.get("output_dim") == "auto_from_target":
+            parameters["output_dim"] = schemas[target_field].class_count
+        heads[str(head_id)] = {
+            "strategy": definition["strategy"],
+            "params": parameters,
+        }
+        head_specs[str(head_id)] = {"target_field": target_field}
+    if heads:
+        layout["heads"] = heads
+    return layout, {"head_specs": head_specs} if head_specs else {}
+
+
+def _portable_component_descriptor(descriptor: dict[str, Any]) -> dict[str, Any]:
+    """Convert one architecture component tree to its portable representation.
+
+    :param descriptor: Runtime component descriptor or nested named components.
+    :type descriptor: dict[str, Any]
+    :return: Portable descriptor accepted by :class:`ModelLoader`.
+    :rtype: dict[str, Any]
+    """
+    if "strategy" in descriptor:
+        return {
+            "type": descriptor["strategy"],
+            "version": 1,
+            "parameters": deepcopy(descriptor.get("params", {})),
+        }
+    return {
+        child_name: _portable_component_descriptor(child_descriptor)
+        for child_name, child_descriptor in descriptor.items()
+    }
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

@@ -89,7 +89,7 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
     assert targets["condition"].item() == 0
     assert torch.equal(targets["molecule"], torch.tensor([0.0, 1.0]))
     assert masks["condition"].item()
-    assert masks["molecule"].item()
+    assert torch.equal(masks["molecule"], torch.tensor([True, True]))
 
 
 def test_pixel_dataset_masks_missing_metadata_targets() -> None:

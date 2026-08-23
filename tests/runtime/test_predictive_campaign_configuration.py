@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from msi_autoencoder_wrapper.data import TargetSchema
 from msi_autoencoder_wrapper.runtime import build_plan, load_experiment_config
+from msi_autoencoder_wrapper.runtime.workflows.configured import (
+    _attach_predictive_components,
+    _portable_component_descriptor,
+)
 
 
 def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
-    """Six joint objectives run with paired splits and five independent seeds."""
+    """Seven joint objectives run with paired splits and five independent seeds."""
     repository = Path(__file__).resolve().parents[2]
     config = load_experiment_config(
         repository
@@ -21,7 +26,7 @@ def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
 
     plan = build_plan(config)
 
-    assert len(plan.tasks) == 30
+    assert len(plan.tasks) == 35
     assert {
         task.parameters["factory_parameters"]["variant"]["name"]
         for task in plan.tasks
@@ -56,4 +61,44 @@ def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
     assert objective_methods == {
         "permutation_random",
         "permutation_label_invariant",
+    }
+
+
+def test_predictive_components_resolve_target_width_and_nested_descriptors() -> None:
+    """Planning resolves head dimensions and serializes named heads recursively."""
+
+    class TargetDataset:
+        @staticmethod
+        def get_target_schemas():
+            return {
+                "molecule": TargetSchema(
+                    name="molecule",
+                    target_type="multi_label",
+                    class_names=("a", "b", "c"),
+                )
+            }
+
+    layout, model_parameters = _attach_predictive_components(
+        {"encoder": {"strategy": "Encoder", "params": {"input_dim": 5}}},
+        {
+            "heads": {
+                "molecule_primary": {
+                    "target_field": "molecule",
+                    "strategy": "LinearClassificationHead",
+                    "parameters": {
+                        "latent_dim": 2,
+                        "output_dim": "auto_from_target",
+                    },
+                }
+            }
+        },
+        TargetDataset(),
+    )
+    portable_heads = _portable_component_descriptor(layout["heads"])
+
+    assert layout["heads"]["molecule_primary"]["params"]["output_dim"] == 3
+    assert portable_heads["molecule_primary"]["type"] == "LinearClassificationHead"
+    assert portable_heads["molecule_primary"]["parameters"]["output_dim"] == 3
+    assert model_parameters == {
+        "head_specs": {"molecule_primary": {"target_field": "molecule"}}
     }

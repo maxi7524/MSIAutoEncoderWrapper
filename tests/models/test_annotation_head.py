@@ -1,5 +1,6 @@
 """Tests for latent molecular classification components."""
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -8,6 +9,12 @@ from msi_autoencoder_wrapper.models.architectures.types.autoencoders.heads.linea
 )
 from msi_autoencoder_wrapper.training.criterions.autoencoder.head.multilabel_bce_loss import (
     MSIMultiLabelBCELoss,
+)
+from msi_autoencoder_wrapper.training.criterions.autoencoder.head.class_balanced_multilabel_bce_loss import (
+    MSIClassBalancedMultiLabelBCELoss,
+)
+from msi_autoencoder_wrapper.training.criterions.autoencoder.head.nnpu_multilabel_loss import (
+    MSINNPUMultiLabelLoss,
 )
 from msi_autoencoder_wrapper.training.criterions.autoencoder.head.cross_entropy_loss import (
     MSIMaskedCrossEntropyLoss,
@@ -39,6 +46,62 @@ def test_multilabel_loss_reads_pixel_dataset_target_dictionary() -> None:
     assert loss.ndim == 0
     assert torch.isfinite(loss)
     assert logits.grad is not None
+
+
+def test_class_balanced_bce_uses_train_frequency_and_per_class_masks() -> None:
+    """Rare positives are reweighted before a normalized class mean."""
+    criterion = MSIClassBalancedMultiLabelBCELoss(
+        head_id="molecular",
+        target_field="molecule",
+        max_positive_weight=10.0,
+    )
+    training_targets = torch.tensor(
+        [[1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [0.0, 0.0]]
+    )  # (N=4, C=2)
+    training_mask = torch.ones_like(training_targets, dtype=torch.bool)  # (N, C)
+    criterion._configure_training_statistics(training_targets, training_mask)
+    logits = torch.zeros(4, 2, requires_grad=True)  # (B=4, C=2)
+    batch = (
+        torch.arange(4),
+        torch.ones(4, 3),
+        {"molecule": training_targets},
+        {"molecule": training_mask},
+    )
+
+    loss = criterion({"head_molecular": logits}, batch)  # ()
+    loss.backward()
+
+    assert torch.allclose(criterion.positive_weights, torch.tensor([3.0, 1.0]))
+    assert loss.item() == pytest.approx(torch.log(torch.tensor(2.0)).item())
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_nnpu_treats_zero_targets_as_unlabelled_without_explicit_sigmoid() -> None:
+    """The nnPU objective applies stable logistic losses directly to logits."""
+    criterion = MSINNPUMultiLabelLoss(
+        head_id="molecular",
+        target_field="molecule",
+        prior_method="fixed",
+        class_prior=[0.25, 0.5],
+    )
+    logits = torch.tensor(
+        [[1.0, -0.5], [-1.0, 0.5], [0.25, -0.25], [-0.25, 0.25]],
+        requires_grad=True,
+    )  # (B=4, C=2)
+    targets = torch.tensor(
+        [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.0, 1.0]]
+    )  # (B, C)
+    mask = torch.ones_like(targets, dtype=torch.bool)  # (B, C)
+
+    loss = criterion(
+        {"head_molecular": logits},
+        (torch.arange(4), torch.ones(4, 3), {"molecule": targets}, {"molecule": mask}),
+    )  # ()
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(logits.grad).all()
+    assert torch.allclose(criterion.class_priors, torch.tensor([0.25, 0.5]))
 
 
 def test_cross_entropy_ignores_missing_head_targets() -> None:

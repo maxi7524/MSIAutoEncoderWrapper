@@ -1,10 +1,7 @@
 # Predictive autoencoder ablation campaign on the composed kidney MSI image.
 #
-# This file is the target configuration for the predictive-learning extension.
-# The ContractiveLoss, class-balanced BCE, predictive component resolver, and
-# peak-permutation parameters declared below must be implemented before launch.
-# Keeping the target configuration here fixes the intended public strategy names
-# and makes every ablation differ only in its objective configuration.
+# The public strategy names below are resolved by the runtime. Every paired
+# ablation differs only in its objective configuration and run seed.
 
 schema_version: 1
 
@@ -132,7 +129,7 @@ grid:
           # which is required for a per-spectrum Jacobian interpretation.
           normalization: layer
 
-  # Six paired ablations x five repetitions = 30 tasks.
+  # Seven paired ablations x five repetitions = 35 tasks.
   objectives:
     values:
       - reconstruction:
@@ -181,8 +178,8 @@ grid:
             target: InfoNCELoss
             weight: 0.1
             params:
-              # permutation_random ignores annotations and permutes bounded,
-              # precomputed peak envelopes between spectra in the batch.
+              # permutation_random ignores annotations and cyclically permutes
+              # bounded, train-precomputed envelopes inside each spectrum.
               peak_selection_method: permutation_random
               temperature: 0.07
               peak_sample_size: 1000
@@ -254,6 +251,30 @@ grid:
               negative_weighting_method: multilabel_jaccard
               overlapping_label_negative_weight: 0.25
         heads: *molecule_head_loss
+
+      - reconstruction:
+          masserstein:
+            target: MassersteinLoss
+            weight: 1.0
+        regularization:
+          contractive:
+            target: ContractiveLoss
+            weight: 0.001
+            params: *contractive_params
+        contrastive: *label_invariant_contrastive
+        heads:
+          molecule_primary:
+            nnpu:
+              target: NNPUMultiLabelLoss
+              weight: 0.2
+              params:
+                # Zeros are unlabelled samples rather than verified negatives.
+                # Observed train prevalence is scaled as an explicit initial
+                # prior assumption and clipped away from zero and one.
+                prior_method: scaled_train_observed
+                prior_multiplier: 1.5
+                min_prior: 0.0001
+                max_prior: 0.99
 
 execution:
   backend: local

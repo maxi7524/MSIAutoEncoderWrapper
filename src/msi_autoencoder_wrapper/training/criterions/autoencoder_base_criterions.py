@@ -64,6 +64,12 @@ class MSIContrastiveCriterion(MSIBaseCriterion, ABC):
     criterion_type = "contrastive"
 
 
+class MSIRegularizationCriterion(MSIBaseCriterion, ABC):
+    """Base contract for representation regularizers such as contractive loss."""
+
+    criterion_type = "regularization"
+
+
 class MSIHeadCriterion(MSIBaseCriterion, ABC):
     """Base contract for objectives attached to one named model head."""
 
@@ -124,6 +130,41 @@ class MSIHeadCriterion(MSIBaseCriterion, ABC):
             targets[self.target_field].to(logits.device),
             masks[self.target_field].to(logits.device, dtype=torch.bool),
         )
+
+    def multilabel_batch(
+        self,
+        model_outputs: Dict[str, torch.Tensor],
+        batch_data: Tuple[torch.Tensor, ...],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return aligned two-dimensional multi-label tensors.
+
+        Legacy sample masks with shape ``(B,)`` are expanded across classes.
+        New datasets should provide masks with shape ``(B, C)`` so individual
+        unknown class labels can be excluded without discarding the sample.
+
+        :param model_outputs: Output mapping returned by the model.
+        :type model_outputs: Dict[str, torch.Tensor]
+        :param batch_data: Dataset batch containing targets and masks.
+        :type batch_data: Tuple[torch.Tensor, ...]
+        :return: Logits, float targets, and Boolean per-class mask.
+        :rtype: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        :raises IncompatibleInterfaceError: If numerical dimensions disagree.
+        """
+        logits, targets, mask = self.head_batch(model_outputs, batch_data)
+        targets = targets.to(device=logits.device, dtype=logits.dtype)
+        if logits.ndim != 2 or targets.shape != logits.shape:
+            raise_incompatible_interface_error(
+                "HeadCriterion",
+                "Multi-label logits and targets must have equal [B, C] shapes.",
+            )
+        if mask.shape == logits.shape[:1]:
+            mask = mask.unsqueeze(1).expand_as(logits)
+        if mask.shape != logits.shape:
+            raise_incompatible_interface_error(
+                "HeadCriterion",
+                "Multi-label masks must have shape [B] or [B, C].",
+            )
+        return logits, targets, mask
     @abstractmethod
     def forward(
         self,

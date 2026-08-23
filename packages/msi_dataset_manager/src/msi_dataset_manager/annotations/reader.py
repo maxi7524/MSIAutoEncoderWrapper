@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from ..sources.source_manager import DatasetSourceManager
 from ..utils.exceptions import raise_validation_error
 from .merge.reader import MergedAnnotationReader
+from .index import SpectrumAnnotationIndex, build_annotation_index
 
 
 class AnnotationReader:
@@ -87,6 +88,10 @@ class SourceAnnotationReader:
         self.image_path = image_path
         self.default_filters = dict(default_filters or {})
         self.active_context: Any = None
+        self._spectrum_annotation_indices: Dict[
+            tuple[tuple[int, ...] | None, tuple[tuple[str, str], ...]],
+            SpectrumAnnotationIndex,
+        ] = {}
         self._config = {
             "type": "source",
             "path": str(image_path.parent),
@@ -130,6 +135,47 @@ class SourceAnnotationReader:
             for record in self.get_annotations(filters)
             if target in record.get("spectrum_ids", ())
         ]
+
+    def get_spectrum_annotation_index(
+        self,
+        spectrum_ids: Any,
+        filters: Optional[Mapping[str, Any]] = None,
+    ) -> SpectrumAnnotationIndex:
+        """Return all requested source annotations in one compact bulk index.
+
+        :param spectrum_ids: Spectrum identifiers to represent, including rows
+            without annotations. ``None`` stores annotated rows only.
+        :type spectrum_ids: Iterable[int] | None
+        :param filters: Optional source-reference filters.
+        :type filters: Mapping[str, Any] | None
+        :return: Cached CSR spectrum annotation index.
+        :rtype: SpectrumAnnotationIndex
+        """
+        selected = (
+            None
+            if spectrum_ids is None
+            else tuple(sorted({int(value) for value in spectrum_ids}))
+        )
+        effective = {**self.default_filters, **dict(filters or {})}
+        filter_key = tuple(sorted((str(key), repr(value)) for key, value in effective.items()))
+        cache_key = (selected, filter_key)
+        cached = self._spectrum_annotation_indices.get(cache_key)
+        if cached is not None:
+            return cached
+        selected_set = set(selected) if selected is not None else None
+        entries: Dict[int, List[tuple[tuple[str, str], float]]] = {}
+        for record in self.get_annotations(filters):
+            identity = (str(record.get("formula", "")), str(record.get("adduct", "")))
+            mz = record.get("mz")
+            resolved_mz = float(mz) if mz is not None else float("nan")
+            for spectrum_id in record.get("spectrum_ids", ()):
+                resolved_id = int(spectrum_id)
+                if selected_set is None or resolved_id in selected_set:
+                    entries.setdefault(resolved_id, []).append((identity, resolved_mz))
+        represented_ids = list(entries) if selected is None else list(selected)
+        index = build_annotation_index(represented_ids, entries)
+        self._spectrum_annotation_indices[cache_key] = index
+        return index
 
     def get_spectrum_metadata(self, spectrum_id: int) -> Dict[str, Any]:
         """Return dataset metadata and the requested source spectrum index."""

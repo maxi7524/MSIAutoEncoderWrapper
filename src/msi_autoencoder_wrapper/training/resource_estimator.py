@@ -346,7 +346,12 @@ class TrainingResourceEstimator:
             if category_or_name == "heads":
                 for head_setup in setup.values():
                     entries.extend(head_setup.items())
-            elif category_or_name in {"reconstruction", "contrastive", "head"}:
+            elif category_or_name in {
+                "reconstruction",
+                "contrastive",
+                "head",
+                "regularization",
+            }:
                 entries.extend(setup.items())
             else:
                 entries.append((category_or_name, setup))
@@ -357,6 +362,15 @@ class TrainingResourceEstimator:
                 workspace = max(workspace, masserstein_workspace)
             if target == "InfoNCELoss":
                 workspace += 3 * (2 * batch_size) ** 2 * element_size
+            if target == "ContractiveLoss":
+                parameters = config.get("params", {}) if isinstance(config, dict) else {}
+                calculation_method = parameters.get(
+                    "calculation_method", "approximate_hutchinson_vjp"
+                )
+                multiplier = bins if calculation_method == "exact_autograd_jacobian" else int(
+                    parameters.get("num_probes", 1)
+                )
+                workspace += multiplier * batch_size * bins * element_size
         return workspace
 
     def _find_fitting_batch_size(
