@@ -49,6 +49,12 @@ Output activation accepts the types implemented by
 a smooth gradient. An identity activation is invalid for workflows requiring
 non-negative reconstructed intensities.
 
+Dense MLP autoencoders use per-spectrum `LayerNorm` by default. Configure
+`normalization="none"` to disable hidden normalization. `normalization="batch"`
+is retained only for experiments that explicitly require batch-dependent
+statistics; it is not appropriate when a per-spectrum encoder Jacobian is part
+of the objective.
+
 ### Configure a projector and heads
 
 ```python

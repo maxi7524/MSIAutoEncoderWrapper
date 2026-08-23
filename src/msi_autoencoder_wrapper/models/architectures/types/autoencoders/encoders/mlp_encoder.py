@@ -9,6 +9,10 @@ import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
+from ....utils.hidden_normalization import (
+    build_hidden_normalization,
+    resolve_hidden_normalization,
+)
 from ......utils.exceptions import raise_validation_error
 from .base_encoder import MSIBaseEncoder
 
@@ -22,7 +26,8 @@ class MLPEncoder(MSIBaseEncoder):
         input_dim: int,
         latent_dim: int,
         hidden_dims: Sequence[int],
-        batch_normalization: bool = True,
+        batch_normalization: bool | None = None,
+        normalization: str | None = None,
     ) -> None:
         """Construct the deterministic encoder.
 
@@ -32,8 +37,12 @@ class MLPEncoder(MSIBaseEncoder):
         :type latent_dim: int
         :param hidden_dims: Ordered widths of hidden MLP layers.
         :type hidden_dims: Sequence[int]
-        :param batch_normalization: Apply BatchNorm before each hidden ReLU.
-        :type batch_normalization: bool
+        :param batch_normalization: Deprecated compatibility flag. Use
+            ``normalization`` in new configurations.
+        :type batch_normalization: bool | None
+        :param normalization: Hidden-feature normalization: ``layer`` (default),
+            ``batch``, or ``none``.
+        :type normalization: str | None
         :raises ValidationError: If dimensions are empty, invalid, or not positive.
         """
         super().__init__()
@@ -42,14 +51,23 @@ class MLPEncoder(MSIBaseEncoder):
             latent_dim,
             hidden_dims,
         )
+        resolved_normalization = resolve_hidden_normalization(
+            normalization,
+            batch_normalization,
+            context_name="MLPEncoder",
+        )
 
         # Hidden feature extraction
         layers: list[nn.Module] = []
         source_dim = int(input_dim)
         for hidden_dim in resolved_hidden_dims:
             layers.append(nn.Linear(source_dim, hidden_dim))
-            if batch_normalization:
-                layers.append(nn.BatchNorm1d(hidden_dim))
+            normalizer = build_hidden_normalization(
+                resolved_normalization,
+                hidden_dim,
+            )
+            if normalizer is not None:
+                layers.append(normalizer)
             layers.append(nn.ReLU())
             source_dim = hidden_dim
         self.backbone = nn.Sequential(*layers)
@@ -60,7 +78,7 @@ class MLPEncoder(MSIBaseEncoder):
             "input_dim": int(input_dim),
             "latent_dim": int(latent_dim),
             "hidden_dims": resolved_hidden_dims,
-            "batch_normalization": bool(batch_normalization),
+            "normalization": resolved_normalization,
         }
 
     @staticmethod

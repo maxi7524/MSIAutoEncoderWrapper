@@ -30,6 +30,54 @@ def test_mlp_preset_reverses_encoder_dimensions_for_default_decoder(
     assert setup["encoder"]["params"]["hidden_dims"] == [512, 256]
     assert setup["decoder"]["params"]["hidden_dims"] == [256, 512]
     assert setup["decoder"]["params"]["output_activation"]["type"] == "softplus"
+    assert setup["encoder"]["params"]["normalization"] == "layer"
+    assert setup["decoder"]["params"]["normalization"] == "layer"
+
+
+def test_mlp_autoencoder_defaults_to_batch_independent_layer_normalization(
+    mock_active_context,
+) -> None:
+    """The default dense architecture is independent of batch composition."""
+    setup = get_mlp_autoencoder_preset(
+        mock_active_context,
+        latent_dim=4,
+        encoder_hidden_dims=[16],
+    )
+    model = ArchitecturesManager.build_model("autoencoder", setup)
+
+    assert any(isinstance(layer, nn.LayerNorm) for layer in model.encoder.modules())
+    assert any(isinstance(layer, nn.LayerNorm) for layer in model.decoder.modules())
+    assert not any(isinstance(layer, nn.BatchNorm1d) for layer in model.modules())
+
+
+def test_mlp_autoencoder_loads_legacy_batch_normalization_flag(
+    mock_active_context,
+) -> None:
+    """Persisted configurations can still request their original BatchNorm graph."""
+    setup = get_mlp_autoencoder_preset(
+        mock_active_context,
+        latent_dim=4,
+        encoder_hidden_dims=[16],
+        batch_normalization=True,
+    )
+    model = ArchitecturesManager.build_model("autoencoder", setup)
+
+    assert any(isinstance(layer, nn.BatchNorm1d) for layer in model.encoder.modules())
+    assert model.encoder.get_config()["normalization"] == "batch"
+
+
+def test_mlp_preset_rejects_ambiguous_normalization_configuration(
+    mock_active_context,
+) -> None:
+    """The canonical strategy and legacy alias cannot be combined."""
+    with pytest.raises(ValidationError, match="not both"):
+        get_mlp_autoencoder_preset(
+            mock_active_context,
+            latent_dim=4,
+            encoder_hidden_dims=[16],
+            normalization="layer",
+            batch_normalization=False,
+        )
 
 
 def test_mlp_preset_supports_asymmetric_dimension_lists(mock_active_context) -> None:

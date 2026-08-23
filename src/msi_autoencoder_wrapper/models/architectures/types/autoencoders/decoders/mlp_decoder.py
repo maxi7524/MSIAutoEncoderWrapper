@@ -9,6 +9,10 @@ import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
+from ....utils.hidden_normalization import (
+    build_hidden_normalization,
+    resolve_hidden_normalization,
+)
 from ......utils.exceptions import raise_validation_error
 from .base_decoder import MSIBaseDecoder
 from .output_activation import build_output_activation
@@ -24,7 +28,8 @@ class MLPDecoder(MSIBaseDecoder):
         output_dim: int,
         hidden_dims: Sequence[int],
         output_activation: Mapping[str, Any],
-        batch_normalization: bool = True,
+        batch_normalization: bool | None = None,
+        normalization: str | None = None,
     ) -> None:
         """Construct the spectrum decoder.
 
@@ -36,8 +41,12 @@ class MLPDecoder(MSIBaseDecoder):
         :type hidden_dims: Sequence[int]
         :param output_activation: Final nonnegative activation configuration.
         :type output_activation: Mapping[str, Any]
-        :param batch_normalization: Apply BatchNorm before each hidden ReLU.
-        :type batch_normalization: bool
+        :param batch_normalization: Deprecated compatibility flag. Use
+            ``normalization`` in new configurations.
+        :type batch_normalization: bool | None
+        :param normalization: Hidden-feature normalization: ``layer`` (default),
+            ``batch``, or ``none``.
+        :type normalization: str | None
         :raises ValidationError: If dimensions are empty, invalid, or not positive.
         """
         super().__init__()
@@ -46,14 +55,23 @@ class MLPDecoder(MSIBaseDecoder):
             output_dim,
             hidden_dims,
         )
+        resolved_normalization = resolve_hidden_normalization(
+            normalization,
+            batch_normalization,
+            context_name="MLPDecoder",
+        )
 
         # Hidden reconstruction stages
         layers: list[nn.Module] = []
         source_dim = int(latent_dim)
         for hidden_dim in resolved_hidden_dims:
             layers.append(nn.Linear(source_dim, hidden_dim))
-            if batch_normalization:
-                layers.append(nn.BatchNorm1d(hidden_dim))
+            normalizer = build_hidden_normalization(
+                resolved_normalization,
+                hidden_dim,
+            )
+            if normalizer is not None:
+                layers.append(normalizer)
             layers.append(nn.ReLU())
             source_dim = hidden_dim
 
@@ -69,7 +87,7 @@ class MLPDecoder(MSIBaseDecoder):
             "latent_dim": int(latent_dim),
             "output_dim": int(output_dim),
             "hidden_dims": resolved_hidden_dims,
-            "batch_normalization": bool(batch_normalization),
+            "normalization": resolved_normalization,
             "output_activation": dict(output_activation),
         }
 
