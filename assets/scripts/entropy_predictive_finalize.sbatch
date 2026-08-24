@@ -15,10 +15,15 @@ if [[ -z "${CAMPAIGN_ID:-}" ]] || [[ ! "${CAMPAIGN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-
     exit 2
 fi
 
-REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+REPOSITORY_ROOT=${REPOSITORY_ROOT:-${SLURM_SUBMIT_DIR:-}}
+if [[ -z "${REPOSITORY_ROOT}" || ! -f "${REPOSITORY_ROOT}/pyproject.toml" ]]; then
+    echo "Set REPOSITORY_ROOT to the repository containing pyproject.toml." >&2
+    exit 2
+fi
+REPOSITORY_ROOT=$(cd "${REPOSITORY_ROOT}" && pwd)
 SOURCE_WORKSPACE=${REPOSITORY_ROOT}/data/kidney_workspace
-RAM_DIRECTORY=/dev/shm/${USER}/msi-wrapper/${CAMPAIGN_ID}
-LOCAL_WORKSPACE=${RAM_DIRECTORY}/kidney_workspace
+NODE_LOCAL_DIRECTORY=/tmp/${USER}/msi-wrapper/${CAMPAIGN_ID}
+LOCAL_WORKSPACE=${NODE_LOCAL_DIRECTORY}/kidney_workspace
 RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}
 
 if [[ ! -d "${LOCAL_WORKSPACE}" ]]; then
@@ -35,5 +40,5 @@ if [[ -d "${LOCAL_WORKSPACE}/configs" ]]; then
 fi
 
 # The path is constructed from a validated user identifier, never from input paths.
-rm -rf -- "${RAM_DIRECTORY}"
+rm -rf -- "${NODE_LOCAL_DIRECTORY}"
 echo "Finalized campaign ${CAMPAIGN_ID}; logs and task status are in ${RUN_DIRECTORY}."
