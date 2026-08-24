@@ -49,6 +49,7 @@ class CohortDataset(RawMSIBaseDataset):
         normalization: Optional[str] = None,
         normalization_epsilon: float = 1e-12,
         target_specs: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        annotation_settings: Optional[Mapping[str, Any]] = None,
         split: Optional[Mapping[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
@@ -65,6 +66,7 @@ class CohortDataset(RawMSIBaseDataset):
                 normalization=normalization,
                 normalization_epsilon=normalization_epsilon,
                 target_specs=specs,
+                annotation_settings=annotation_settings,
             )
             for member in cohort_context.members
         )
@@ -76,6 +78,7 @@ class CohortDataset(RawMSIBaseDataset):
             "normalization": normalization,
             "normalization_epsilon": normalization_epsilon,
             "target_specs": specs,
+            "annotation_settings": dict(annotation_settings or {}),
             "split": self.get_split_config(),
         }
 

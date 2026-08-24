@@ -427,7 +427,14 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                     for head_id, spec in head_specs.items()
                 }
                 model_kwargs["head_specs"] = {
-                    head_id: {"target_field": spec["target_field"]}
+                    head_id: {
+                        "target_field": spec["target_field"],
+                        **(
+                            {"class_indices": tuple(spec["class_indices"])}
+                            if "class_indices" in spec
+                            else {}
+                        ),
+                    }
                     for head_id, spec in head_specs.items()
                 }
 
@@ -516,7 +523,12 @@ class ArchitectureProxy(BaseModelsManagerProxy):
                                         "ModelHead",
                                         f"Head '{head_id}' did not produce '{output_key}'.",
                                     )
-                                expected_classes = len(class_mappings[target_field])
+                                class_indices = head_spec.get("class_indices")
+                                expected_classes = (
+                                    len(class_mappings[target_field])
+                                    if class_indices is None
+                                    else len(class_indices)
+                                )
                                 if logits.shape[-1] != expected_classes:
                                     raise_validation_error(
                                         "ModelHead",

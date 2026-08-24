@@ -44,6 +44,24 @@ task:
           target_specs:
             molecule:
               type: multi_label
+          # The reader supplies raw m/z annotations. The dataset projects them
+          # onto this binner axis and drops entries outside [200, 900]. Samples
+          # with no retained molecular annotations are excluded before splitting.
+          annotation_settings:
+            mapping:
+              x_mapping: binner
+            selection:
+              annotated_fraction: 1.0
+              unannotated_fraction: 0.0
+              max_unannotated_to_annotated_ratio: 0.0
+              seed: 42
+            targets:
+              molecule:
+                empty_spectrum_policy: exclude
+                # nnPU treats missing class annotations as unlabelled. The BCE
+                # baseline explicitly converts them to negatives in its loss.
+                unobserved_label_policy: unlabelled
+                add_annotation_presence_target: false
           # Preserve the source-dataset proportions in the development subset.
           subset:
             fraction: 0.1
@@ -57,9 +75,9 @@ task:
           split:
             strategy: grouped
             fractions:
-              train: 0.7
-              validation: 0.15
-              test: 0.15
+              train: 0.8
+              validation: 0.1
+              test: 0.1
             parameters:
               group_fields: dataset_id
       variant:
@@ -119,15 +137,19 @@ seeds:
 grid:
   architectures:
     values:
-      - name: mlp-ae-512-256-latent-10-layernorm
-        preset: MLPAutoencoder
+      - name: conv1d-ae-32-16-8-latent-10
+        preset: CNNAutoencoder
         parameters:
           latent_dim: 10
-          encoder_hidden_dims: [512, 256]
-          decoder_hidden_dims: [256, 512]
-          # LayerNorm keeps enc(x) independent of the composition of a batch,
-          # which is required for a per-spectrum Jacobian interpretation.
-          normalization: layer
+          channels: [1, 32, 16, 8]
+          kernels: [5, 7, 3]
+          strides: [3, 3, 3]
+          # The dataset input is TIC-normalized, so the reconstruction returned
+          # by the model must use the same representation before every loss.
+          output_normalization:
+            type: tic
+            parameters:
+              epsilon: 1.0e-12
 
   # Seven paired ablations x five repetitions = 35 tasks.
   objectives:
@@ -197,18 +219,14 @@ grid:
             target: InfoNCELoss
             weight: 0.1
             params:
-              # permutation_label_invariant resolves protected regions separately
-              # for every spectrum:
-              # spectrum_id -> source dataset -> pixel labels -> label m/z values
-              # -> protected binner intervals. Only non-intersecting envelopes
-              # may be permuted between batch rows.
+              # The mapped annotation coordinate is protected in the exact bin
+              # used by LinearBinning; no nearest-centre tolerance is applied.
               peak_selection_method: permutation_label_invariant
               temperature: 0.07
               peak_sample_size: 1000
               peak_catalog_limit: 4096
               permuted_peaks_per_view: 8
-              annotation_tolerance: 3.0
-              annotation_tolerance_unit: ppm
+              annotation_bin_radius: 0
               preserve_input_normalization: true
         heads: *molecule_head_loss
 
@@ -243,8 +261,7 @@ grid:
               peak_sample_size: 1000
               peak_catalog_limit: 4096
               permuted_peaks_per_view: 8
-              annotation_tolerance: 3.0
-              annotation_tolerance_unit: ppm
+              annotation_bin_radius: 0
               preserve_input_normalization: true
               # Samples sharing labels remain negatives, but their contribution
               # to the InfoNCE denominator is reduced according to label overlap.

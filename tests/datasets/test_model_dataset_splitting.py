@@ -58,6 +58,27 @@ class RawSplitDataset(RawMSIBaseDataset):
         return {"source_index": source_index}
 
 
+class UnevenGroupedDataset(MSIBaseDataset):
+    """Dataset with large, indivisible groups used to test split balancing."""
+
+    group_sizes = (20, 17, 8, 7, 6, 6, 5, 5, 4, 4, 4, 4, 4, 3, 3, 4)
+    groups = tuple(
+        group
+        for group, size in enumerate(group_sizes)
+        for _ in range(size)
+    )
+
+    def _source_length(self):
+        return len(self.groups)
+
+    def _get_source_item(self, index):
+        return index
+
+    def _get_source_split_group(self, index, **kwargs):
+        del kwargs
+        return self.groups[index]
+
+
 def test_random_split_is_owned_by_dataset_and_reproducible() -> None:
     config = {
         "strategy": "random",
@@ -87,6 +108,27 @@ def test_grouped_split_never_separates_an_image() -> None:
         for sample_id in sample_ids:
             locations.setdefault(sample_id["image_key"], set()).add(split_name)
     assert all(len(values) == 1 for values in locations.values())
+
+
+def test_grouped_split_balances_uneven_groups_by_requested_fraction() -> None:
+    """Large groups stay in train when smaller groups can fit evaluation targets."""
+    partitions = DatasetSplitter.split(
+        UnevenGroupedDataset(),
+        {
+            "strategy": "grouped",
+            "seed": 42,
+            "fractions": {"train": 0.8, "validation": 0.1, "test": 0.1},
+            "parameters": {"group_fields": ["dataset_id"]},
+        },
+    )
+    sizes = {
+        name: 0 if partition is None else len(partition)
+        for name, partition in partitions.items()
+    }
+
+    assert abs(sizes["train"] - 80) <= 4
+    assert abs(sizes["validation"] - 10) <= 4
+    assert abs(sizes["test"] - 10) <= 4
 
 
 def test_single_target_and_mask_stratification_preserve_both_classes() -> None:

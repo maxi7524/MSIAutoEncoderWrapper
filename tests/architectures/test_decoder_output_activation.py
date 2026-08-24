@@ -16,6 +16,9 @@ from msi_autoencoder_wrapper.models.architectures.types.autoencoders.decoders.ou
     SUPPORTED_OUTPUT_ACTIVATIONS,
     build_output_activation,
 )
+from msi_autoencoder_wrapper.models.architectures.types.autoencoders.presets.cnn_autoencoder_preset import (
+    get_cnn_autoencoder_preset,
+)
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 
 
@@ -79,6 +82,46 @@ def test_cnn_decoder_uses_configured_final_activation() -> None:
 
     assert torch.equal(output, torch.zeros_like(output))
     assert decoder.get_config()["output_activation"]["type"] == "relu"
+
+
+def test_cnn_decoder_returns_tic_normalized_reconstruction() -> None:
+    """The decoder output contract matches a TIC-normalized model input."""
+    decoder = CNNDecoder(
+        latent_dim=2,
+        spatial_dims=[8, 3],
+        channels=[1, 2],
+        kernels=[3],
+        strides=[2],
+        output_activation={"type": "softplus", "parameters": {}},
+        output_normalization={
+            "type": "tic",
+            "parameters": {"epsilon": 1e-12},
+        },
+    )
+
+    output = decoder(torch.randn(3, 2))  # (B, M)
+
+    assert output.shape == (3, 8)
+    assert torch.all(output >= 0)
+    assert torch.allclose(output.sum(dim=1), torch.ones(3), atol=1e-6)
+    assert decoder.get_config()["output_normalization"]["type"] == "tic"
+
+
+def test_cnn_preset_forwards_output_normalization(mock_active_context) -> None:
+    """The portable preset persists the requested reconstruction space."""
+    setup = get_cnn_autoencoder_preset(
+        mock_active_context,
+        latent_dim=2,
+        channels=[1, 2],
+        kernels=[3],
+        strides=[2],
+        output_normalization={"type": "tic", "parameters": {}},
+    )
+
+    assert setup["decoder"]["params"]["output_normalization"] == {
+        "type": "tic",
+        "parameters": {},
+    }
 
 
 def test_linear_decoder_uses_configured_final_activation() -> None:

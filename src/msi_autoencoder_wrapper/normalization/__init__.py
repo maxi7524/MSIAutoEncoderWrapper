@@ -9,6 +9,11 @@ from .base import (
     OutputSpace,
 )
 from .pipeline import NormalizationPipeline, ReconstructionPolicy
+from .output import (
+    SUPPORTED_OUTPUT_NORMALIZATIONS,
+    SpectrumOutputNormalization,
+    build_output_normalization,
+)
 from .strategies import ScalarNormalization
 
 __all__ = [
@@ -21,4 +26,7 @@ __all__ = [
     "OutputSpace",
     "ReconstructionPolicy",
     "ScalarNormalization",
+    "SUPPORTED_OUTPUT_NORMALIZATIONS",
+    "SpectrumOutputNormalization",
+    "build_output_normalization",
 ]

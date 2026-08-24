@@ -114,8 +114,13 @@ class DatasetSplitter:
     def _assign_groups(
         groups: Sequence[Sequence[int]], total: int, config: SplitConfig
     ) -> Dict[str, List[int]]:
+        del total
         shuffled = [list(group) for group in groups]
         random.Random(config.seed).shuffle(shuffled)
+        # Group allocation
+        ## Place the largest indivisible groups first. The seeded shuffle remains
+        ## the deterministic tie-breaker for equal-size groups.
+        shuffled.sort(key=len, reverse=True)
         included_total = sum(len(group) for group in shuffled)
         targets = {
             name: config.fractions[name] * included_total
@@ -123,14 +128,22 @@ class DatasetSplitter:
         }
         result: Dict[str, List[int]] = {"train": [], "validation": [], "test": []}
         for group in shuffled:
-            candidates = [
+            active = [
                 name
                 for name in ("test", "validation", "train")
                 if config.fractions[name] > 0
             ]
+            feasible = [
+                name
+                for name in active
+                if len(result[name]) + len(group) <= targets[name]
+            ]
+            candidates = feasible or active
             destination = max(
                 candidates,
-                key=lambda name: targets[name] - len(result[name]),
+                key=lambda name: (
+                    targets[name] - len(result[name])
+                ) / targets[name],
             )
             result[destination].extend(group)
         for values in result.values():

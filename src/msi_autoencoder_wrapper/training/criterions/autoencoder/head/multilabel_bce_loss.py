@@ -28,9 +28,14 @@ class MSIMultiLabelBCELoss(MSIHeadCriterion):
         self,
         head_id: str,
         target_field: str,
+        class_indices: tuple[int, ...] | list[int] | None = None,
         reduction: str = "mean",
     ) -> None:
-        super().__init__(head_id=head_id, target_field=target_field)
+        super().__init__(
+            head_id=head_id,
+            target_field=target_field,
+            class_indices=class_indices,
+        )
         if reduction not in {"mean", "sum"}:
             raise_validation_error(
                 "MultiLabelBCELoss", "reduction must be 'mean' or 'sum'."
@@ -39,6 +44,7 @@ class MSIMultiLabelBCELoss(MSIHeadCriterion):
         self._config = {
             "head_id": head_id,
             "target_field": target_field,
+            "class_indices": self.class_indices,
             "reduction": reduction,
         }
 

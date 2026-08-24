@@ -293,3 +293,29 @@ class LinearBinning(MSIBaseBinner):
     def GetXAxisDepth(self) -> int:
         """Return the number of bins in the regular output spectrum."""
         return len(self.grid)
+
+    def map_mass_values_to_bins(self, mass_values: np.ndarray) -> np.ndarray:
+        """Map mass values using exactly the intervals used by :meth:`transform`.
+
+        :param mass_values: Raw m/z values with arbitrary NumPy shape.
+        :type mass_values: numpy.ndarray
+        :return: Dense bin indices, or ``-1`` for non-finite and out-of-range
+            values.
+        :rtype: numpy.ndarray
+        """
+        mass_array = np.asarray(mass_values, dtype=np.float64)
+        indices = np.full(mass_array.shape, -1, dtype=np.int32)
+        valid = np.isfinite(mass_array) & (mass_array >= self.x_min) & (mass_array <= self.x_max)
+        if not np.any(valid):
+            return indices
+        mapped = np.floor((mass_array[valid] - self.bin_edges[0]) / self.bin_step).astype(
+            np.int64
+        )
+        # REMARK: Match the existing Torch forward path exactly. When x_max is
+        # not an integer number of bin steps from x_min, the trailing axis bin
+        # has no source interval ending at x_max and must not receive x_max.
+        mapped[mass_array[valid] == self.bin_edges[-1]] = self.GetXAxisDepth() - 1
+        in_axis = (mapped >= 0) & (mapped < self.GetXAxisDepth())
+        valid_positions = np.flatnonzero(valid)
+        indices.flat[valid_positions[in_axis]] = mapped[in_axis].astype(np.int32)
+        return indices
