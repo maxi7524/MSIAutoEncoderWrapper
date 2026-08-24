@@ -16,10 +16,17 @@ fi
 
 REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}
-TASK_JOB_FILE=${RUN_DIRECTORY}/task-array-job-id
+TASK_COUNT_FILE=${RUN_DIRECTORY}/task-count
+NEXT_TASK_FILE=${RUN_DIRECTORY}/next-task-index
 
-if [[ ! -f "${TASK_JOB_FILE}" ]]; then
-    echo "Missing ${TASK_JOB_FILE}. Submit the task array first." >&2
+if [[ ! -f "${TASK_COUNT_FILE}" || ! -f "${NEXT_TASK_FILE}" ]]; then
+    echo "Submit every task batch before submitting the finalizer." >&2
+    exit 1
+fi
+task_count=$(<"${TASK_COUNT_FILE}")
+next_task=$(<"${NEXT_TASK_FILE}")
+if [[ ! "${task_count}" =~ ^[1-9][0-9]*$ ]] || [[ ! "${next_task}" =~ ^[0-9]+$ ]] || (( next_task < task_count )); then
+    echo "Not every task has been submitted; finalization is blocked." >&2
     exit 1
 fi
 if squeue --noheader --user "${USER}" | grep -q .; then
