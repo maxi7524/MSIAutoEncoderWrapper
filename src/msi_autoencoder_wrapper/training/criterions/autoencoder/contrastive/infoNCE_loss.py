@@ -54,14 +54,59 @@ class ProtectedIntervalIndex:
             for left, right in zip(self.left[start:stop], self.right[start:stop])
         )
 
+    def dense_mask(
+        self,
+        spectrum_ids: np.ndarray,
+        feature_count: int,
+    ) -> np.ndarray:
+        """Materialize protected bins for one batch from the sparse CSR index.
+
+        :param spectrum_ids: One-dimensional source spectrum identifiers.
+        :type spectrum_ids: numpy.ndarray
+        :param feature_count: Number of bins in the model spectrum.
+        :type feature_count: int
+        :return: Batch protection mask with shape ``(B, M)``.
+        :rtype: numpy.ndarray
+        """
+        requested = np.asarray(spectrum_ids, dtype=np.int64).reshape(-1)
+        positions = np.searchsorted(self.spectrum_ids, requested)
+        valid = positions < self.spectrum_ids.size
+        valid[valid] &= self.spectrum_ids[positions[valid]] == requested[valid]
+        difference = np.zeros(
+            (requested.size, feature_count + 1),
+            dtype=np.int32,
+        )
+        valid_rows = np.flatnonzero(valid)
+        if valid_rows.size == 0:
+            return difference[:, :-1].astype(bool)
+
+        counts = self.offsets[positions[valid_rows] + 1] - self.offsets[
+            positions[valid_rows]
+        ]
+        entry_indices = np.concatenate(
+            [
+                np.arange(
+                    self.offsets[position],
+                    self.offsets[position + 1],
+                    dtype=np.int64,
+                )
+                for position in positions[valid_rows]
+            ]
+        )
+        batch_rows = np.repeat(valid_rows, counts)
+        np.add.at(difference, (batch_rows, self.left[entry_indices]), 1)
+        np.add.at(difference, (batch_rows, self.right[entry_indices]), -1)
+        return np.cumsum(difference[:, :-1], axis=1) > 0
+
 
 @CriterionsManager.register_criterion("autoencoder", "contrastive", "InfoNCELoss")
 class MSIInfoNCELoss(MSIContrastiveCriterion):
     """Make representations invariant to controlled peak permutations.
 
-    ``permutation_random`` selects non-overlapping envelopes from a train-derived
-    global catalogue without consulting annotations. It is the control strategy
-    and may alter annotated evidence.
+    ``permutation_random`` builds a train-derived global catalogue and a reusable
+    bank of random, non-overlapping envelope groups. Every batch samples a small
+    group pool tensorwise without scanning the catalogue. It is the control
+    strategy and may alter annotated evidence.
 
     ``permutation_label_invariant`` resolves protected intervals separately for
     every spectrum through ``spectrum_id -> mapped dataset annotations ->
@@ -70,10 +115,11 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
     only when it does not intersect that spectrum's protected intervals.
 
     Selected envelope shapes and masses are cyclically reassigned within one
-    spectrum. If ``preserve_input_normalization`` is true, interpolation keeps
-    every donor envelope's original mass, so the selected-region sum and the
-    per-spectrum TIC remain invariant. Protected bins are unchanged. Original
-    and augmented spectra form positive pairs.
+    spectrum using one batched gather/interpolate/scatter operation. If
+    ``preserve_input_normalization`` is true, interpolation keeps every donor
+    envelope's original mass, so the selected-region sum and the per-spectrum
+    TIC remain invariant. Protected bins are unchanged. Original and augmented
+    spectra form positive pairs.
 
     :param peak_selection_method: ``permutation_random`` or
         ``permutation_label_invariant``.
@@ -86,8 +132,15 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
     :type peak_sample_seed: int
     :param peak_catalog_limit: Maximum unique envelopes retained.
     :type peak_catalog_limit: int
+    :param permutation_bank_size: Number of precomputed random, non-overlapping
+        envelope groups retained for batchwise sampling.
+    :type permutation_bank_size: int
     :param permuted_peaks_per_view: Maximum envelopes permuted per view.
     :type permuted_peaks_per_view: int
+    :param permutation_selection_attempts: Number of precomputed groups sampled
+        simultaneously per spectrum when searching for non-empty, unprotected
+        envelopes.
+    :type permutation_selection_attempts: int
     :param annotation_bin_radius: Optional number of adjacent binner bins to
         protect on either side of every mapped annotation coordinate.
     :type annotation_bin_radius: int
@@ -113,7 +166,9 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         peak_sample_size: int = 1000,
         peak_sample_seed: int = 0,
         peak_catalog_limit: int = 4096,
-        permuted_peaks_per_view: int = 8,
+        permutation_bank_size: int = 7000,
+        permuted_peaks_per_view: int = 3,
+        permutation_selection_attempts: int = 64,
         annotation_bin_radius: int = 0,
         preserve_input_normalization: bool = True,
         negative_weighting_method: str | None = None,
@@ -144,9 +199,11 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         integer_parameters = {
             "peak_sample_size": peak_sample_size,
             "peak_catalog_limit": peak_catalog_limit,
+            "permutation_bank_size": permutation_bank_size,
             "permuted_peaks_per_view": (
                 max_noise_peaks if max_noise_peaks is not None else permuted_peaks_per_view
             ),
+            "permutation_selection_attempts": permutation_selection_attempts,
             "max_peaks_per_spectrum": max_peaks_per_spectrum,
         }
         if any(
@@ -156,12 +213,19 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
             raise_validation_error(
                 "InfoNCELoss", "Peak sampling and permutation limits must be positive integers."
             )
+        if integer_parameters["permuted_peaks_per_view"] < 2:
+            raise_validation_error(
+                "InfoNCELoss", "permuted_peaks_per_view must be at least two."
+            )
         if negative_weighting_method is not None and (
             negative_weighting_method not in SUPPORTED_NEGATIVE_WEIGHTING_METHODS
         ):
             raise_validation_error(
                 "InfoNCELoss",
-                f"negative_weighting_method must be one of {sorted(SUPPORTED_NEGATIVE_WEIGHTING_METHODS)}.",
+                (
+                    "negative_weighting_method must be one of "
+                    f"{sorted(SUPPORTED_NEGATIVE_WEIGHTING_METHODS)}."
+                ),
             )
         if not 0 < overlapping_label_negative_weight <= 1:
             raise_validation_error(
@@ -172,7 +236,11 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         self.peak_sample_size = peak_sample_size
         self.peak_sample_seed = int(peak_sample_seed)
         self.peak_catalog_limit = peak_catalog_limit
+        self.permutation_bank_size = permutation_bank_size
         self.permuted_peaks_per_view = integer_parameters["permuted_peaks_per_view"]
+        self.permutation_selection_attempts = integer_parameters[
+            "permutation_selection_attempts"
+        ]
         self.annotation_bin_radius = int(annotation_bin_radius)
         self.preserve_input_normalization = bool(preserve_input_normalization)
         self.negative_weighting_method = negative_weighting_method
@@ -184,6 +252,8 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                 peak_sample_size,
                 peak_sample_seed,
                 peak_catalog_limit,
+                permutation_bank_size,
+                self.permuted_peaks_per_view,
                 max_peaks_per_spectrum,
                 annotation_bin_radius,
             )
@@ -194,7 +264,9 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
             "peak_sample_size": peak_sample_size,
             "peak_sample_seed": peak_sample_seed,
             "peak_catalog_limit": peak_catalog_limit,
+            "permutation_bank_size": permutation_bank_size,
             "permuted_peaks_per_view": self.permuted_peaks_per_view,
+            "permutation_selection_attempts": self.permutation_selection_attempts,
             "annotation_bin_radius": self.annotation_bin_radius,
             "preserve_input_normalization": self.preserve_input_normalization,
             "negative_weighting_method": negative_weighting_method,
@@ -254,6 +326,12 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                 candidates.items(), key=lambda item: item[1], reverse=True
             )[: self.peak_catalog_limit]
         )
+        permutation_groups = _build_permutation_groups(
+            catalogue,
+            group_size=self.permuted_peaks_per_view,
+            group_count=self.permutation_bank_size,
+            seed=self.peak_sample_seed,
+        )
         protected = (
             self._build_protected_intervals(dataset)
             if self.peak_selection_method == "permutation_label_invariant"
@@ -261,12 +339,19 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         )
         transient_cache[self._cache_key] = {
             "catalogue": catalogue,
+            "permutation_groups": permutation_groups,
+            "max_envelope_width": max(
+                (right - left for left, right in catalogue),
+                default=1,
+            ),
+            "device_group_cache": {},
             "protected": protected,
         }
         transient_cache["chemical_peak_bank"] = catalogue
         logger.info(
-            "Precomputed %s peak envelopes using '%s'.",
+            "Precomputed %s peak envelopes and %s permutation groups using '%s'.",
             len(catalogue),
+            permutation_groups.shape[0],
             self.peak_selection_method,
         )
 
@@ -324,80 +409,39 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
     ) -> Tuple[torch.Tensor, ...]:
         """Attach one TIC-preserving permuted view to the current batch."""
         spectra = batch_data.spectra if isinstance(batch_data, SpectrumBatch) else batch_data[1]
-        sample_ids = batch_data.sample_ids if isinstance(batch_data, SpectrumBatch) else batch_data[0]
+        sample_ids = (
+            batch_data.sample_ids
+            if isinstance(batch_data, SpectrumBatch)
+            else batch_data[0]
+        )
         cached = transient_cache.get(self._cache_key, {})
-        catalogue = tuple(cached.get("catalogue", ()))
         protected_index = cached.get("protected")
         # Contrastive view construction
-        ## REMARK: Augmentation is a data transformation, not a differentiable
-        ## model component. Detaching it prevents in-place envelope assembly from
-        ## invalidating the input graph required by contractive regularization;
-        ## encoder parameter gradients through the resulting view remain intact.
+        ## Resolve the precomputed global bank once per compute device.
         source_spectra = spectra.detach()  # (B, M)
-        augmented = source_spectra.clone()  # (B, M)
-        for row, spectrum_id in enumerate(sample_ids[: spectra.shape[0]].tolist()):
-            protected = (
-                protected_index.intervals(int(spectrum_id))
-                if protected_index is not None
-                else ()
-            )
-            eligible = [
-                interval
-                for interval in catalogue
-                if not _intersects_any(interval, protected)
-                and bool(
-                    source_spectra[row, interval[0] : interval[1]].abs().sum()
-                    > torch.finfo(spectra.dtype).eps
-                )
-            ]
-            selected = _select_non_overlapping(
-                eligible,
-                self.permuted_peaks_per_view,
-                device=spectra.device,
-            )
-            if len(selected) < 2:
-                continue
-            original_row = source_spectra[row]
-            original_selected_mass = torch.stack(
-                [original_row[left:right].sum() for left, right in selected]
-            ).sum()  # ()
-            for destination_index, destination in enumerate(selected):
-                source = selected[(destination_index + 1) % len(selected)]
-                donor = original_row[source[0] : source[1]]  # (W_s,)
-                resampled = F.interpolate(
-                    donor.view(1, 1, -1),
-                    size=destination[1] - destination[0],
-                    mode="linear",
-                    align_corners=False,
-                ).view(-1)  # (W_d,)
-                if self.preserve_input_normalization:
-                    interpolated_mass = resampled.sum()
-                    source_mass = donor.sum()
-                    if interpolated_mass.abs() <= torch.finfo(resampled.dtype).eps:
-                        resampled = original_row[destination[0] : destination[1]]
-                    else:
-                        resampled = resampled * (source_mass / interpolated_mass)
-                augmented[row, destination[0] : destination[1]] = resampled
-
-            if self.preserve_input_normalization:
-                # TIC preservation
-                ## Correct the complete mutable region once after interpolation.
-                ### REMARK: Per-envelope scaling can accumulate a material mass
-                ### error for narrow, high-dynamic-range float32 peaks. A final
-                ### shared correction preserves the selected-region mass without
-                ### changing any protected or otherwise invariant bin.
-                augmented_selected_mass = torch.stack(
-                    [augmented[row, left:right].sum() for left, right in selected]
-                ).sum()  # ()
-                if augmented_selected_mass.abs() <= torch.finfo(spectra.dtype).eps:
-                    for left, right in selected:
-                        augmented[row, left:right] = original_row[left:right]
-                else:
-                    correction = original_selected_mass / augmented_selected_mass
-                    for left, right in selected:
-                        augmented[row, left:right] = (
-                            augmented[row, left:right] * correction
-                        )
+        groups, max_envelope_width = self._device_permutation_groups(
+            cached,
+            spectra.device,
+        )  # (G, S, 2), scalar
+        protected_mask = self._batch_protected_mask(
+            protected_index,
+            sample_ids[: spectra.shape[0]],
+            spectra.shape[1],
+            spectra.device,
+        )
+        selected, active = _select_permutation_groups(
+            source_spectra,
+            groups,
+            protected_mask=protected_mask,
+            attempt_count=self.permutation_selection_attempts,
+        )  # (B, S, 2), (B,)
+        augmented = _permute_envelopes_batch(
+            source_spectra,
+            selected,
+            active,
+            max_envelope_width=max_envelope_width,
+            preserve_mass=self.preserve_input_normalization,
+        )  # (B, M)
 
         if self.preserve_input_normalization and isinstance(batch_data, SpectrumBatch):
             normalization_name = batch_data.space.normalization
@@ -421,6 +465,52 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         combined_spectra = torch.cat([spectra, augmented], dim=0)  # (2B, M)
         combined_indices = torch.cat([sample_ids, sample_ids], dim=0)  # (2B,)
         return (combined_indices, combined_spectra, *batch_data[2:])
+
+    def _device_permutation_groups(
+        self,
+        cached: Dict[str, Any],
+        device: torch.device,
+    ) -> tuple[torch.Tensor, int]:
+        """Return the immutable global permutation bank on one compute device."""
+        groups = cached.get("permutation_groups")
+        if groups is None:
+            groups = _build_permutation_groups(
+                tuple(cached.get("catalogue", ())),
+                group_size=self.permuted_peaks_per_view,
+                group_count=self.permutation_bank_size,
+                seed=self.peak_sample_seed,
+            )
+            cached["permutation_groups"] = groups
+            cached["max_envelope_width"] = max(
+                (
+                    right - left
+                    for left, right in tuple(cached.get("catalogue", ()))
+                ),
+                default=1,
+            )
+        device_cache = cached.setdefault("device_group_cache", {})
+        device_key = (device.type, device.index)
+        if device_key not in device_cache:
+            device_cache[device_key] = torch.as_tensor(
+                groups,
+                dtype=torch.long,
+                device=device,
+            )
+        return device_cache[device_key], int(cached["max_envelope_width"])
+
+    @staticmethod
+    def _batch_protected_mask(
+        protected_index: ProtectedIntervalIndex | None,
+        sample_ids: torch.Tensor,
+        feature_count: int,
+        device: torch.device,
+    ) -> torch.Tensor | None:
+        """Transfer one sparse-index batch mask with a single host synchronization."""
+        if protected_index is None:
+            return None
+        spectrum_ids = sample_ids.detach().to(device="cpu").numpy()
+        mask = protected_index.dense_mask(spectrum_ids, feature_count)
+        return torch.as_tensor(mask, dtype=torch.bool, device=device)  # (B, M)
 
     def forward(
         self,
@@ -475,30 +565,211 @@ def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
+def _build_permutation_groups(
+    catalogue: tuple[tuple[int, int], ...],
+    *,
+    group_size: int,
+    group_count: int,
+    seed: int,
+) -> np.ndarray:
+    """Precompute random groups of pairwise non-overlapping peak envelopes."""
+    if len(catalogue) < group_size:
+        return np.empty((0, group_size, 2), dtype=np.int32)
+    intervals = np.asarray(catalogue, dtype=np.int32)
+    generator = np.random.default_rng(seed)
+    groups = np.empty((group_count, group_size, 2), dtype=np.int32)
+    retained = 0
+    for _ in range(group_count):
+        selected: list[tuple[int, int]] = []
+        for index in generator.permutation(len(catalogue)):
+            candidate = tuple(int(value) for value in intervals[index])
+            if _intersects_any(candidate, tuple(selected)):
+                continue
+            selected.append(candidate)
+            if len(selected) == group_size:
+                groups[retained] = np.asarray(selected, dtype=np.int32)
+                retained += 1
+                break
+    return groups[:retained]
+
+
+def _select_permutation_groups(
+    spectra: torch.Tensor,
+    groups: torch.Tensor,
+    *,
+    protected_mask: torch.Tensor | None,
+    attempt_count: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Select valid global-bank groups for a complete batch without scalar syncs."""
+    batch_size, feature_count = spectra.shape
+    group_size = groups.shape[1]
+    if groups.shape[0] == 0:
+        selected = torch.zeros(
+            (batch_size, group_size, 2),
+            dtype=torch.long,
+            device=spectra.device,
+        )
+        selected[..., 1] = 1
+        return selected, torch.zeros(
+            batch_size,
+            dtype=torch.bool,
+            device=spectra.device,
+        )
+
+    # Candidate selection
+    ## Sample a small candidate pool from the precomputed bank in one operation.
+    candidate_ids = torch.randint(
+        groups.shape[0],
+        (batch_size, attempt_count),
+        device=spectra.device,
+    )  # (B, A)
+    candidates = groups[candidate_ids]  # (B, A, S, 2)
+    left = candidates[..., 0]  # (B, A, S)
+    right = candidates[..., 1]  # (B, A, S)
+    prefix = F.pad(spectra.cumsum(dim=1), (1, 0))  # (B, M + 1)
+    candidate_mass = torch.gather(
+        prefix,
+        1,
+        right.reshape(batch_size, -1),
+    ) - torch.gather(
+        prefix,
+        1,
+        left.reshape(batch_size, -1),
+    )  # (B, A * S)
+    candidate_mass = candidate_mass.view(
+        batch_size,
+        attempt_count,
+        group_size,
+    )  # (B, A, S)
+    valid = candidate_mass > torch.finfo(spectra.dtype).eps  # (B, A, S)
+
+    if protected_mask is not None:
+        protected_prefix = F.pad(
+            protected_mask.to(dtype=torch.int32).cumsum(dim=1),
+            (1, 0),
+        )  # (B, M + 1)
+        protected_count = torch.gather(
+            protected_prefix,
+            1,
+            right.reshape(batch_size, -1),
+        ) - torch.gather(
+            protected_prefix,
+            1,
+            left.reshape(batch_size, -1),
+        )  # (B, A * S)
+        valid &= protected_count.view(
+            batch_size,
+            attempt_count,
+            group_size,
+        ) == 0
+
+    # First valid group
+    ## Invalid spectra retain their original view; no host-side branch is needed.
+    valid_groups = valid.all(dim=2)  # (B, A)
+    attempt_indices = torch.arange(
+        attempt_count,
+        device=spectra.device,
+    ).unsqueeze(0)  # (1, A)
+    first_valid = torch.where(
+        valid_groups,
+        attempt_indices,
+        attempt_count,
+    ).amin(dim=1)  # (B,)
+    active = first_valid < attempt_count  # (B,)
+    safe_indices = first_valid.clamp_max(attempt_count - 1)
+    batch_indices = torch.arange(batch_size, device=spectra.device)
+    selected = candidates[batch_indices, safe_indices]  # (B, S, 2)
+    return selected, active
+
+
+def _permute_envelopes_batch(
+    spectra: torch.Tensor,
+    selected: torch.Tensor,
+    active: torch.Tensor,
+    *,
+    max_envelope_width: int,
+    preserve_mass: bool,
+) -> torch.Tensor:
+    """Cyclically permute variable-width envelopes using batched gather/scatter."""
+    batch_size, feature_count = spectra.shape
+    destination_left = selected[..., 0]  # (B, S)
+    destination_right = selected[..., 1]  # (B, S)
+    destination_width = destination_right - destination_left  # (B, S)
+    source_left = destination_left.roll(shifts=-1, dims=1)  # (B, S)
+    source_right = destination_right.roll(shifts=-1, dims=1)  # (B, S)
+    source_width = source_right - source_left  # (B, S)
+    positions = torch.arange(
+        max_envelope_width,
+        dtype=spectra.dtype,
+        device=spectra.device,
+    ).view(1, 1, -1)  # (1, 1, W)
+    valid_positions = positions < destination_width.unsqueeze(2)  # (B, S, W)
+
+    # Batched linear interpolation
+    ## Reproduce align_corners=False coordinates for every variable-width pair.
+    source_coordinate = (
+        (positions + 0.5)
+        * source_width.unsqueeze(2).to(dtype=spectra.dtype)
+        / destination_width.unsqueeze(2).clamp_min(1).to(dtype=spectra.dtype)
+        - 0.5
+    ).clamp_min(0.0)  # (B, S, W)
+    lower = source_coordinate.floor().to(dtype=torch.long)
+    maximum_source = (source_width - 1).clamp_min(0).unsqueeze(2)
+    lower = torch.minimum(lower, maximum_source)
+    upper = torch.minimum(lower + 1, maximum_source)
+    interpolation_weight = source_coordinate - lower.to(dtype=spectra.dtype)
+    row_offsets = (
+        torch.arange(batch_size, device=spectra.device) * feature_count
+    ).view(batch_size, 1, 1)  # (B, 1, 1)
+    flat_spectra = spectra.reshape(-1)  # (B * M,)
+    lower_values = flat_spectra[
+        row_offsets + source_left.unsqueeze(2) + lower
+    ]  # (B, S, W)
+    upper_values = flat_spectra[
+        row_offsets + source_left.unsqueeze(2) + upper
+    ]  # (B, S, W)
+    resampled = lower_values + (
+        upper_values - lower_values
+    ) * interpolation_weight  # (B, S, W)
+    resampled = resampled * valid_positions
+
+    if preserve_mass:
+        # Envelope mass preservation
+        ## A cyclic permutation retains the mutable-region TIC before the final
+        ## samplewise normalization, leaving all unselected bins unchanged.
+        prefix = F.pad(spectra.cumsum(dim=1), (1, 0))  # (B, M + 1)
+        source_mass = torch.gather(prefix, 1, source_right) - torch.gather(
+            prefix,
+            1,
+            source_left,
+        )  # (B, S)
+        interpolated_mass = resampled.sum(dim=2)  # (B, S)
+        scale = source_mass / interpolated_mass.clamp_min(
+            torch.finfo(spectra.dtype).eps
+        )
+        resampled = resampled * scale.unsqueeze(2)  # (B, S, W)
+
+    # Batched destination write
+    ## Precomputed groups are pairwise disjoint, so every destination index is unique.
+    destination_indices = (
+        row_offsets
+        + destination_left.unsqueeze(2)
+        + positions.to(dtype=torch.long)
+    )  # (B, S, W)
+    write_mask = valid_positions & active.view(batch_size, 1, 1)
+    augmented = spectra.clone().reshape(-1)  # (B * M,)
+    augmented.scatter_(
+        0,
+        destination_indices[write_mask],
+        resampled[write_mask],
+    )
+    return augmented.view(batch_size, feature_count)  # (B, M)
+
+
 def _intersects_any(
     interval: tuple[int, int], protected: tuple[tuple[int, int], ...]
 ) -> bool:
     return any(interval[0] < right and left < interval[1] for left, right in protected)
-
-
-def _select_non_overlapping(
-    intervals: list[tuple[int, int]],
-    limit: int,
-    *,
-    device: torch.device,
-) -> list[tuple[int, int]]:
-    if not intervals:
-        return []
-    order = torch.randperm(len(intervals), device=device).cpu().tolist()
-    selected: list[tuple[int, int]] = []
-    for index in order:
-        candidate = intervals[index]
-        if _intersects_any(candidate, tuple(selected)):
-            continue
-        selected.append(candidate)
-        if len(selected) == limit:
-            break
-    return selected
 
 
 def _weighted_info_nce(
