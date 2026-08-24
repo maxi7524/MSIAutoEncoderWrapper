@@ -34,8 +34,7 @@ if squeue --noheader --user "${USER}" | grep -q .; then
     exit 1
 fi
 
-job_id=$(sbatch --parsable \
-    --export="NIL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT},HOME=${HOME},USER=${USER},PATH=/usr/local/bin:/usr/bin:/bin" \
+job_id=$(CAMPAIGN_ID="${CAMPAIGN_ID}" REPOSITORY_ROOT="${REPOSITORY_ROOT}" sbatch --parsable \
     "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_finalize.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then

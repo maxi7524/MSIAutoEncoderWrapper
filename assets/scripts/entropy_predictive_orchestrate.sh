@@ -33,7 +33,6 @@ TASK_JOB_HISTORY=${RUN_DIRECTORY}/task-array-job-ids
 FINALIZER_JOB_FILE=${RUN_DIRECTORY}/finalizer-job-id
 TASK_LIMIT=6
 PARALLELISM=3
-SBATCH_EXPORT="NIL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT},HOME=${HOME},USER=${USER},PATH=/usr/local/bin:/usr/bin:/bin"
 
 if [[ ! -f "${TASK_COUNT_FILE}" ]]; then
     echo "Missing ${TASK_COUNT_FILE}. Complete staging before orchestration." >&2
@@ -100,9 +99,8 @@ while (( next_task < task_count )); do
         last_task=$((task_count - 1))
     fi
 
-    job_id=$(sbatch --parsable \
+    job_id=$(CAMPAIGN_ID="${CAMPAIGN_ID}" REPOSITORY_ROOT="${REPOSITORY_ROOT}" sbatch --parsable \
         --array="${next_task}-${last_task}%${PARALLELISM}" \
-        --export="${SBATCH_EXPORT}" \
         "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
     job_id=${job_id%%;*}
     if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
@@ -119,8 +117,7 @@ while (( next_task < task_count )); do
     printf '%s\n' "${next_task}" >"${NEXT_TASK_FILE}"
 done
 
-job_id=$(sbatch --parsable \
-    --export="${SBATCH_EXPORT}" \
+job_id=$(CAMPAIGN_ID="${CAMPAIGN_ID}" REPOSITORY_ROOT="${REPOSITORY_ROOT}" sbatch --parsable \
     "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_finalize.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
