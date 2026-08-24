@@ -55,7 +55,7 @@ fi
 
 job_id=$(sbatch --parsable \
     --array="${next_task}-${last_task}%3" \
-    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT}" \
+    --export="NIL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT},HOME=${HOME},USER=${USER},PATH=/usr/local/bin:/usr/bin:/bin" \
     "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
