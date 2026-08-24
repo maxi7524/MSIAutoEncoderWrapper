@@ -75,18 +75,31 @@ wait_for_job_completion() {
     sleep 10
 }
 
+task_completed() {
+    local task_index=$1
+    local status_file
+    printf -v status_file '%s/plan/status/task_%06d.yaml' "${RUN_DIRECTORY}" "${task_index}"
+    [[ -f "${status_file}" ]] && grep -Eq '^[[:space:]]*status: completed$' "${status_file}"
+}
+
 assert_completed_batch() {
     local first_task=$1
     local last_task=$2
-    local task_index status_file
+    local task_index
     for ((task_index = first_task; task_index <= last_task; task_index += 1)); do
-        printf -v status_file '%s/plan/status/task_%06d.yaml' "${RUN_DIRECTORY}" "${task_index}"
-        if [[ ! -f "${status_file}" ]] || ! grep -qx 'status: completed' "${status_file}"; then
+        if ! task_completed "${task_index}"; then
+            printf -v status_file '%s/plan/status/task_%06d.yaml' "${RUN_DIRECTORY}" "${task_index}"
             echo "Task ${task_index} did not complete successfully: ${status_file}" >&2
             exit 1
         fi
     done
 }
+
+# Resume from the first task without a completed manifest after a monitor restart.
+while (( next_task < task_count )) && task_completed "${next_task}"; do
+    next_task=$((next_task + 1))
+done
+printf '%s\n' "${next_task}" >"${NEXT_TASK_FILE}"
 
 while (( next_task < task_count )); do
     # The QoS permits six submitted tasks; wait rather than competing with other user jobs.
