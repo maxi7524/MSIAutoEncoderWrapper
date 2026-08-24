@@ -53,9 +53,8 @@ if (( last_task >= task_count )); then
     last_task=$((task_count - 1))
 fi
 
-job_id=$(sbatch --parsable \
+job_id=$(CAMPAIGN_ID="${CAMPAIGN_ID}" REPOSITORY_ROOT="${REPOSITORY_ROOT}" sbatch --parsable \
     --array="${next_task}-${last_task}%3" \
-    --export="NIL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT},HOME=${HOME},USER=${USER},PATH=/usr/local/bin:/usr/bin:/bin" \
     "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
