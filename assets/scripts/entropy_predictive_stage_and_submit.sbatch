@@ -21,13 +21,18 @@ if [[ ! "${CAMPAIGN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
     exit 2
 fi
 
-REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+REPOSITORY_ROOT=${REPOSITORY_ROOT:-${SLURM_SUBMIT_DIR:-}}
+if [[ -z "${REPOSITORY_ROOT}" || ! -f "${REPOSITORY_ROOT}/pyproject.toml" ]]; then
+    echo "Set REPOSITORY_ROOT to the repository containing pyproject.toml." >&2
+    exit 2
+fi
+REPOSITORY_ROOT=$(cd "${REPOSITORY_ROOT}" && pwd)
 PYTHON=${REPOSITORY_ROOT}/.venv/bin/python
 SOURCE_WORKSPACE=${REPOSITORY_ROOT}/data/kidney_workspace
 SOURCE_CONFIG=${REPOSITORY_ROOT}/assets/experiments/08_26/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
 RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}
-RAM_DIRECTORY=/dev/shm/${USER}/msi-wrapper/${CAMPAIGN_ID}
-LOCAL_WORKSPACE=${RAM_DIRECTORY}/kidney_workspace
+NODE_LOCAL_DIRECTORY=/tmp/${USER}/msi-wrapper/${CAMPAIGN_ID}
+LOCAL_WORKSPACE=${NODE_LOCAL_DIRECTORY}/kidney_workspace
 
 if [[ ! -x "${PYTHON}" ]]; then
     echo "Missing ${PYTHON}. Run assets/scripts/entropy_setup_environment.sh first." >&2
@@ -45,23 +50,23 @@ if [[ ! -f "${SOURCE_WORKSPACE}/datasets/kidney/kidney.imzML" ]]; then
     echo "Kidney dataset is missing from ${SOURCE_WORKSPACE}." >&2
     exit 1
 fi
-if [[ -e "${RAM_DIRECTORY}" || -e "${RUN_DIRECTORY}" ]]; then
+if [[ -e "${NODE_LOCAL_DIRECTORY}" || -e "${RUN_DIRECTORY}" ]]; then
     echo "Campaign already exists: ${CAMPAIGN_ID}. Choose a new campaign ID." >&2
     exit 1
 fi
 
 # Single-copy node-local staging
-## Reserve sufficient RAM before copying the immutable workspace.
+## Use local NVMe rather than tmpfs so the dataset does not consume the job's RAM cgroup limit.
 source_bytes=$(du -sb "${SOURCE_WORKSPACE}" | awk '{print $1}')
-available_bytes=$(df --block-size=1 --output=avail /dev/shm | awk 'NR == 2 {print $1}')
+available_bytes=$(df --block-size=1 --output=avail /tmp | awk 'NR == 2 {print $1}')
 required_bytes=$((source_bytes + source_bytes / 10))
 if (( available_bytes < required_bytes )); then
-    echo "Insufficient /dev/shm capacity: need ${required_bytes} bytes, have ${available_bytes}." >&2
+    echo "Insufficient /tmp capacity: need ${required_bytes} bytes, have ${available_bytes}." >&2
     exit 1
 fi
 
-mkdir -p "${RAM_DIRECTORY}" "${RUN_DIRECTORY}/logs"
-trap 'rm -rf -- "${RAM_DIRECTORY}"' ERR
+mkdir -p "${NODE_LOCAL_DIRECTORY}" "${RUN_DIRECTORY}/logs"
+trap 'rm -rf -- "${NODE_LOCAL_DIRECTORY}"' ERR
 rsync -a --delete "${SOURCE_WORKSPACE}/" "${LOCAL_WORKSPACE}/"
 
 # Materialize task descriptors against the shared node-local workspace.
@@ -96,7 +101,7 @@ if (( task_count < 1 )); then
 fi
 task_job_id=$(sbatch --parsable \
     --array="0-$((task_count - 1))%3" \
-    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID}" \
+    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT}" \
     "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
 task_job_id=${task_job_id%%;*}
 if [[ ! "${task_job_id}" =~ ^[0-9]+$ ]]; then
@@ -105,7 +110,7 @@ if [[ ! "${task_job_id}" =~ ^[0-9]+$ ]]; then
 fi
 sbatch \
     --dependency="afterany:${task_job_id}" \
-    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID}" \
+    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT}" \
     "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_finalize.sbatch"
 
 echo "Submitted task array ${task_job_id} for campaign ${CAMPAIGN_ID}."

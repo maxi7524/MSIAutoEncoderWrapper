@@ -15,7 +15,12 @@ if [[ -z "${CAMPAIGN_ID:-}" ]]; then
     exit 2
 fi
 
-REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+REPOSITORY_ROOT=${REPOSITORY_ROOT:-${SLURM_SUBMIT_DIR:-}}
+if [[ -z "${REPOSITORY_ROOT}" || ! -f "${REPOSITORY_ROOT}/pyproject.toml" ]]; then
+    echo "Set REPOSITORY_ROOT to the repository containing pyproject.toml." >&2
+    exit 2
+fi
+REPOSITORY_ROOT=$(cd "${REPOSITORY_ROOT}" && pwd)
 PYTHON=${REPOSITORY_ROOT}/.venv/bin/python
 RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}
 TASK_FILE=$(printf '%s/plan/tasks/task_%06d.yaml' "${RUN_DIRECTORY}" "${SLURM_ARRAY_TASK_ID}")
