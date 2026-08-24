@@ -13,7 +13,7 @@ from ....utils.validators import resolve_component
 from ....configuration import get_component_config
 from ....readers.base_reader import MSIBaseReader
 from ....readers.readers_manager import ReaderManager
-from ....annotations import AnnotationReader
+from msi_dataset_manager.annotations import AnnotationReader
 from ....binners.base_binner import MSIBaseBinner
 from ....binners.base_inverse import MSIBaseInverseBinner
 from ....binners.binners_manager import BinnerManager

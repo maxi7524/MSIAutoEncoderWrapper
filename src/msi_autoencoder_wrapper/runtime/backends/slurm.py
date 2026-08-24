@@ -20,7 +20,9 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
     ]
     mapping = {
         "partition": "partition",
+        "qos": "qos",
         "account": "account",
+        "nodelist": "nodelist",
         "time": "time",
         "cpus_per_task": "cpus-per-task",
         "memory": "mem",
