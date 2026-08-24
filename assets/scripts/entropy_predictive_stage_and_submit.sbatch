@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=msi-predictive-stage
+#SBATCH --partition=common
+#SBATCH --qos=ms488923_common
+#SBATCH --nodelist=asusgpu6
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --time=1:00:00
+
+# Stage one immutable dataset copy on asusgpu6 and submit its task array.
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: sbatch $0 <campaign-id>" >&2
+    exit 2
+fi
+
+CAMPAIGN_ID=$1
+if [[ ! "${CAMPAIGN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    echo "Campaign ID may contain only letters, numbers, underscores, and hyphens." >&2
+    exit 2
+fi
+
+REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+PYTHON=${REPOSITORY_ROOT}/.venv/bin/python
+SOURCE_WORKSPACE=${REPOSITORY_ROOT}/data/kidney_workspace
+SOURCE_CONFIG=${REPOSITORY_ROOT}/assets/experiments/08_26/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
+RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}
+RAM_DIRECTORY=/dev/shm/${USER}/msi-wrapper/${CAMPAIGN_ID}
+LOCAL_WORKSPACE=${RAM_DIRECTORY}/kidney_workspace
+
+if [[ ! -x "${PYTHON}" ]]; then
+    echo "Missing ${PYTHON}. Run assets/scripts/entropy_setup_environment.sh first." >&2
+    exit 1
+fi
+"${PYTHON}" - <<'PY'
+import torch
+
+if not torch.cuda.is_available():
+    raise SystemExit("PyTorch cannot access CUDA on asusgpu6.")
+
+print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+PY
+if [[ ! -f "${SOURCE_WORKSPACE}/datasets/kidney/kidney.imzML" ]]; then
+    echo "Kidney dataset is missing from ${SOURCE_WORKSPACE}." >&2
+    exit 1
+fi
+if [[ -e "${RAM_DIRECTORY}" || -e "${RUN_DIRECTORY}" ]]; then
+    echo "Campaign already exists: ${CAMPAIGN_ID}. Choose a new campaign ID." >&2
+    exit 1
+fi
+
+# Single-copy node-local staging
+## Reserve sufficient RAM before copying the immutable workspace.
+source_bytes=$(du -sb "${SOURCE_WORKSPACE}" | awk '{print $1}')
+available_bytes=$(df --block-size=1 --output=avail /dev/shm | awk 'NR == 2 {print $1}')
+required_bytes=$((source_bytes + source_bytes / 10))
+if (( available_bytes < required_bytes )); then
+    echo "Insufficient /dev/shm capacity: need ${required_bytes} bytes, have ${available_bytes}." >&2
+    exit 1
+fi
+
+mkdir -p "${RAM_DIRECTORY}" "${RUN_DIRECTORY}/logs"
+trap 'rm -rf -- "${RAM_DIRECTORY}"' ERR
+rsync -a --delete "${SOURCE_WORKSPACE}/" "${LOCAL_WORKSPACE}/"
+
+# Materialize task descriptors against the shared node-local workspace.
+RUNTIME_CONFIG=${RUN_DIRECTORY}/architecture_predictive_runtime.yaml
+"${PYTHON}" - "${SOURCE_CONFIG}" "${RUNTIME_CONFIG}" "${LOCAL_WORKSPACE}" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+source_path, destination_path, workspace_path = map(Path, sys.argv[1:])
+with source_path.open(encoding="utf-8") as stream:
+    config = yaml.safe_load(stream)
+
+factory_parameters = config["task"]["parameters"]["factory_parameters"]
+factory_parameters["project_path"] = str(workspace_path)
+factory_parameters["project_path_anchor"] = "working_directory"
+
+with destination_path.open("w", encoding="utf-8") as stream:
+    yaml.safe_dump(config, stream, sort_keys=False)
+PY
+
+"${PYTHON}" -m msi_autoencoder_wrapper.runtime.cli plan \
+    "${RUNTIME_CONFIG}" \
+    --output "${RUN_DIRECTORY}/plan"
+
+# Submit the three-way GPU task array and its same-node finalizer.
+task_count=$(find "${RUN_DIRECTORY}/plan/tasks" -maxdepth 1 -name 'task_*.yaml' -type f | wc -l)
+if (( task_count < 1 )); then
+    echo "Planning produced no task descriptors." >&2
+    exit 1
+fi
+task_job_id=$(sbatch --parsable \
+    --array="0-$((task_count - 1))%3" \
+    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID}" \
+    "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
+task_job_id=${task_job_id%%;*}
+if [[ ! "${task_job_id}" =~ ^[0-9]+$ ]]; then
+    echo "Could not parse the predictive task-array job ID: ${task_job_id}" >&2
+    exit 1
+fi
+sbatch \
+    --dependency="afterany:${task_job_id}" \
+    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID}" \
+    "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_finalize.sbatch"
+
+echo "Submitted task array ${task_job_id} for campaign ${CAMPAIGN_ID}."

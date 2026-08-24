@@ -17,12 +17,20 @@ def test_slurm_array_is_bounded_and_uses_materialized_tasks(tmp_path: Path) -> N
     script = write_sbatch_script(
         tmp_path,
         5,
-        {"array_parallelism": 2, "partition": "gpu", "gpus_per_task": 1},
+        {
+            "array_parallelism": 2,
+            "partition": "gpu",
+            "qos": "student_gpu",
+            "nodelist": "gpu-node-1",
+            "gpus_per_task": 1,
+        },
     )
     content = script.read_text(encoding="utf-8")
 
     assert "#SBATCH --array=0-4%2" in content
     assert "#SBATCH --partition=gpu" in content
+    assert "#SBATCH --qos=student_gpu" in content
+    assert "#SBATCH --nodelist=gpu-node-1" in content
     assert "task_%06d.yaml" in content
     assert build_sbatch_command(script, parsable=True)[:2] == ["sbatch", "--parsable"]
 
