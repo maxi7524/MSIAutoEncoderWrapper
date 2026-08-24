@@ -63,6 +63,14 @@ def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
         if contractive is not None:
             assert contractive["params"]["num_probes"] == 5
 
+        contrastive = phase["criterions"].get("contrastive", {}).get(
+            "peak_permutation"
+        )
+        if contrastive is not None:
+            assert contrastive["params"]["permutation_bank_size"] == 7000
+            assert contrastive["params"]["permuted_peaks_per_view"] == 3
+            assert contrastive["params"]["permutation_selection_attempts"] == 64
+
     objective_methods = set()
     for task in plan.tasks:
         criterions = task.parameters["training"]["phases"][0]["criterions"]

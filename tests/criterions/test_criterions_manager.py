@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
@@ -12,6 +13,8 @@ from msi_autoencoder_wrapper.training.criterions.criterions_manager import (
 from msi_autoencoder_wrapper.training.criterions.autoencoder.contrastive.infoNCE_loss import (
     MSIInfoNCELoss,
     ProtectedIntervalIndex,
+    _build_permutation_groups,
+    _permute_envelopes_batch,
 )
 from msi_autoencoder_wrapper.training.criterions.autoencoder.regularization.contractive_loss import (
     MSIContractiveLoss,
@@ -162,9 +165,11 @@ def test_info_nce_builds_peak_bank_and_routes_augmented_projection() -> None:
             return index, spectrum
 
     criterion = MSIInfoNCELoss(
-        max_peaks_per_spectrum=1,
+        max_peaks_per_spectrum=2,
         peak_sample_size=4,
         peak_sample_seed=3,
+        permutation_bank_size=16,
+        permuted_peaks_per_view=2,
     )
     cache = {}
     criterion.on_phase_start(torch.nn.Identity(), PeakDataset(), cache)
@@ -243,6 +248,18 @@ def test_peak_permutation_preserves_tic_and_spectrum_specific_annotations(
     cache = {
         criterion._cache_key: {
             "catalogue": ((0, 3), (3, 6), (6, 9)),
+            "permutation_groups": np.asarray(
+                [
+                    (
+                        ((3, 6), (6, 9))
+                        if protected is not None
+                        else ((0, 3), (3, 6))
+                    )
+                ],
+                dtype=np.int32,
+            ),
+            "max_envelope_width": 3,
+            "device_group_cache": {},
             "protected": protected,
         }
     }
@@ -280,6 +297,12 @@ def test_peak_permutation_preserves_each_typed_batch_spectrum_tic() -> None:
     cache = {
         criterion._cache_key: {
             "catalogue": ((0, 2), (2, 6), (6, 9)),
+            "permutation_groups": np.asarray(
+                [[(0, 2), (2, 6), (6, 9)]],
+                dtype=np.int32,
+            ),
+            "max_envelope_width": 4,
+            "device_group_cache": {},
             "protected": None,
         }
     }
@@ -292,3 +315,113 @@ def test_peak_permutation_preserves_each_typed_batch_spectrum_tic() -> None:
         torch.ones(2 * batch.batch_size),
         atol=1e-6,
     )
+
+
+def test_peak_permutation_bank_contains_non_overlapping_triples() -> None:
+    """The reusable random bank resolves overlap before batch training."""
+    groups = _build_permutation_groups(
+        ((0, 3), (2, 5), (5, 7), (8, 11), (12, 14)),
+        group_size=3,
+        group_count=128,
+        seed=7,
+    )
+
+    assert groups.shape == (128, 3, 2)
+    for group in groups:
+        ordered = group[np.argsort(group[:, 0])]
+        assert np.all(ordered[:-1, 1] <= ordered[1:, 0])
+
+
+def test_peak_permutation_cyclically_swaps_three_envelopes() -> None:
+    """One precomputed triple is gathered, permuted, and scattered batchwise."""
+    criterion = MSIInfoNCELoss(
+        permutation_bank_size=1,
+        permuted_peaks_per_view=3,
+        permutation_selection_attempts=1,
+        preserve_input_normalization=True,
+    )
+    spectrum = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]])
+    cache = {
+        criterion._cache_key: {
+            "catalogue": ((0, 2), (2, 4), (4, 6)),
+            "permutation_groups": np.asarray(
+                [[(0, 2), (2, 4), (4, 6)]],
+                dtype=np.int32,
+            ),
+            "max_envelope_width": 2,
+            "device_group_cache": {},
+            "protected": None,
+        }
+    }
+
+    augmented_batch = criterion.on_batch_start(
+        (torch.tensor([0]), spectrum),
+        cache,
+    )
+
+    assert torch.allclose(
+        augmented_batch[1][1:],
+        torch.tensor([[3.0, 4.0, 5.0, 6.0, 1.0, 2.0]]),
+    )
+
+
+def test_vectorized_peak_permutation_matches_variable_width_interpolation() -> None:
+    """Batched gather/scatter matches linear interpolation for unequal envelopes."""
+    spectrum = torch.tensor([[1.0, 2.0, 3.0, 6.0, 9.0, 4.0, 8.0, 12.0, 16.0]])
+    selected = torch.tensor([[[0, 2], [2, 5], [5, 9]]])
+
+    augmented = _permute_envelopes_batch(
+        spectrum,
+        selected,
+        torch.tensor([True]),
+        max_envelope_width=4,
+        preserve_mass=False,
+    )
+    expected = spectrum.clone()
+    intervals = ((0, 2), (2, 5), (5, 9))
+    for destination_index, (left, right) in enumerate(intervals):
+        source_left, source_right = intervals[(destination_index + 1) % 3]
+        expected[0, left:right] = torch.nn.functional.interpolate(
+            spectrum[0, source_left:source_right].view(1, 1, -1),
+            size=right - left,
+            mode="linear",
+            align_corners=False,
+        ).view(-1)
+
+    assert torch.allclose(augmented, expected)
+
+
+def test_label_invariant_permutation_rejects_a_protected_bank_group() -> None:
+    """A sampled group crossing this spectrum's annotation leaves its view unchanged."""
+    criterion = MSIInfoNCELoss(
+        peak_selection_method="permutation_label_invariant",
+        permutation_bank_size=1,
+        permuted_peaks_per_view=2,
+        permutation_selection_attempts=1,
+    )
+    spectrum = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+    protected = ProtectedIntervalIndex(
+        spectrum_ids=np.asarray([12], dtype=np.int64),
+        offsets=np.asarray([0, 1], dtype=np.int64),
+        left=np.asarray([0], dtype=np.int32),
+        right=np.asarray([2], dtype=np.int32),
+    )
+    cache = {
+        criterion._cache_key: {
+            "catalogue": ((0, 2), (2, 4)),
+            "permutation_groups": np.asarray(
+                [[(0, 2), (2, 4)]],
+                dtype=np.int32,
+            ),
+            "max_envelope_width": 2,
+            "device_group_cache": {},
+            "protected": protected,
+        }
+    }
+
+    augmented_batch = criterion.on_batch_start(
+        (torch.tensor([12]), spectrum),
+        cache,
+    )
+
+    assert torch.equal(augmented_batch[1][1:], spectrum)

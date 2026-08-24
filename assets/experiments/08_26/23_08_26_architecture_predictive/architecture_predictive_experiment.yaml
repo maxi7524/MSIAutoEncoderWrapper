@@ -206,7 +206,11 @@ grid:
               temperature: 0.07
               peak_sample_size: 1000
               peak_catalog_limit: 4096
-              permuted_peaks_per_view: 8
+              # Precompute 7000 non-overlapping triples from the global peak
+              # catalogue; each batch samples the triples tensorwise.
+              permutation_bank_size: 7000
+              permuted_peaks_per_view: 3
+              permutation_selection_attempts: 64
               preserve_input_normalization: true
         heads: *molecule_head_loss
 
@@ -225,7 +229,9 @@ grid:
               temperature: 0.07
               peak_sample_size: 1000
               peak_catalog_limit: 4096
-              permuted_peaks_per_view: 8
+              permutation_bank_size: 7000
+              permuted_peaks_per_view: 3
+              permutation_selection_attempts: 64
               annotation_bin_radius: 0
               preserve_input_normalization: true
         heads: *molecule_head_loss
@@ -260,7 +266,9 @@ grid:
               temperature: 0.07
               peak_sample_size: 1000
               peak_catalog_limit: 4096
-              permuted_peaks_per_view: 8
+              permutation_bank_size: 7000
+              permuted_peaks_per_view: 3
+              permutation_selection_attempts: 64
               annotation_bin_radius: 0
               preserve_input_normalization: true
               # Samples sharing labels remain negatives, but their contribution
