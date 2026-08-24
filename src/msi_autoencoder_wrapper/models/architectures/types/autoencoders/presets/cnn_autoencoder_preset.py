@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, TYPE_CHECKING
 
 from ....architectures_manager import ArchitecturesManager
@@ -19,6 +19,7 @@ def get_cnn_autoencoder_preset(
     channels: Sequence[int] = (1, 32, 16, 8),
     kernels: Sequence[int] = (10, 7, 5),
     strides: Sequence[int] = (3, 3, 3),
+    output_normalization: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Build a symmetric Conv1D autoencoder without auxiliary heads.
@@ -33,6 +34,9 @@ def get_cnn_autoencoder_preset(
     :type kernels: Sequence[int]
     :param strides: Stride for each convolutional layer.
     :type strides: Sequence[int]
+    :param output_normalization: Samplewise decoder-output normalization. New
+        experiments should set this explicitly to match the dataset space.
+    :type output_normalization: Mapping[str, Any] | None
     :return: Architecture-manager component configuration.
     :rtype: dict[str, Any]
     :raises ValidationError: If layer dimensions are inconsistent or non-positive.
@@ -74,6 +78,11 @@ def get_cnn_autoencoder_preset(
         "strides": resolved_strides,
         "spatial_dims": spatial_dims,
     }
+    resolved_output_normalization = (
+        {"type": "none", "parameters": {}}
+        if output_normalization is None
+        else dict(output_normalization)
+    )
     return {
         "encoder": {
             "strategy": "CNNEncoder",
@@ -84,6 +93,7 @@ def get_cnn_autoencoder_preset(
             "params": {
                 **common,
                 "output_activation": {"type": "softplus", "parameters": {}},
+                "output_normalization": resolved_output_normalization,
             },
         },
     }

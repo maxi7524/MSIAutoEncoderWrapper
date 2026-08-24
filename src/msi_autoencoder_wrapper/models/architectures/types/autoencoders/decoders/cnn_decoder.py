@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from ....architectures_manager import ArchitecturesManager
+from ......normalization import build_output_normalization
 from .base_decoder import MSIBaseDecoder
 from .output_activation import build_output_activation
 
@@ -40,6 +41,7 @@ class CNNDecoder(MSIBaseDecoder):
         kernels: List[int],
         strides: List[int],
         output_activation: Mapping[str, Any],
+        output_normalization: Mapping[str, Any] | None = None,
         **kwargs: Any
     ) -> None:
         """Construct symmetric transposed upsampling layer blocks.
@@ -57,9 +59,16 @@ class CNNDecoder(MSIBaseDecoder):
         :param output_activation: Final activation configuration. Supported types
             are declared by ``SUPPORTED_OUTPUT_ACTIVATIONS``.
         :type output_activation: Mapping[str, Any]
+        :param output_normalization: Samplewise normalization applied after the
+            final nonnegative activation.
+        :type output_normalization: Mapping[str, Any] | None
         """
         super().__init__()
-        
+        resolved_output_normalization = (
+            {"type": "none", "parameters": {}}
+            if output_normalization is None
+            else dict(output_normalization)
+        )
         self._config = {
             "latent_dim": latent_dim,
             "spatial_dims": spatial_dims,
@@ -67,9 +76,13 @@ class CNNDecoder(MSIBaseDecoder):
             "kernels": kernels,
             "strides": strides,
             "output_activation": dict(output_activation),
+            "output_normalization": resolved_output_normalization,
         }
 
         self.output_activation = build_output_activation(output_activation)
+        self.output_normalization = build_output_normalization(
+            resolved_output_normalization
+        )
         
         # Inversion layer dimension layout assignment
         ## Initial expanding layer targets properties setup
@@ -111,4 +124,5 @@ class CNNDecoder(MSIBaseDecoder):
         for deconv_layer in self.deconv_blocks:
             x = deconv_layer(x)
             
-        return x.squeeze(1)
+        reconstruction = x.squeeze(1)  # (B, M)
+        return self.output_normalization(reconstruction)  # (B, M)

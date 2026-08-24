@@ -33,17 +33,24 @@ class SpectrumMasserstein(SpectrumMetric):
         axis_step: float = 1.0,
         reduction: Literal["mean", "sum", "none"] = "mean",
         epsilon: float = 1e-12,
+        tic_atol: float = 1e-5,
+        tic_rtol: float = 1e-4,
     ) -> None:
         """Initialize the exact one-dimensional Wasserstein metric."""
         super().__init__()
-        if axis_step <= 0 or epsilon <= 0:
-            raise_validation_error("MassersteinLoss", "axis_step and epsilon must be greater than zero.")
+        if axis_step <= 0 or epsilon <= 0 or tic_atol < 0 or tic_rtol < 0:
+            raise_validation_error(
+                "MassersteinLoss",
+                "axis_step and epsilon must be positive; TIC tolerances must be non-negative.",
+            )
         if reduction not in {"mean", "sum", "none"}:
             raise_validation_error("MassersteinLoss", "reduction must be 'mean', 'sum', or 'none'.")
 
         self.axis_step = float(axis_step)
         self.reduction = reduction
         self.epsilon = float(epsilon)
+        self.tic_atol = float(tic_atol)
+        self.tic_rtol = float(tic_rtol)
         self._tic_normalization = ScalarNormalization(
             kind="tic",
             epsilon=self.epsilon,
@@ -54,6 +61,8 @@ class SpectrumMasserstein(SpectrumMetric):
             "axis_step": self.axis_step,
             "reduction": reduction,
             "epsilon": self.epsilon,
+            "tic_atol": self.tic_atol,
+            "tic_rtol": self.tic_rtol,
         }
 
     @property
@@ -102,16 +111,19 @@ class SpectrumMasserstein(SpectrumMetric):
         self._configure_axis_for_forward(mass_axis, reconstruction.shape[1])
         self._move_geometry_to(reconstruction.device, reconstruction.dtype)
 
-        # Representation normalization
-        ## Reuse the project's TIC normalization only for batches that are not
-        ## already represented in TIC-normalized spectral space.
+        # Representation contract
+        ## A declared TIC space must already be enforced by preprocessing and
+        ## the decoder output normalization. The metric validates this contract
+        ## instead of silently hiding a model configuration error.
         if inputs_tic_normalized:
-            prediction_normalized = reconstruction
-            target_normalized = original
+            self._validate_tic_representation(reconstruction, "prediction")
+            self._validate_tic_representation(original, "target")
+            prediction_normalized = reconstruction  # (B, M)
+            target_normalized = original  # (B, M)
         else:
             prediction_normalized, _ = self._tic_normalization.transform(
                 reconstruction,
-            )
+            )  # (B, M)
             target_normalized, _ = self._tic_normalization.transform(original)
 
         # One-dimensional transport cost
@@ -133,6 +145,33 @@ class SpectrumMasserstein(SpectrumMetric):
         if self.reduction == "none":
             return sample_costs
         return sample_costs.mean()
+
+    def _validate_tic_representation(
+        self,
+        values: torch.Tensor,
+        argument_name: str,
+    ) -> None:
+        """Reject tensors that falsely declare a TIC representation."""
+        total_mass = values.sum(dim=1)  # (B,)
+        unit_mass = torch.isclose(
+            total_mass,
+            torch.ones_like(total_mass),
+            atol=self.tic_atol,
+            rtol=self.tic_rtol,
+        )  # (B,)
+        zero_mass = total_mass <= self.epsilon  # (B,)
+        valid = unit_mass | zero_mass  # (B,)
+        if not bool(valid.all()):
+            invalid_count = int((~valid).sum().item())
+            raise_validation_error(
+                "MassersteinLoss",
+                (
+                    f"The {argument_name} declares TIC normalization, but "
+                    f"{invalid_count} spectrum/spectra have total mass neither "
+                    "one nor zero. Normalize the model output and input before "
+                    "evaluating this metric."
+                ),
+            )
 
     def _configure_axis_for_forward(
         self,

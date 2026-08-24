@@ -44,12 +44,17 @@ class MSIClassBalancedMultiLabelBCELoss(MSIHeadCriterion):
         self,
         head_id: str,
         target_field: str,
+        class_indices: tuple[int, ...] | list[int] | None = None,
         class_balance_method: str = "train_inverse_prevalence",
         max_positive_weight: float = 20.0,
         reduction: str = "balanced_class_mean",
         unknown_label_policy: str = "assume_negative",
     ) -> None:
-        super().__init__(head_id=head_id, target_field=target_field)
+        super().__init__(
+            head_id=head_id,
+            target_field=target_field,
+            class_indices=class_indices,
+        )
         if class_balance_method != "train_inverse_prevalence":
             raise_validation_error(
                 "ClassBalancedMultiLabelBCELoss",
@@ -77,6 +82,7 @@ class MSIClassBalancedMultiLabelBCELoss(MSIHeadCriterion):
         self._config = {
             "head_id": head_id,
             "target_field": target_field,
+            "class_indices": self.class_indices,
             "class_balance_method": class_balance_method,
             "max_positive_weight": self.max_positive_weight,
             "reduction": reduction,
@@ -97,6 +103,10 @@ class MSIClassBalancedMultiLabelBCELoss(MSIHeadCriterion):
             cached = collect_training_multilabel_targets(dataset, self.target_field)
             transient_cache[cache_key] = cached
         targets, mask = cached
+        if self.class_indices is not None:
+            selection = torch.as_tensor(self.class_indices, dtype=torch.long)
+            targets = targets.index_select(1, selection)
+            mask = mask.index_select(1, selection)
         if self.unknown_label_policy == "assume_negative":
             mask = torch.ones_like(targets, dtype=torch.bool)
         self._configure_training_statistics(targets, mask)

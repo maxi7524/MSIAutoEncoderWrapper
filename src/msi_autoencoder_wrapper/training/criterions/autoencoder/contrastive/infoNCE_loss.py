@@ -15,6 +15,7 @@ from ...criterions_manager import CriterionsManager
 from .....data import SpectrumBatch
 from .....metrics import info_nce
 from .....models.datasets.base_dataset import MSIBaseDataset
+from .....normalization import ScalarNormalization
 from .....utils.exceptions import (
     raise_incompatible_interface_error,
     raise_validation_error,
@@ -63,9 +64,10 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
     and may alter annotated evidence.
 
     ``permutation_label_invariant`` resolves protected intervals separately for
-    every spectrum through ``spectrum_id -> source dataset -> pixel labels ->
-    source m/z -> bins``. A candidate is eligible only when it does not intersect
-    that spectrum's protected intervals.
+    every spectrum through ``spectrum_id -> mapped dataset annotations ->
+    binner bins``. The dataset owns the exact raw m/z-to-bin mapping, so an
+    annotation protects the same bin as its binned peak. A candidate is eligible
+    only when it does not intersect that spectrum's protected intervals.
 
     Selected envelope shapes and masses are cyclically reassigned within one
     spectrum. If ``preserve_input_normalization`` is true, interpolation keeps
@@ -86,10 +88,9 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
     :type peak_catalog_limit: int
     :param permuted_peaks_per_view: Maximum envelopes permuted per view.
     :type permuted_peaks_per_view: int
-    :param annotation_tolerance: Non-negative protected m/z tolerance.
-    :type annotation_tolerance: float
-    :param annotation_tolerance_unit: ``ppm`` or ``Da``.
-    :type annotation_tolerance_unit: str
+    :param annotation_bin_radius: Optional number of adjacent binner bins to
+        protect on either side of every mapped annotation coordinate.
+    :type annotation_bin_radius: int
     :param preserve_input_normalization: Preserve mutable-region mass and TIC.
     :type preserve_input_normalization: bool
     :param negative_weighting_method: Optional ``multilabel_jaccard`` weighting.
@@ -113,8 +114,7 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         peak_sample_seed: int = 0,
         peak_catalog_limit: int = 4096,
         permuted_peaks_per_view: int = 8,
-        annotation_tolerance: float = 3.0,
-        annotation_tolerance_unit: str = "ppm",
+        annotation_bin_radius: int = 0,
         preserve_input_normalization: bool = True,
         negative_weighting_method: str | None = None,
         overlapping_label_negative_weight: float = 0.25,
@@ -129,13 +129,17 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                 "InfoNCELoss",
                 f"peak_selection_method must be one of {sorted(SUPPORTED_PEAK_SELECTION_METHODS)}.",
             )
-        if temperature <= 0 or annotation_tolerance < 0:
+        if temperature <= 0:
             raise_validation_error(
-                "InfoNCELoss", "temperature must be positive and tolerance non-negative."
+                "InfoNCELoss", "temperature must be positive."
             )
-        if annotation_tolerance_unit not in {"ppm", "Da"}:
+        if (
+            isinstance(annotation_bin_radius, bool)
+            or not isinstance(annotation_bin_radius, int)
+            or annotation_bin_radius < 0
+        ):
             raise_validation_error(
-                "InfoNCELoss", "annotation_tolerance_unit must be 'ppm' or 'Da'."
+                "InfoNCELoss", "annotation_bin_radius must be a non-negative integer."
             )
         integer_parameters = {
             "peak_sample_size": peak_sample_size,
@@ -169,8 +173,7 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         self.peak_sample_seed = int(peak_sample_seed)
         self.peak_catalog_limit = peak_catalog_limit
         self.permuted_peaks_per_view = integer_parameters["permuted_peaks_per_view"]
-        self.annotation_tolerance = float(annotation_tolerance)
-        self.annotation_tolerance_unit = annotation_tolerance_unit
+        self.annotation_bin_radius = int(annotation_bin_radius)
         self.preserve_input_normalization = bool(preserve_input_normalization)
         self.negative_weighting_method = negative_weighting_method
         self.overlapping_label_negative_weight = float(overlapping_label_negative_weight)
@@ -182,8 +185,7 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                 peak_sample_seed,
                 peak_catalog_limit,
                 max_peaks_per_spectrum,
-                annotation_tolerance,
-                annotation_tolerance_unit,
+                annotation_bin_radius,
             )
         )
         self._config = {
@@ -193,8 +195,7 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
             "peak_sample_seed": peak_sample_seed,
             "peak_catalog_limit": peak_catalog_limit,
             "permuted_peaks_per_view": self.permuted_peaks_per_view,
-            "annotation_tolerance": self.annotation_tolerance,
-            "annotation_tolerance_unit": annotation_tolerance_unit,
+            "annotation_bin_radius": self.annotation_bin_radius,
             "preserve_input_normalization": self.preserve_input_normalization,
             "negative_weighting_method": negative_weighting_method,
             "overlapping_label_negative_weight": self.overlapping_label_negative_weight,
@@ -273,33 +274,31 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         self,
         dataset: MSIBaseDataset,
     ) -> ProtectedIntervalIndex:
-        annotation_reader = getattr(dataset.active_context, "annotation_reader", None)
-        bulk_getter = getattr(annotation_reader, "get_spectrum_annotation_index", None)
-        if not callable(bulk_getter):
+        mapped_getter = getattr(dataset, "get_mapped_annotation_index", None)
+        if not callable(mapped_getter):
             raise_validation_error(
                 "InfoNCELoss",
-                "permutation_label_invariant requires a bulk annotation reader.",
+                "permutation_label_invariant requires a dataset-level mapped annotation index.",
             )
-        annotation_index = bulk_getter(None)
-        axis = np.asarray(dataset.active_context.binner.GetXAxis(), dtype=np.float64)
+        annotation_index = mapped_getter()
+        if annotation_index.coordinate_system != "binner":
+            raise_validation_error(
+                "InfoNCELoss",
+                "permutation_label_invariant requires annotation mapping to binner coordinates.",
+            )
+        axis_size = int(annotation_index.coordinate_axis.size)
         offsets = np.zeros(annotation_index.spectrum_ids.size + 1, dtype=np.int64)
         merged_by_row: list[list[tuple[int, int]]] = []
         for row in range(annotation_index.spectrum_ids.size):
-            start = int(annotation_index.spectrum_offsets[row])
-            stop = int(annotation_index.spectrum_offsets[row + 1])
-            intervals = []
-            for mz in annotation_index.mz_values[start:stop]:
-                if not np.isfinite(mz):
-                    continue
-                delta = (
-                    float(mz) * self.annotation_tolerance * 1e-6
-                    if self.annotation_tolerance_unit == "ppm"
-                    else self.annotation_tolerance
+            spectrum_id = int(annotation_index.spectrum_ids[row])
+            coordinates = annotation_index.coordinates_for_spectrum(spectrum_id)
+            intervals = [
+                (
+                    max(0, int(coordinate) - self.annotation_bin_radius),
+                    min(axis_size, int(coordinate) + self.annotation_bin_radius + 1),
                 )
-                left = int(np.searchsorted(axis, float(mz) - delta, side="left"))
-                right = int(np.searchsorted(axis, float(mz) + delta, side="right"))
-                if right > left:
-                    intervals.append((max(0, left), min(axis.size, right)))
+                for coordinate in coordinates
+            ]
             merged = _merge_intervals(intervals)
             merged_by_row.append(merged)
             offsets[row + 1] = offsets[row] + len(merged)
@@ -329,7 +328,13 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
         cached = transient_cache.get(self._cache_key, {})
         catalogue = tuple(cached.get("catalogue", ()))
         protected_index = cached.get("protected")
-        augmented = spectra.clone()  # (B, M)
+        # Contrastive view construction
+        ## REMARK: Augmentation is a data transformation, not a differentiable
+        ## model component. Detaching it prevents in-place envelope assembly from
+        ## invalidating the input graph required by contractive regularization;
+        ## encoder parameter gradients through the resulting view remain intact.
+        source_spectra = spectra.detach()  # (B, M)
+        augmented = source_spectra.clone()  # (B, M)
         for row, spectrum_id in enumerate(sample_ids[: spectra.shape[0]].tolist()):
             protected = (
                 protected_index.intervals(int(spectrum_id))
@@ -341,7 +346,7 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                 for interval in catalogue
                 if not _intersects_any(interval, protected)
                 and bool(
-                    spectra[row, interval[0] : interval[1]].abs().sum()
+                    source_spectra[row, interval[0] : interval[1]].abs().sum()
                     > torch.finfo(spectra.dtype).eps
                 )
             ]
@@ -352,7 +357,10 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
             )
             if len(selected) < 2:
                 continue
-            original_row = spectra[row]
+            original_row = source_spectra[row]
+            original_selected_mass = torch.stack(
+                [original_row[left:right].sum() for left, right in selected]
+            ).sum()  # ()
             for destination_index, destination in enumerate(selected):
                 source = selected[(destination_index + 1) % len(selected)]
                 donor = original_row[source[0] : source[1]]  # (W_s,)
@@ -370,6 +378,43 @@ class MSIInfoNCELoss(MSIContrastiveCriterion):
                     else:
                         resampled = resampled * (source_mass / interpolated_mass)
                 augmented[row, destination[0] : destination[1]] = resampled
+
+            if self.preserve_input_normalization:
+                # TIC preservation
+                ## Correct the complete mutable region once after interpolation.
+                ### REMARK: Per-envelope scaling can accumulate a material mass
+                ### error for narrow, high-dynamic-range float32 peaks. A final
+                ### shared correction preserves the selected-region mass without
+                ### changing any protected or otherwise invariant bin.
+                augmented_selected_mass = torch.stack(
+                    [augmented[row, left:right].sum() for left, right in selected]
+                ).sum()  # ()
+                if augmented_selected_mass.abs() <= torch.finfo(spectra.dtype).eps:
+                    for left, right in selected:
+                        augmented[row, left:right] = original_row[left:right]
+                else:
+                    correction = original_selected_mass / augmented_selected_mass
+                    for left, right in selected:
+                        augmented[row, left:right] = (
+                            augmented[row, left:right] * correction
+                        )
+
+        if self.preserve_input_normalization and isinstance(batch_data, SpectrumBatch):
+            normalization_name = batch_data.space.normalization
+            if normalization_name in {"tic", "max", "l2"}:
+                # Post-augmentation input normalization
+                ## Scalar samplewise normalizations are positively homogeneous,
+                ## so N(P(N(x))) equals N(P(x)) without restoring source counts.
+                normalizer = ScalarNormalization(kind=normalization_name)
+                augmented, _ = normalizer.transform(augmented)  # (B, M)
+            elif normalization_name != "none":
+                raise_validation_error(
+                    "InfoNCELoss",
+                    (
+                        "preserve_input_normalization supports typed batch spaces "
+                        "'none', 'tic', 'max', and 'l2'."
+                    ),
+                )
 
         if isinstance(batch_data, SpectrumBatch):
             return batch_data.with_view("contrastive", augmented)

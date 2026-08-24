@@ -13,10 +13,30 @@ from msi_autoencoder_wrapper.normalization import (
     NormalizationCapabilities,
     NormalizationPipeline,
     NormalizationTrace,
+    build_output_normalization,
 )
 from msi_autoencoder_wrapper.training.engine.base_trainer import MSIPyTorchTrainer
 from msi_autoencoder_wrapper.models.datasets.splitting import DatasetSplitter, SplitConfig
 from tests.mocks.components import MockMSIReader
+
+
+def test_tic_output_normalization_is_differentiable_and_stateless() -> None:
+    """Decoder normalization returns unit-mass spectra without retaining scale."""
+    normalization = build_output_normalization(
+        {"type": "tic", "parameters": {"epsilon": 1e-12}}
+    )
+    source = torch.tensor(
+        [[2.0, 0.0, 0.0], [1.0, 1.0, 2.0]],
+        requires_grad=True,
+    )
+
+    output = normalization(source)  # (B, M)
+    output.square().sum().backward()
+
+    assert torch.allclose(output.sum(dim=1), torch.ones(2))
+    assert source.grad is not None
+    assert torch.isfinite(source.grad).all()
+    assert not tuple(normalization.buffers())
 
 
 def test_dense_stacked_normalization_round_trip() -> None:

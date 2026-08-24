@@ -75,17 +75,25 @@ class MSIHeadCriterion(MSIBaseCriterion, ABC):
 
     criterion_type = "head"
 
-    def __init__(self, head_id: str, target_field: str) -> None:
+    def __init__(
+        self,
+        head_id: str,
+        target_field: str,
+        class_indices: tuple[int, ...] | list[int] | None = None,
+    ) -> None:
         """Initialize the named head output and dataset target binding.
 
         :param head_id: Identifier used by the model's ``head_<id>`` output.
         :type head_id: str
         :param target_field: Dataset target and mask dictionary key.
         :type target_field: str
+        :param class_indices: Optional selected columns from the dataset target.
+        :type class_indices: tuple[int, ...] | list[int] | None
         """
         super().__init__()
         self.head_id = head_id
         self.target_field = target_field
+        self.class_indices = None if class_indices is None else tuple(class_indices)
 
     @property
     def output_key(self) -> str:
@@ -125,11 +133,14 @@ class MSIHeadCriterion(MSIBaseCriterion, ABC):
         logits = model_outputs[self.output_key]
         if isinstance(batch_data, SpectrumBatch):
             logits = logits[: batch_data.batch_size]
-        return (
-            logits,
-            targets[self.target_field].to(logits.device),
-            masks[self.target_field].to(logits.device, dtype=torch.bool),
-        )
+        target = targets[self.target_field].to(logits.device)
+        mask = masks[self.target_field].to(logits.device, dtype=torch.bool)
+        if self.class_indices is not None:
+            selection = torch.as_tensor(self.class_indices, device=logits.device)
+            target = target.index_select(-1, selection)
+            if mask.ndim > 1:
+                mask = mask.index_select(-1, selection)
+        return logits, target, mask
 
     def multilabel_batch(
         self,

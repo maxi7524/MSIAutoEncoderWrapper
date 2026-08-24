@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from msi_autoencoder_wrapper.data import SpectrumBatch, SpectrumSpace
 from msi_autoencoder_wrapper.training.criterions.criterions_manager import (
     CriterionsManager,
 )
@@ -252,3 +253,42 @@ def test_peak_permutation_preserves_tic_and_spectrum_specific_annotations(
     assert augmented.sum().item() == pytest.approx(spectrum.sum().item())
     if protected is not None:
         assert torch.equal(augmented[0, :3], spectrum[0, :3])
+
+
+def test_peak_permutation_preserves_each_typed_batch_spectrum_tic() -> None:
+    """Every augmented model input retains the typed batch TIC contract."""
+    criterion = MSIInfoNCELoss(
+        peak_selection_method="permutation_random",
+        permuted_peaks_per_view=3,
+        preserve_input_normalization=True,
+    )
+    spectra = torch.tensor(
+        [
+            [0.40, 0.10, 0.05, 0.05, 0.10, 0.05, 0.15, 0.05, 0.05],
+            [0.02, 0.03, 0.05, 0.10, 0.20, 0.10, 0.30, 0.10, 0.10],
+        ],
+        dtype=torch.float32,
+    )  # (B=2, M=9)
+    batch = SpectrumBatch(
+        sample_ids=torch.tensor([7, 8]),
+        spectra=spectra,
+        space=SpectrumSpace(
+            mass_axis=torch.arange(9, dtype=torch.float32),
+            normalization="tic",
+        ),
+    )
+    cache = {
+        criterion._cache_key: {
+            "catalogue": ((0, 2), (2, 6), (6, 9)),
+            "protected": None,
+        }
+    }
+
+    augmented_batch = criterion.on_batch_start(batch, cache)
+    model_input = augmented_batch.model_input()  # (2B, M)
+
+    assert torch.allclose(
+        model_input.sum(dim=1),
+        torch.ones(2 * batch.batch_size),
+        atol=1e-6,
+    )

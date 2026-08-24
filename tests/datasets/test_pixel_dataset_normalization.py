@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 import torch
 
+from msi_dataset_manager.annotations.index import build_annotation_index
+
 from msi_autoencoder_wrapper.models.datasets.strategies.pixel_dataset import (
     PixelDataset,
 )
@@ -55,6 +57,12 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
         def get_spectrum_annotations(self, spectrum_id):
             return [{"formula": "B", "adduct": "+H"}]
 
+        def get_spectrum_annotation_index(self, _):
+            return build_annotation_index(
+                spectrum_ids=[0],
+                entries={0: [(("B", "+H"), 1.0)]},
+            )
+
     class Context:
         annotation_reader = AnnotationReader()
 
@@ -62,6 +70,15 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
             @staticmethod
             def transform_spectrum(xs, ys):
                 return torch.as_tensor(ys)
+
+            @staticmethod
+            def map_mass_values_to_bins(mass_values):
+                values = np.asarray(mass_values)
+                return np.where(np.isfinite(values) & (values == 1.0), 0, -1).astype(np.int32)
+
+            @staticmethod
+            def GetXAxis():
+                return np.array([1.0], dtype=np.float32)
 
         binner = Binner()
 
@@ -84,12 +101,12 @@ def test_pixel_dataset_assigns_metadata_and_multilabel_molecule_targets() -> Non
     assert torch.equal(spectrum, torch.tensor([2.0]))
     assert dataset.get_class_mappings() == {
         "condition": {"disease": 0},
-        "molecule": {"A|+H": 0, "B|+H": 1},
+        "molecule": {"B|+H": 0},
     }
     assert targets["condition"].item() == 0
-    assert torch.equal(targets["molecule"], torch.tensor([0.0, 1.0]))
+    assert torch.equal(targets["molecule"], torch.tensor([1.0]))
     assert masks["condition"].item()
-    assert torch.equal(masks["molecule"], torch.tensor([True, True]))
+    assert torch.equal(masks["molecule"], torch.tensor([True]))
 
 
 def test_pixel_dataset_masks_missing_metadata_targets() -> None:

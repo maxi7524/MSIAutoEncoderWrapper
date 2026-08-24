@@ -44,13 +44,18 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
         self,
         head_id: str,
         target_field: str,
+        class_indices: tuple[int, ...] | list[int] | None = None,
         prior_method: str = "train_observed",
         class_prior: float | Sequence[float] | None = None,
         prior_multiplier: float = 1.0,
         min_prior: float = 1e-4,
         max_prior: float = 0.99,
     ) -> None:
-        super().__init__(head_id=head_id, target_field=target_field)
+        super().__init__(
+            head_id=head_id,
+            target_field=target_field,
+            class_indices=class_indices,
+        )
         if prior_method not in {"fixed", "train_observed", "scaled_train_observed"}:
             raise_validation_error(
                 "NNPUMultiLabelLoss",
@@ -75,6 +80,7 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
         self._config = {
             "head_id": head_id,
             "target_field": target_field,
+            "class_indices": self.class_indices,
             "prior_method": prior_method,
             "class_prior": class_prior,
             "prior_multiplier": self.prior_multiplier,
@@ -95,7 +101,12 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
         if cached is None:
             cached = collect_training_multilabel_targets(dataset, self.target_field)
             transient_cache[cache_key] = cached
-        self._configure_training_statistics(*cached)
+        targets, mask = cached
+        if self.class_indices is not None:
+            selection = torch.as_tensor(self.class_indices, dtype=torch.long)
+            targets = targets.index_select(1, selection)
+            mask = mask.index_select(1, selection)
+        self._configure_training_statistics(targets, mask)
 
     def _configure_training_statistics(
         self,

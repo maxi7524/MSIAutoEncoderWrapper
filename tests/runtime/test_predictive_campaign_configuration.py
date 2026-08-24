@@ -30,14 +30,27 @@ def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
     assert {
         task.parameters["factory_parameters"]["variant"]["name"]
         for task in plan.tasks
-    } == {"mlp-ae-512-256-latent-10-layernorm"}
+    } == {"conv1d-ae-32-16-8-latent-10"}
     for task in plan.tasks:
         dataset = task.parameters["factory_parameters"]["dataset"]["parameters"]
         binning = task.parameters["factory_parameters"]["binning"]["parameters"]
+        architecture = task.parameters["factory_parameters"]["variant"]["parameters"]
         phase = task.parameters["training"]["phases"][0]
         assert dataset["split"]["strategy"] == "grouped"
         assert dataset["split"]["parameters"]["group_fields"] == "dataset_id"
+        assert dataset["annotation_settings"]["mapping"]["x_mapping"] == "binner"
+        assert (
+            dataset["annotation_settings"]["targets"]["molecule"]
+            ["empty_spectrum_policy"]
+            == "exclude"
+        )
+        assert (
+            dataset["annotation_settings"]["targets"]["molecule"]
+            ["unobserved_label_policy"]
+            == "unlabelled"
+        )
         assert binning["bin_step"] == 0.55
+        assert architecture["output_normalization"]["type"] == "tic"
         assert phase["phase_name"] == "joint_predictive"
         assert {
             objective["target"]
@@ -101,4 +114,44 @@ def test_predictive_components_resolve_target_width_and_nested_descriptors() -> 
     assert portable_heads["molecule_primary"]["parameters"]["output_dim"] == 3
     assert model_parameters == {
         "head_specs": {"molecule_primary": {"target_field": "molecule"}}
+    }
+
+
+def test_predictive_head_can_select_named_molecule_classes() -> None:
+    """Named head classes select matching columns from dataset-derived targets."""
+
+    class TargetDataset:
+        @staticmethod
+        def get_target_schemas():
+            return {
+                "molecule": TargetSchema(
+                    name="molecule",
+                    target_type="multi_label",
+                    class_names=("a", "b", "c"),
+                )
+            }
+
+    layout, model_parameters = _attach_predictive_components(
+        {"encoder": {"strategy": "Encoder", "params": {"input_dim": 5}}},
+        {
+            "heads": {
+                "molecule_subset": {
+                    "target_field": "molecule",
+                    "class_names": ["c", "a"],
+                    "strategy": "LinearClassificationHead",
+                    "parameters": {"latent_dim": 2, "output_dim": "auto_from_target"},
+                }
+            }
+        },
+        TargetDataset(),
+    )
+
+    assert layout["heads"]["molecule_subset"]["params"]["output_dim"] == 2
+    assert model_parameters == {
+        "head_specs": {
+            "molecule_subset": {
+                "target_field": "molecule",
+                "class_indices": (2, 0),
+            }
+        }
     }

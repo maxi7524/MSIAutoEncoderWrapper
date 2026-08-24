@@ -104,3 +104,18 @@ class MSIBaseBinner(ConfigurableComponent, ABC):
         if tolerance < 0:
             raise_validation_error("Binner", "tolerance cannot be negative.")
         return self.GetMzRangeIndices(float(mz) - tolerance, float(mz) + tolerance)
+
+    def map_mass_values_to_bins(self, mass_values: np.ndarray) -> np.ndarray:
+        """Map raw m/z values to dense bins when the strategy supports it.
+
+        :param mass_values: Raw m/z coordinates with arbitrary NumPy shape.
+        :type mass_values: numpy.ndarray
+        :return: Integer bin indices, with ``-1`` for values outside the output
+            coordinate system.
+        :rtype: numpy.ndarray
+        :raises NotImplementedError: If the binning strategy cannot expose its
+            exact forward coordinate mapping.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose an exact m/z-to-bin mapping."
+        )

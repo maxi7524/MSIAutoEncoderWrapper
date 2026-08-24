@@ -368,7 +368,7 @@ def _attach_predictive_components(
             "params": deepcopy(projector.get("parameters", {})),
         }
     schemas = dataset.get_target_schemas()
-    head_specs: dict[str, dict[str, str]] = {}
+    head_specs: dict[str, dict[str, Any]] = {}
     heads: dict[str, dict[str, Any]] = {}
     for head_id, definition in predictive.get("heads", {}).items():
         target_field = str(definition["target_field"])
@@ -377,13 +377,41 @@ def _attach_predictive_components(
                 f"Predictive head '{head_id}' references unknown target '{target_field}'."
             )
         parameters = deepcopy(definition.get("parameters", {}))
+        requested_classes = definition.get("class_names")
+        if requested_classes is not None:
+            if schemas[target_field].target_type != "multi_label":
+                raise ValueError(
+                    f"Predictive head '{head_id}' class_names is supported only for multi_label targets."
+                )
+            if not isinstance(requested_classes, list) or not all(
+                isinstance(name, str) for name in requested_classes
+            ):
+                raise ValueError(
+                    f"Predictive head '{head_id}' class_names must be a list of strings."
+                )
+            available_names = schemas[target_field].class_names
+            available_indices = {name: index for index, name in enumerate(available_names)}
+            try:
+                class_indices = tuple(available_indices[name] for name in requested_classes)
+            except KeyError as error:
+                raise ValueError(
+                    f"Predictive head '{head_id}' requested unavailable class '{error.args[0]}'."
+                ) from error
+        else:
+            class_indices = None
         if parameters.get("output_dim") == "auto_from_target":
-            parameters["output_dim"] = schemas[target_field].class_count
+            parameters["output_dim"] = (
+                schemas[target_field].class_count
+                if class_indices is None
+                else len(class_indices)
+            )
         heads[str(head_id)] = {
             "strategy": definition["strategy"],
             "params": parameters,
         }
         head_specs[str(head_id)] = {"target_field": target_field}
+        if class_indices is not None:
+            head_specs[str(head_id)]["class_indices"] = class_indices
     if heads:
         layout["heads"] = heads
     return layout, {"head_specs": head_specs} if head_specs else {}

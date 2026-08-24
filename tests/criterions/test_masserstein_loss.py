@@ -55,8 +55,8 @@ def test_masserstein_uses_existing_tic_strategy_for_raw_inputs() -> None:
     assert value.item() == pytest.approx(2.0, abs=1e-5)
 
 
-def test_masserstein_uses_tic_representation_without_second_normalization() -> None:
-    """TIC-normalized input space is passed directly to the transport formula."""
+def test_masserstein_reuses_tic_normalized_target_representation() -> None:
+    """A TIC-normalized target is passed directly to the transport formula."""
     metric = _loss().metric
     target = torch.tensor([[1.0, 0.0, 0.0]])
     prediction = torch.tensor([[0.0, 0.0, 1.0]])
@@ -68,6 +68,20 @@ def test_masserstein_uses_tic_representation_without_second_normalization() -> N
     )
 
     assert value.item() == pytest.approx(2.0, abs=1e-5)
+
+
+def test_masserstein_rejects_unnormalized_decoder_output_for_tic_inputs() -> None:
+    """A declared TIC space cannot hide a decoder-output contract violation."""
+    metric = _loss().metric
+    target = torch.tensor([[1.0, 0.0, 0.0]])
+    prediction = torch.tensor([[2.0, 0.0, 0.0]])
+
+    with pytest.raises(ValidationError, match="prediction declares TIC"):
+        metric(
+            prediction,
+            target,
+            inputs_tic_normalized=True,
+        )
 
 
 def test_masserstein_uses_cumulative_transport_for_distant_signal() -> None:

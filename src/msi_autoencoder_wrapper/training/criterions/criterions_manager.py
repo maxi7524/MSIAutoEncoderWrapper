@@ -238,7 +238,7 @@ class CriterionsManager:
         cls,
         model_type: str,
         loss_setup: Dict[str, Any],
-        head_specs: Optional[Dict[str, Dict[str, str]]] = None,
+        head_specs: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> CompositeLoss:
         """Build losses and bind nested head criteria by head identifier.
 
@@ -268,6 +268,8 @@ class CriterionsManager:
                     config = dict(raw_config)
                     params = dict(config.get("params", {}))
                     params.update({"head_id": head_id, "target_field": target_field})
+                    if "class_indices" in spec:
+                        params["class_indices"] = spec["class_indices"]
                     config["params"] = params
                     flattened[f"{head_id}__{token}"] = config
             expanded["head"] = flattened

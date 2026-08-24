@@ -8,6 +8,7 @@ import numpy as np
 
 from ..dataset_manager import DatasetManager
 from ..base_dataset import RawMSIBaseDataset
+from ..annotations import AnnotationAwareDatasetMixin
 from ....utils.logger import get_custom_logger
 from ....utils.exceptions import raise_validation_error
 from ....core.mixins.active_context.active_context_mixin import ActiveContextProxy
@@ -26,7 +27,7 @@ logger = get_custom_logger(__name__)
 
 
 @DatasetManager.register_dataset("PixelDataset")
-class PixelDataset(RawMSIBaseDataset):
+class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
     """
     Concrete single-pixel sampling strategy that pulls raw arrays and maps them onto uniform grids.
     """
@@ -38,6 +39,7 @@ class PixelDataset(RawMSIBaseDataset):
         normalization: Optional[Literal["none", "tic", "max", "l2"]] = None,
         normalization_epsilon: float = 1e-12,
         target_specs: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        annotation_settings: Optional[Mapping[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -56,6 +58,9 @@ class PixelDataset(RawMSIBaseDataset):
             definition requires ``type`` (``single_label`` or ``multi_label``)
             and may provide ``class_mapping``.
         :type target_specs: Mapping[str, Mapping[str, Any]] | None
+        :param annotation_settings: Mapping, selection, and target policies for
+            reader-derived molecular annotations.
+        :type annotation_settings: Mapping[str, Any] | None
         :raises ValidationError: If normalization settings are invalid.
         """
         super().__init__(active_context=active_context, **kwargs)
@@ -80,12 +85,16 @@ class PixelDataset(RawMSIBaseDataset):
         self.normalization_epsilon = float(normalization_epsilon)
         self.target_specs = self._validate_target_specs(target_specs or {})
         self._resolved_class_mappings: Optional[Dict[str, Dict[str, int]]] = None
-        self._molecule_annotation_index: Any = None
+        self._initialize_annotation_support(
+            annotation_settings,
+            enabled="molecule" in self.target_specs,
+        )
         self._config = {
             "source": source,
             "normalization": resolved_normalization,
             "normalization_epsilon": self.normalization_epsilon,
             "target_specs": self.target_specs,
+            "annotation_settings": self.get_annotation_settings().get_config(),
             "split": self.get_split_config(),
         }
 
@@ -111,6 +120,8 @@ class PixelDataset(RawMSIBaseDataset):
         if mask in self.target_specs:
             sample = self._target_sample(idx)
             return bool(sample.masks[mask].item())
+        if mask == "annotated" and "molecule" in self.target_specs:
+            return self.get_mapped_annotation_index().has_annotations(idx)
         annotation_reader = getattr(self.active_context, "annotation_reader", None)
         getter = getattr(annotation_reader, "get_spectrum_mask", None)
         if callable(getter):
@@ -337,11 +348,7 @@ class PixelDataset(RawMSIBaseDataset):
             )
         metadata = annotation_reader.get_dataset_metadata()
         all_annotations = annotation_reader.get_annotations()
-        molecule_index = (
-            self._get_molecule_annotation_index()
-            if "molecule" in self.target_specs
-            else None
-        )
+        molecule_index = self.get_mapped_annotation_index() if "molecule" in self.target_specs else None
         mappings: Dict[str, Dict[str, int]] = {}
         for field, spec in self.target_specs.items():
             values = (
@@ -390,7 +397,7 @@ class PixelDataset(RawMSIBaseDataset):
             mapping = mappings[field]
             if field == "molecule":
                 target = torch.zeros(len(mapping), dtype=torch.float32)
-                molecule_index = self._get_molecule_annotation_index()
+                molecule_index = self.get_mapped_annotation_index()
                 identities = (
                     molecule_index.identities_for_spectrum(spectrum_id)
                     if molecule_index is not None
@@ -409,9 +416,20 @@ class PixelDataset(RawMSIBaseDataset):
                     if class_index is not None:
                         target[class_index] = 1.0
                 targets[field] = target
-                # Closed-world BCE and PU both require one availability value per
-                # class. PU interprets target zero as unlabelled, not negative.
-                target_masks[field] = torch.ones(len(mapping), dtype=torch.bool)
+                target_policy = self.get_annotation_target_settings(field)
+                spectrum_has_annotation = molecule_index.has_annotations(spectrum_id)
+                if (
+                    target_policy.empty_spectrum_policy == "reconstruction_only"
+                    and not spectrum_has_annotation
+                ):
+                    target_masks[field] = torch.zeros(len(mapping), dtype=torch.bool)
+                elif target_policy.unobserved_label_policy == "masked":
+                    target_masks[field] = target.bool()
+                else:
+                    # BCE interprets target zero as negative; PU interprets it as
+                    # unlabelled. The dataset records availability, while the loss
+                    # owns the statistical interpretation.
+                    target_masks[field] = torch.ones(len(mapping), dtype=torch.bool)
                 continue
             values = metadata_values(metadata, field)
             if spec["type"] == "multi_label":
@@ -455,20 +473,6 @@ class PixelDataset(RawMSIBaseDataset):
             for index in indices
         ]
         return self._collate_targets(samples)
-
-    def _get_molecule_annotation_index(self) -> Any:
-        """Build the reader-owned bulk annotation index at most once."""
-        if self._molecule_annotation_index is not None:
-            return self._molecule_annotation_index
-        annotation_reader = getattr(self.active_context, "annotation_reader", None)
-        bulk_getter = getattr(annotation_reader, "get_spectrum_annotation_index", None)
-        if not callable(bulk_getter):
-            return None
-        # Annotated-only CSR rows
-        ## Missing spectrum identifiers resolve to empty slices without storing
-        ## one offset per unannotated MSI pixel.
-        self._molecule_annotation_index = bulk_getter(None)
-        return self._molecule_annotation_index
 
     def normalize_batch(self, spectra: torch.Tensor) -> torch.Tensor:
         """Normalize dense spectra independently along their feature dimension."""
