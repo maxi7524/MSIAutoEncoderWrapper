@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --time=1:00:00
 
-# Stage one immutable dataset copy on asusgpu6 and submit its task array.
+# Stage one immutable dataset copy on asusgpu6 and materialize its task array.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -93,24 +93,14 @@ PY
     "${RUNTIME_CONFIG}" \
     --output "${RUN_DIRECTORY}/plan"
 
-# Submit the three-way GPU task array and its same-node finalizer.
+# Record the task count for a later login-node submission.
+## Entropy permits only one submitted job per user, so this job must finish
+## before the task array can be submitted.
 task_count=$(find "${RUN_DIRECTORY}/plan/tasks" -maxdepth 1 -name 'task_*.yaml' -type f | wc -l)
 if (( task_count < 1 )); then
     echo "Planning produced no task descriptors." >&2
     exit 1
 fi
-task_job_id=$(sbatch --parsable \
-    --array="0-$((task_count - 1))%3" \
-    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT}" \
-    "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
-task_job_id=${task_job_id%%;*}
-if [[ ! "${task_job_id}" =~ ^[0-9]+$ ]]; then
-    echo "Could not parse the predictive task-array job ID: ${task_job_id}" >&2
-    exit 1
-fi
-sbatch \
-    --dependency="afterany:${task_job_id}" \
-    --export="ALL,CAMPAIGN_ID=${CAMPAIGN_ID},REPOSITORY_ROOT=${REPOSITORY_ROOT}" \
-    "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_finalize.sbatch"
-
-echo "Submitted task array ${task_job_id} for campaign ${CAMPAIGN_ID}."
+printf '%s\n' "${task_count}" >"${RUN_DIRECTORY}/task-count"
+echo "Staging completed for campaign ${CAMPAIGN_ID}; ${task_count} tasks are ready."
+echo "Run entropy_predictive_submit_task_array.sh ${CAMPAIGN_ID} from the login node."
