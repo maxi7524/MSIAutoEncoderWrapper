@@ -3,7 +3,7 @@
 # Create the project environment required by Entropy GPU jobs.
 set -euo pipefail
 
-REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 ENVIRONMENT_PATH=${ENVIRONMENT_PATH:-"${REPOSITORY_ROOT}/.venv"}
 
 if [[ ! -x "${ENVIRONMENT_PATH}/bin/python" ]]; then

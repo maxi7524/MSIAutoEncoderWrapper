@@ -4,7 +4,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "Usage: $0 [--restart] <campaign-id>" >&2
+    echo "Usage: $0 [--restart] <run-directory>" >&2
     exit 2
 fi
 
@@ -15,22 +15,47 @@ if [[ $# -eq 2 ]]; then
         exit 2
     fi
     restart=true
-    CAMPAIGN_ID=$2
+    RUN_DIRECTORY_INPUT=$2
 else
-    CAMPAIGN_ID=$1
+    RUN_DIRECTORY_INPUT=$1
 fi
 
-if [[ ! "${CAMPAIGN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
-    echo "Campaign ID may contain only letters, numbers, underscores, and hyphens." >&2
-    exit 2
+if [[ -d "${RUN_DIRECTORY_INPUT}" ]]; then
+    REQUESTED_RUN_DIRECTORY=$(cd "${RUN_DIRECTORY_INPUT}" && pwd)
+elif [[ "${RUN_DIRECTORY_INPUT}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    # Legacy invocation preserves `predictive_orchestrate.sh <campaign-id>`.
+    REQUESTED_RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${RUN_DIRECTORY_INPUT}
+else
+    echo "Run directory is missing: ${RUN_DIRECTORY_INPUT}" >&2
+    exit 1
+fi
+if [[ ! -d "${REQUESTED_RUN_DIRECTORY}" ]]; then
+    echo "Run directory is missing: ${REQUESTED_RUN_DIRECTORY}" >&2
+    exit 1
+fi
+CAMPAIGN_FILE=${REQUESTED_RUN_DIRECTORY}/entropy-campaign.env
+if [[ ! -f "${CAMPAIGN_FILE}" ]]; then
+    echo "Campaign settings are missing: ${CAMPAIGN_FILE}" >&2
+    exit 1
 fi
 
-REPOSITORY_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}
+# The staging job writes this file. It binds every later job to one workspace snapshot.
+source "${CAMPAIGN_FILE}"
+if [[ ! "${CAMPAIGN_ID:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    echo "Campaign settings contain an invalid campaign ID." >&2
+    exit 1
+fi
+if [[ "${RUN_DIRECTORY:-}" != "${REQUESTED_RUN_DIRECTORY}" ]] || [[ ! -f "${REPOSITORY_ROOT:-}/pyproject.toml" ]]; then
+    echo "Campaign settings contain an invalid repository or run directory." >&2
+    exit 1
+fi
+RUN_DIRECTORY=${REQUESTED_RUN_DIRECTORY}
+
 TASK_COUNT_FILE=${RUN_DIRECTORY}/task-count
 NEXT_TASK_FILE=${RUN_DIRECTORY}/next-task-index
 TASK_JOB_HISTORY=${RUN_DIRECTORY}/task-array-job-ids
 FINALIZER_JOB_FILE=${RUN_DIRECTORY}/finalizer-job-id
+# These values must not exceed the Entropy QoS submission and GPU limits.
 TASK_LIMIT=6
 PARALLELISM=3
 
@@ -48,7 +73,7 @@ fi
 if ${restart}; then
     if [[ -f "${TASK_JOB_HISTORY}" ]]; then
         while read -r job_id _; do
-            if [[ "${job_id}" =~ ^[0-9]+$ ]] && squeue --noheader --jobs "${job_id}" | grep -q .; then
+            if [[ "${job_id}" =~ ^[0-9]+$ ]] && squeue --noheader --jobs "${job_id}" 2>/dev/null | grep -q .; then
                 scancel "${job_id}"
                 echo "Cancelled recorded campaign array ${job_id}."
             fi
@@ -68,7 +93,7 @@ fi
 
 wait_for_job_completion() {
     local job_id=$1
-    while squeue --noheader --jobs "${job_id}" | grep -q .; do
+    while squeue --noheader --jobs "${job_id}" 2>/dev/null | grep -q .; do
         sleep 30
     done
     # Allow Slurm accounting to release the completed array before the next submission.
@@ -112,9 +137,9 @@ while (( next_task < task_count )); do
         last_task=$((task_count - 1))
     fi
 
-    job_id=$(CAMPAIGN_ID="${CAMPAIGN_ID}" REPOSITORY_ROOT="${REPOSITORY_ROOT}" sbatch --parsable \
+    job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
         --array="${next_task}-${last_task}%${PARALLELISM}" \
-        "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_task_array.sbatch")
+        "${REPOSITORY_ROOT}/assets/scripts/entropy/predictive_task_array.sbatch")
     job_id=${job_id%%;*}
     if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
         echo "Could not parse the task-array job ID: ${job_id}" >&2
@@ -130,8 +155,8 @@ while (( next_task < task_count )); do
     printf '%s\n' "${next_task}" >"${NEXT_TASK_FILE}"
 done
 
-job_id=$(CAMPAIGN_ID="${CAMPAIGN_ID}" REPOSITORY_ROOT="${REPOSITORY_ROOT}" sbatch --parsable \
-    "${REPOSITORY_ROOT}/assets/scripts/entropy_predictive_finalize.sbatch")
+job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
+    "${REPOSITORY_ROOT}/assets/scripts/entropy/predictive_finalize.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
     echo "Could not parse the finalizer job ID: ${job_id}" >&2
