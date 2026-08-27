@@ -250,6 +250,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 )
             epoch_metric_loaders = self._build_epoch_metric_loaders(
                 phase_config=phase_config,
+                dataset=dataset,
                 dataset_partitions=dataset_partitions,
                 preprocessing_device=preprocessing_device,
                 compute_device=compute_device,
@@ -797,6 +798,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         self,
         *,
         phase_config: Dict[str, Any],
+        dataset: Dataset,
         dataset_partitions: Dict[str, Dataset | None],
         preprocessing_device: torch.device,
         compute_device: torch.device,
@@ -806,6 +808,8 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
         :param phase_config: Active training phase configuration.
         :type phase_config: Dict[str, Any]
+        :param dataset: Base dataset owning the active context and preprocessing state.
+        :type dataset: Dataset
         :param dataset_partitions: Resolved train, validation, and test views.
         :type dataset_partitions: Dict[str, Dataset | None]
         :param preprocessing_device: Device used by raw-spectrum preprocessing.
@@ -839,7 +843,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 device=preprocessing_device,
             )
             preprocessor = (
-                BatchPreprocessor(split_dataset, preprocessing_device, compute_device)
+                BatchPreprocessor(dataset, preprocessing_device, compute_device)
                 if isinstance(loader.dataset, RawDatasetView)
                 else None
             )
