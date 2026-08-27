@@ -2,6 +2,8 @@
 
 ## Metodologia 
 
+### Wstęp 
+
 Ostatnio zmniejszyliśmy gęstość binnigu. Umożliwa to sprawdzenie także architektury MLP (Multi Layer Perceptron ...), która w teorii uwzględnia globalne cechy
 
 ### Architektury 
@@ -40,13 +42,13 @@ Wszystkie kombinacje modeli były uruchomione 5 razy.
 
 ### Ogólnie 
 
-#### Dopasownie widma 
+#### Rekonstrukcja widma 
 Otrzymujemy dokładność na poziomie $\pm 1 \mathrm{Da}$, plus ewentuanlie szum. 
 
 Wyszło to troche gorzej niż ostatnio (dopasowanie widm). Wynika to z tego że przestrzeń jest mniejsza, mamy mniej złożone modele oraz, że błąd był sztucznie **zaniżony**. Uśredniałem go po batchach itd. a przez to że wymiar był duży to wyniki wychodziły małe. Nie robiłem dokąniejszej analizy ale też pewin były mismatche o kilka pixeli.\
 
 #### Najlepszy model
-Najlepszym modelem sie okazuje siec konwolucyjna **ale** dopiero na binnigu $0.55, 1.0$. 
+Najlepszym modelem sie okazuje siec konwolucyjna **ale** dopiero na binnigu $0.55, 1.0$, ponieważ wtedy zaczyna generowac obwiednie. 
 
 *** 
 
@@ -301,7 +303,7 @@ Tutaj głównym problemem jest to ze generowane widma są zbyt rzadkie, powoduje
 ## Podsumowanie 
 
 ### Ostateczny binning
-Ostatecznie bym wybrał binning $\mathrm{\Delta m\backslash z} = 1.0$. Jest on najstabilniejszy podczas po treningu  
+Ostatecznie bym wybrał binning $\mathrm{\Delta m\backslash z} = 0.55$. Jest on najstabilniejszy podczas po treningu. Jest to dobra informacja, ponieważ ja tą wartość interpretuje jako *najmniejszą wartość binningu, która pozwala modelowi na prawidłową rekonstrukcje (generowanie obwiedni), jednocześnie zachowując najwięcej wyjściowej informacji*. 
 
 ### Ostateczna architektura - sieć konwolucyjna  
 Zdecydowanie lepiej radzi sobie sieć konwolucyjna, ponieważ **nadmierną** ilość widm możemy wyczyścić, w przypadku MLP mamy za mało widm, nie możemy ich sztucznie wygenerować. 
