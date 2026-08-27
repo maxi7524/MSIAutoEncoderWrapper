@@ -94,17 +94,10 @@ def read_campaign(
     :type load_artifacts: bool
     :return: One task record per manifest, in ``task_id`` sort order.
     :rtype: list[CampaignTask]
-    :raises WorkspaceConfigError: If the campaign has no ``status`` directory.
+    :raises WorkspaceConfigError: If the campaign has no ``status`` directory, or if
+        its ``__cfg_<fingerprint>``-suffixed directory cannot be resolved unambiguously.
     """
-    status_directory = Path(workspace) / "configs" / "execution" / experiment_name / "status"
-    if not status_directory.is_dir():
-        raise_workspace_error(
-            context_name="CampaignReader",
-            message=(
-                f"No status directory for experiment '{experiment_name}' under "
-                f"workspace '{workspace}' (expected '{status_directory}')."
-            ),
-        )
+    status_directory = _resolve_status_directory(Path(workspace), experiment_name)
 
     # Manifest discovery
     ## Progress snapshots share the "task_*" prefix but end in "-progress.yaml".
@@ -135,6 +128,61 @@ def read_campaign(
         dict(status_counts),
     )
     return tasks
+
+
+def _resolve_status_directory(workspace: Path, experiment_name: str) -> Path:
+    """Locate one campaign's ``status`` directory under ``configs/execution``.
+
+    The runtime CLI namespaces every campaign directory as
+    ``<experiment_name>__cfg_<fingerprint>`` (``runtime.naming.campaign_identifier``),
+    so the plain ``<experiment_name>`` directory this reader originally expected no
+    longer exists for campaigns materialized after that change. The exact plain name
+    is tried first for backward compatibility with any pre-existing directory or
+    compatibility symlink; only when that is absent does this fall back to the single
+    ``<experiment_name>__cfg_*`` match.
+
+    :param workspace: Project workspace root.
+    :type workspace: pathlib.Path
+    :param experiment_name: ``experiment.name`` of the campaign's config.
+    :type experiment_name: str
+    :return: Resolved ``status`` directory.
+    :rtype: pathlib.Path
+    :raises WorkspaceConfigError: If neither the exact directory nor exactly one
+        ``__cfg_*``-suffixed directory can be resolved.
+    """
+    execution_root = workspace / "configs" / "execution"
+    exact = execution_root / experiment_name / "status"
+    if exact.is_dir():
+        return exact
+
+    candidates = sorted(execution_root.glob(f"{experiment_name}__cfg_*"))
+    matching = [candidate for candidate in candidates if (candidate / "status").is_dir()]
+    if len(matching) == 1:
+        logger.info(
+            "Resolved campaign '%s' to namespaced directory '%s'.",
+            experiment_name,
+            matching[0].name,
+        )
+        return matching[0] / "status"
+    if len(matching) > 1:
+        raise_workspace_error(
+            context_name="CampaignReader",
+            message=(
+                f"Experiment '{experiment_name}' under workspace '{workspace}' has "
+                f"{len(matching)} distinct '__cfg_*' campaign directories with a "
+                "status/ subdirectory: "
+                f"{[candidate.name for candidate in matching]}. Pass the exact "
+                "'<experiment_name>__cfg_<fingerprint>' directory name instead."
+            ),
+        )
+    raise_workspace_error(
+        context_name="CampaignReader",
+        message=(
+            f"No status directory for experiment '{experiment_name}' under "
+            f"workspace '{workspace}' (tried '{exact}' and "
+            f"'{execution_root}/{experiment_name}__cfg_*/status')."
+        ),
+    )
 
 
 def _build_task(

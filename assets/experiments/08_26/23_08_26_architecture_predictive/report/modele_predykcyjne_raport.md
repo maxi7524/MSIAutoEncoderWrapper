@@ -10,6 +10,7 @@ Raport jest cały pisany ręcznie. A.I zostało użyte do formatowania tekstu, c
 
 Celem analizy jest wybranie najlepszej konstrukcji, związanej z modelem predykcyjnym. Porównuje tutaj rózne regularyzacje odnosząc sie do podstaw teoretycznych. 
 
+Celem jest także zrobienie takiego wstepu teoretycznego, żeby Maria baze związaną co było robione. 
 
 ### Sugestia
 Rzucić okiem na eksperyment, najwazniejsze jest, że:
@@ -958,14 +959,216 @@ Po dwóch trzech epokach, model zeruje swoje funkcje kosztu, ale nie uogólnia s
 *** 
 
 ### Wstępna analiza 
+W tej części porównuje modele bazowe oraz sam AE bez głowy predykcyjnej, z podstawową architekturą bce, żebyśmy zrozumieli czym różnią się obydwa modele.
 
 #### Funkcje kosztu 
 
-#TODO - trzeba tutaj rozpisać jakei sa wnyiki poszczególnyc funkcji kosztu. Z czego to może wynikać , konmentarz dotyczący walidacyjn vs treningowy 
+![alt text](image.png)
+
+**Uczenie się modelu**
+
+Widzimy, że modele się trenują. Mozemy zaobserwowac także, że nei ma problemu z genrealizacją, poniewaz wraz ze zmniejszającą się funkcją kosztu na zbiorze treningowym, widzimy także, zmenijszające si wartości na zbiozrez walidacyjnym. 
+
+**Głowa predykcyjna**
+Widzimy, że najlepszy wynik osiągnęła architektura nnPU (jest znacząco lepszy) 
+
+**Kontrastywność**
+Widzimy, że najlepsze wyniki są osiągnae przez Jaccard - najlepiej się generalizuje. Może to wynikać z tego, że dokładamy nie pewność do modelu. 
 
 #### Porówanie różnicy pomiedz widmami 
 
+##### Globalna rekonstrukcja 
+
+![alt text](image-1.png)
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>experiment</th>
+      <th>task_id</th>
+      <th>repetition</th>
+      <th>best_checkpoint_epoch</th>
+      <th>validation_masserstein_at_best</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>reconstruction-only (conv1d-ae-32-16-8-latent-...</td>
+      <td>task_000050</td>
+      <td>0</td>
+      <td>9</td>
+      <td>10.691730</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>reconstruction-only (conv1d-ae-32-16-8-latent-...</td>
+      <td>task_000051</td>
+      <td>1</td>
+      <td>10</td>
+      <td>9.868596</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>reconstruction-only (conv1d-ae-32-16-8-latent-...</td>
+      <td>task_000052</td>
+      <td>2</td>
+      <td>9</td>
+      <td>13.391882</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>reconstruction-only (conv1d-ae-32-16-8-latent-...</td>
+      <td>task_000053</td>
+      <td>3</td>
+      <td>10</td>
+      <td>10.522310</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>reconstruction-only (conv1d-ae-32-16-8-latent-...</td>
+      <td>task_000054</td>
+      <td>4</td>
+      <td>10</td>
+      <td>9.684984</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>joint + balanced_bce (15 epochs)</td>
+      <td>task_000000</td>
+      <td>0</td>
+      <td>14</td>
+      <td>31.441209</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>joint + balanced_bce (15 epochs)</td>
+      <td>task_000001</td>
+      <td>1</td>
+      <td>15</td>
+      <td>47.456019</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>joint + balanced_bce (15 epochs)</td>
+      <td>task_000002</td>
+      <td>2</td>
+      <td>12</td>
+      <td>33.068923</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>joint + balanced_bce (15 epochs)</td>
+      <td>task_000003</td>
+      <td>3</td>
+      <td>14</td>
+      <td>27.520899</td>
+    </tr>
+    <tr>
+      <th>9</th>
+      <td>joint + balanced_bce (15 epochs)</td>
+      <td>task_000004</td>
+      <td>4</td>
+      <td>13</td>
+      <td>36.197025</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>mean</th>
+      <th>std</th>
+      <th>count</th>
+    </tr>
+    <tr>
+      <th>experiment</th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>joint + balanced_bce (15 epochs)</th>
+      <td>35.136815</td>
+      <td>7.563443</td>
+      <td>5</td>
+    </tr>
+    <tr>
+      <th>reconstruction-only (conv1d-ae-32-16-8-latent-10, 10 epochs)</th>
+      <td>10.831900</td>
+      <td>1.492680</td>
+      <td>5</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+Z danych i wykresów związanych z rekonstrukcją, widzimy że score jest gorszy. 
+
+![alt text](image-6.png)
+
+![alt text](image-7.png)
+
+![alt text](image-8.png)
+
+![alt text](image-9.png)
+
+Porównując jednak zdjęcia nie widać tych odchyleń w sposób znaczący. Możemy zawuażyć nawet poprawę. Widać po zbliżeniach, że lokalizacja się poprawiła orazpozybliśmy się skrajnej wartości. Więcej obrazków w (#TODO - wstawić hiperłącze `assets/experiments/08_26/23_08_26_architecture_predictive/notebooks/part_2_prediction_metrics_bce.ipynb`)
+
+
+
+> Uwaga:
+> Tutaj to wspólne spektrum było trochę problematycznie, ponieważ, w samej rekonstrukcji, nie wprowadząłem równomiernego podziąłu względem ilości pixeli z danego obrazu.
+>
+> Nie porównywałem najlepszego i najgorszego widma, ponieważ z analizy rekonstrukcji, widizmy, że są one bardzo podobne, różnią się jedynei ilością peaków, co powoduje powstawanie większej ilości obwiedni, które generują dodatkowy błąd. 
+
+
+> Uwaga - ważne 
+> Na końcu osi $\mathrm{m/z}$ w rekonstrukcji pojawia się dodatkowy pik. Wynika on z tego, że normalizacja była źle zdefniowana, to jest po  decoderze nie było normalizacji, przez co mieliśmy rozjazd pomiędzy ilością intensywności. 
+>
+> Mogło to też się przyczyniśc d onmniejzsego score'u massersteina - było za mało *intensywności* dostępnej, co mogło zaniżać stratę (nie mam dobrego formalnego uzasadnienia na to). 
+
 #### Predykcyjność bazowa 
+
+**Ilość annotacji**
+
+![alt text](image-2.png)
+
+Zauważmy, ze większośc klass ma bardzo małą ilośc annotacji, 
 
 ### Contrastive learning 
 

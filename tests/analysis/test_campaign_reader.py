@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,84 @@ def test_read_campaign_multiple_tasks_are_sorted_by_task_id(tmp_path: Path) -> N
 def test_read_campaign_missing_status_directory_raises(tmp_path: Path) -> None:
     with pytest.raises(WorkspaceConfigError):
         read_campaign(tmp_path, "does-not-exist")
+
+
+def test_read_campaign_resolves_cfg_fingerprint_suffixed_directory(
+    tmp_path: Path,
+) -> None:
+    """``runtime.naming.campaign_identifier`` namespaces campaign directories as
+    ``<experiment_name>__cfg_<fingerprint>``; the reader must find that directory
+    from the plain ``experiment_name`` alone when no exact-name directory exists."""
+    write_campaign_task(
+        tmp_path,
+        task_id="task_000000",
+        architecture_name="mlp-ae",
+        preset="MLPAutoencoder",
+        binning_step=0.5,
+        repetition=0,
+        input_dim=6,
+    )
+    execution_root = tmp_path / "configs" / "execution"
+    shutil.move(
+        execution_root / EXPERIMENT_NAME,
+        execution_root / f"{EXPERIMENT_NAME}__cfg_abc123def456",
+    )
+
+    tasks = read_campaign(tmp_path, EXPERIMENT_NAME)
+
+    assert len(tasks) == 1
+    assert tasks[0].task_id == "task_000000"
+
+
+def test_read_campaign_prefers_exact_directory_over_cfg_suffixed_one(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing exact-name directory (or compatibility symlink) always wins,
+    even when a ``__cfg_*`` sibling is also present, so callers who already point at
+    a specific materialized directory keep that exact behavior."""
+    write_campaign_task(
+        tmp_path,
+        task_id="task_000000",
+        architecture_name="exact-match",
+        preset="MLPAutoencoder",
+        binning_step=0.5,
+        repetition=0,
+        input_dim=6,
+    )
+    execution_root = tmp_path / "configs" / "execution"
+    shutil.copytree(
+        execution_root / EXPERIMENT_NAME,
+        execution_root / f"{EXPERIMENT_NAME}__cfg_abc123def456",
+    )
+
+    tasks = read_campaign(tmp_path, EXPERIMENT_NAME)
+
+    assert tasks[0].grid_parameters["architectures"]["name"] == "exact-match"
+
+
+def test_read_campaign_ambiguous_cfg_suffixed_directories_raises(
+    tmp_path: Path,
+) -> None:
+    """Two distinct ``__cfg_*`` directories (e.g. the config changed and was
+    re-planned) must never be silently merged or arbitrarily picked between."""
+    write_campaign_task(
+        tmp_path,
+        task_id="task_000000",
+        architecture_name="mlp-ae",
+        preset="MLPAutoencoder",
+        binning_step=0.5,
+        repetition=0,
+        input_dim=6,
+    )
+    execution_root = tmp_path / "configs" / "execution"
+    shutil.copytree(
+        execution_root / EXPERIMENT_NAME,
+        execution_root / f"{EXPERIMENT_NAME}__cfg_first000000",
+    )
+    shutil.move(
+        execution_root / EXPERIMENT_NAME,
+        execution_root / f"{EXPERIMENT_NAME}__cfg_second000000",
+    )
+
+    with pytest.raises(WorkspaceConfigError):
+        read_campaign(tmp_path, EXPERIMENT_NAME)
