@@ -90,6 +90,25 @@ The source workspace must contain every relative data path used by the YAML.
 For example, if the YAML refers to `datasets/liver/liver.imzML`, that file must
 exist under `data/<workspace>/datasets/liver/`.
 
+### Sequential night run for several YAMLs
+
+One local workspace uses about 29 GB on `asusgpu6`, so campaigns must run one
+after another. The sequence launcher stages one campaign, waits for its finalizer
+to remove the node-local copy, and then starts the next one:
+
+```bash
+nohup bash "${SCRIPTS}/predictive_run_sequence.sh" \
+  data/kidney_workspace \
+  nnpu-controls-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_objective_controls.yaml \
+  nnpu-priors-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_prior_sensitivity.yaml \
+  nnpu-long-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_long_training.yaml \
+  nnpu-masked30-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_masked30.yaml \
+  > "$HOME/entropy-runs/nnpu-followup-YYYYMMDD-sequence.log" 2>&1 &
+```
+
+Use a date or another unique suffix once. Do not rerun this command with the
+same campaign IDs, because staging intentionally rejects existing run directories.
+
 ## Execution
 
 Staging copies the selected workspace once to
@@ -102,6 +121,11 @@ three concurrent elements. It waits for a batch, verifies task status manifests,
 then submits the next batch. After all tasks complete, finalization performs one
 `rsync` of `models/` and `configs/` to the source workspace and removes the
 campaign directory from `/tmp`.
+
+The optional YAML setting `execution.entropy.task_walltime` controls the Slurm
+walltime of task-array elements. It defaults to `01:00:00`; the long nnPU
+campaign uses `02:30:00` because it performs 60 epochs plus train/test AP after
+every epoch. Slurm charges elapsed time, not the unused remainder of this limit.
 
 ## Monitoring and restart
 

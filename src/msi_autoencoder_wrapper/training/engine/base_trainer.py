@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader, Dataset
 
 from ..criterions.criterions_manager import CriterionsManager
@@ -131,6 +132,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         global_history: List[Dict[str, Any]] = (
             list(runtime_checkpoint["history"]) if runtime_checkpoint else []
         )
+        epoch_metric_config = self._resolve_epoch_metric_config(training_config)
         phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
         transient_cache = getattr(self._wrapper.models_manager, "_training_transient_cache", {})
 
@@ -246,6 +248,13 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     if isinstance(validation_loader.dataset, RawDatasetView)
                     else None
                 )
+            epoch_metric_loaders = self._build_epoch_metric_loaders(
+                phase_config=phase_config,
+                dataset_partitions=dataset_partitions,
+                preprocessing_device=preprocessing_device,
+                compute_device=compute_device,
+                metric_config=epoch_metric_config,
+            )
             total_batches = len(dataloader)
             if total_batches < 1:
                 raise_validation_error(
@@ -468,6 +477,18 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 else:
                     current_epoch_loss = mean_metrics["total_loss"]
                     checkpoint_scope = "train"
+                if epoch_metric_config is not None:
+                    for split_name, (metric_loader, metric_preprocessor) in epoch_metric_loaders.items():
+                        mean_metrics[
+                            f"{split_name}_{epoch_metric_config['metric_name']}"
+                        ] = self._evaluate_multilabel_average_precision(
+                            model=model,
+                            dataloader=metric_loader,
+                            preprocessor=metric_preprocessor,
+                            compute_device=compute_device,
+                            head_id=epoch_metric_config["head_id"],
+                            target_field=epoch_metric_config["target_field"],
+                        )
                 mean_metrics["checkpoint_scope"] = checkpoint_scope
                 improved = (
                     current_epoch_loss
@@ -771,6 +792,187 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 processed_batches += 1
         denominator = max(processed_batches, 1)
         return {name: value / denominator for name, value in accumulated.items()}
+
+    def _build_epoch_metric_loaders(
+        self,
+        *,
+        phase_config: Dict[str, Any],
+        dataset_partitions: Dict[str, Dataset | None],
+        preprocessing_device: torch.device,
+        compute_device: torch.device,
+        metric_config: Dict[str, Any] | None,
+    ) -> Dict[str, tuple[DataLoader, BatchPreprocessor | None]]:
+        """Build deterministic evaluation loaders requested by epoch metrics.
+
+        :param phase_config: Active training phase configuration.
+        :type phase_config: Dict[str, Any]
+        :param dataset_partitions: Resolved train, validation, and test views.
+        :type dataset_partitions: Dict[str, Dataset | None]
+        :param preprocessing_device: Device used by raw-spectrum preprocessing.
+        :type preprocessing_device: torch.device
+        :param compute_device: Model execution device.
+        :type compute_device: torch.device
+        :param metric_config: Validated optional epoch metric configuration.
+        :type metric_config: Dict[str, Any] | None
+        :return: One non-shuffled loader and optional preprocessor per requested split.
+        :rtype: Dict[str, tuple[DataLoader, BatchPreprocessor | None]]
+        """
+        if metric_config is None:
+            return {}
+        loaders: Dict[str, tuple[DataLoader, BatchPreprocessor | None]] = {}
+        for split_name in metric_config["splits"]:
+            split_dataset = dataset_partitions.get(split_name)
+            if split_dataset is None or len(split_dataset) == 0:
+                raise_validation_error(
+                    "Trainer",
+                    f"epoch_metrics requests unavailable split '{split_name}'.",
+                )
+            evaluation_phase = dict(phase_config)
+            evaluation_phase["dataloader"] = {
+                **phase_config.get("dataloader", {}),
+                "shuffle": False,
+                "drop_last": False,
+            }
+            loader = self._build_dataloader(
+                dataset=split_dataset,
+                phase_config=evaluation_phase,
+                device=preprocessing_device,
+            )
+            preprocessor = (
+                BatchPreprocessor(split_dataset, preprocessing_device, compute_device)
+                if isinstance(loader.dataset, RawDatasetView)
+                else None
+            )
+            loaders[split_name] = (loader, preprocessor)
+        return loaders
+
+    @staticmethod
+    def _resolve_epoch_metric_config(
+        training_config: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        """Validate optional per-epoch macro AP reporting for one multi-label head.
+
+        :param training_config: Complete training configuration.
+        :type training_config: Dict[str, Any]
+        :return: Normalized AP metric configuration or ``None`` when disabled.
+        :rtype: Dict[str, Any] | None
+        """
+        configured = training_config.get("epoch_metrics")
+        if configured is None:
+            return None
+        if not isinstance(configured, dict):
+            raise_validation_error("Trainer", "epoch_metrics must be a mapping.")
+        ap_config = configured.get("multi_label_average_precision")
+        if not isinstance(ap_config, dict):
+            raise_validation_error(
+                "Trainer",
+                "epoch_metrics.multi_label_average_precision must be a mapping.",
+            )
+        head_id = ap_config.get("head_id")
+        target_field = ap_config.get("target_field")
+        splits = ap_config.get("splits", ["train", "test"])
+        if not isinstance(head_id, str) or not head_id:
+            raise_validation_error(
+                "Trainer",
+                "epoch_metrics.multi_label_average_precision.head_id must be a string.",
+            )
+        if not isinstance(target_field, str) or not target_field:
+            raise_validation_error(
+                "Trainer",
+                "epoch_metrics.multi_label_average_precision.target_field must be a string.",
+            )
+        if (
+            not isinstance(splits, list)
+            or not splits
+            or any(split not in {"train", "validation", "test"} for split in splits)
+        ):
+            raise_validation_error(
+                "Trainer",
+                "epoch_metrics.multi_label_average_precision.splits must name train, validation, or test.",
+            )
+        return {
+            "metric_name": f"{head_id}_average_precision",
+            "head_id": head_id,
+            "target_field": target_field,
+            "splits": list(dict.fromkeys(splits)),
+        }
+
+    @staticmethod
+    def _evaluate_multilabel_average_precision(
+        *,
+        model: nn.Module,
+        dataloader: DataLoader,
+        preprocessor: BatchPreprocessor | None,
+        compute_device: torch.device,
+        head_id: str,
+        target_field: str,
+    ) -> float:
+        """Return macro AP for one head without changing model state.
+
+        Entries excluded by the dataset availability mask are excluded class by
+        class. Classes without an observed positive are omitted from the macro
+        mean because AP is undefined for them.
+
+        :param model: Model being evaluated.
+        :type model: nn.Module
+        :param dataloader: Deterministic split loader.
+        :type dataloader: DataLoader
+        :param preprocessor: Optional raw-spectrum preprocessor.
+        :type preprocessor: BatchPreprocessor | None
+        :param compute_device: Model execution device.
+        :type compute_device: torch.device
+        :param head_id: Head identifier without the ``head_`` prefix.
+        :type head_id: str
+        :param target_field: Dataset multi-label target key.
+        :type target_field: str
+        :return: Macro average precision across defined class AP values.
+        :rtype: float
+        """
+        output_key = f"head_{head_id}"
+        logits_batches: list[np.ndarray] = []
+        target_batches: list[np.ndarray] = []
+        mask_batches: list[np.ndarray] = []
+        model_was_training = model.training
+        model.eval()
+        with torch.inference_mode():
+            for batch in dataloader:
+                if isinstance(batch, (RawSpectrumBatch, SharedAxisRawBatch)):
+                    if preprocessor is None:
+                        raise_validation_error("Trainer", "Raw batches require preprocessing.")
+                    batch = preprocessor(batch)
+                elif isinstance(batch, SpectrumBatch):
+                    batch = batch.to(compute_device, non_blocking=compute_device.type == "cuda")
+                if not isinstance(batch, SpectrumBatch):
+                    raise_validation_error("Trainer", "Epoch metrics require SpectrumBatch inputs.")
+                outputs = model(batch.model_input())
+                if output_key not in outputs:
+                    raise_validation_error("Trainer", f"Epoch metrics cannot find '{output_key}'.")
+                if target_field not in batch.targets.values or target_field not in batch.targets.masks:
+                    raise_validation_error(
+                        "Trainer", f"Epoch metrics cannot find target '{target_field}'."
+                    )
+                logits_batches.append(outputs[output_key].detach().cpu().numpy())
+                target_batches.append(batch.targets.values[target_field].detach().cpu().numpy())
+                mask_batches.append(batch.targets.masks[target_field].detach().cpu().numpy())
+        if model_was_training:
+            model.train()
+        logits = np.concatenate(logits_batches, axis=0)  # (N, C)
+        targets = np.concatenate(target_batches, axis=0).astype(bool)  # (N, C)
+        mask = np.concatenate(mask_batches, axis=0).astype(bool)
+        if mask.ndim == 1:
+            mask = np.broadcast_to(mask[:, None], targets.shape)
+        if logits.shape != targets.shape or mask.shape != targets.shape:
+            raise_validation_error("Trainer", "Epoch metric tensors must have equal [N, C] shapes.")
+        probabilities = 1.0 / (1.0 + np.exp(-logits))  # (N, C)
+        values = []
+        for class_index in range(targets.shape[1]):
+            available = mask[:, class_index]
+            truth = targets[available, class_index]
+            if bool(truth.any()):
+                values.append(average_precision_score(truth, probabilities[available, class_index]))
+        if not values:
+            raise_validation_error("Trainer", "Epoch metrics found no classes with positive targets.")
+        return float(np.mean(values))
 
     @classmethod
     def _ensure_finite_tensors(cls, value: Any, location: str) -> None:

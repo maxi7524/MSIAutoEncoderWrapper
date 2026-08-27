@@ -2,7 +2,9 @@
 Concrete dataset strategy executing single-pixel spectra mapping sequences driven by an active context.
 """
 
+from collections import defaultdict
 from typing import Tuple, Any, Optional, Literal, Mapping, Dict
+import random
 import torch
 import numpy as np
 
@@ -85,6 +87,8 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         self.normalization_epsilon = float(normalization_epsilon)
         self.target_specs = self._validate_target_specs(target_specs or {})
         self._resolved_class_mappings: Optional[Dict[str, Dict[str, int]]] = None
+        self._masked_training_positives: dict[int, frozenset[int]] = {}
+        self._training_positive_mask_initialized = False
         self._initialize_annotation_support(
             annotation_settings,
             enabled="molecule" in self.target_specs,
@@ -97,6 +101,23 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             "annotation_settings": self.get_annotation_settings().get_config(),
             "split": self.get_split_config(),
         }
+
+    def create_partitions(self) -> Any:
+        """Create partitions and deterministically hide configured train positives.
+
+        The masking map is derived only after splitting, therefore validation and
+        test samples retain their original annotations. It is keyed by immutable
+        source spectrum identifiers, so raw batch loading and dense loading use
+        exactly the same masked targets.
+
+        :return: Cached dataset partitions.
+        :rtype: Any
+        """
+        partitions = super().create_partitions()
+        if not self._training_positive_mask_initialized:
+            self._configure_training_positive_mask(partitions.train)
+            self._training_positive_mask_initialized = True
+        return partitions
 
     def _get_source_split_target(self, idx: int, target_field: str, **_: Any) -> Any:
         """Return one available single-label target for stratified splitting."""
@@ -415,6 +436,9 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
                     class_index = mapping.get(f"{formula}|{adduct}")
                     if class_index is not None:
                         target[class_index] = 1.0
+                masked_classes = self._masked_training_positives.get(spectrum_id)
+                if masked_classes:
+                    target[list(masked_classes)] = 0.0
                 targets[field] = target
                 target_policy = self.get_annotation_target_settings(field)
                 spectrum_has_annotation = molecule_index.has_annotations(spectrum_id)
@@ -459,6 +483,51 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             targets[field] = torch.tensor(class_index, dtype=torch.long)
             target_masks[field] = torch.tensor(True)
         return TargetSample(values=targets, masks=target_masks)
+
+    def _configure_training_positive_mask(self, train_partition: Any) -> None:
+        """Materialize one reproducible positive-label mask for the train split.
+
+        Each molecular class independently hides a fixed fraction of its observed
+        train positives. Per-class sampling preserves a usable evaluation target
+        for common and rare classes while the fixed seed makes paired BCE/nnPU
+        campaigns reproduce the identical masking protocol.
+
+        :param train_partition: Train dataset view produced by the splitter.
+        :type train_partition: Any
+        :return: None.
+        :rtype: None
+        """
+        settings = self.get_annotation_target_settings("molecule")
+        fraction = settings.train_positive_mask_fraction
+        if fraction <= 0.0 or "molecule" not in self.target_specs:
+            return
+
+        indices = list(getattr(train_partition, "indices", range(len(train_partition))))
+        candidates_by_class: dict[int, list[int]] = defaultdict(list)
+        for public_index in indices:
+            spectrum_id = self._source_index(int(public_index))
+            sample = self._target_sample(spectrum_id)
+            target = sample.values["molecule"]
+            for class_index in torch.nonzero(target > 0.5, as_tuple=False).flatten().tolist():
+                candidates_by_class[int(class_index)].append(spectrum_id)
+
+        random_generator = random.Random(settings.train_positive_mask_seed)
+        selected_by_spectrum: dict[int, set[int]] = defaultdict(set)
+        for class_index, spectrum_ids in candidates_by_class.items():
+            selected_count = int(round(len(spectrum_ids) * fraction))
+            selected_count = min(selected_count, len(spectrum_ids))
+            for spectrum_id in random_generator.sample(spectrum_ids, selected_count):
+                selected_by_spectrum[spectrum_id].add(class_index)
+        self._masked_training_positives = {
+            spectrum_id: frozenset(class_indices)
+            for spectrum_id, class_indices in selected_by_spectrum.items()
+        }
+        logger.info(
+            "Applied train-only positive mask: fraction=%s, seed=%s, masked_entries=%s.",
+            fraction,
+            settings.train_positive_mask_seed,
+            sum(len(class_indices) for class_indices in self._masked_training_positives.values()),
+        )
 
     def get_target_batch(self, indices: Any) -> TargetBatch:
         """Resolve targets for many public indices without reading spectra.
