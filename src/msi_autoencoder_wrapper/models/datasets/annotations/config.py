@@ -15,6 +15,8 @@ class AnnotationTargetSettings:
     empty_spectrum_policy: str = "predictive"
     unobserved_label_policy: str = "negative"
     add_annotation_presence_target: bool = False
+    train_positive_mask_fraction: float = 0.0
+    train_positive_mask_seed: int = 0
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None) -> "AnnotationTargetSettings":
@@ -43,10 +45,36 @@ class AnnotationTargetSettings:
             raise_validation_error(
                 "AnnotationSettings", "add_annotation_presence_target must be Boolean."
             )
+        raw_train_positive_mask = values.get("train_positive_mask")
+        if raw_train_positive_mask is None:
+            train_positive_mask_fraction = 0.0
+            train_positive_mask_seed = 0
+        elif not isinstance(raw_train_positive_mask, Mapping):
+            raise_validation_error(
+                "AnnotationSettings", "train_positive_mask must be a mapping or null."
+            )
+        else:
+            train_positive_mask_fraction = float(
+                raw_train_positive_mask.get("fraction", 0.0)
+            )
+            if not 0.0 <= train_positive_mask_fraction < 1.0:
+                raise_validation_error(
+                    "AnnotationSettings",
+                    "train_positive_mask.fraction must be in [0, 1).",
+                )
+            train_positive_mask_seed = raw_train_positive_mask.get("seed", 0)
+            if isinstance(train_positive_mask_seed, bool) or not isinstance(
+                train_positive_mask_seed, int
+            ):
+                raise_validation_error(
+                    "AnnotationSettings", "train_positive_mask.seed must be an integer."
+                )
         return cls(
             empty_spectrum_policy=empty_policy,
             unobserved_label_policy=unobserved_policy,
             add_annotation_presence_target=presence,
+            train_positive_mask_fraction=train_positive_mask_fraction,
+            train_positive_mask_seed=train_positive_mask_seed,
         )
 
     def get_config(self) -> dict[str, Any]:
@@ -55,6 +83,14 @@ class AnnotationTargetSettings:
             "empty_spectrum_policy": self.empty_spectrum_policy,
             "unobserved_label_policy": self.unobserved_label_policy,
             "add_annotation_presence_target": self.add_annotation_presence_target,
+            "train_positive_mask": (
+                {
+                    "fraction": self.train_positive_mask_fraction,
+                    "seed": self.train_positive_mask_seed,
+                }
+                if self.train_positive_mask_fraction > 0.0
+                else None
+            ),
         }
 
 

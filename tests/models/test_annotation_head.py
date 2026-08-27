@@ -4,6 +4,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+from msi_autoencoder_wrapper.data import SpectrumBatch, SpectrumSpace, TargetBatch
+
 from msi_autoencoder_wrapper.models.architectures.types.autoencoders.heads.linear_classification_head import (
     LinearClassificationHead,
 )
@@ -138,3 +140,33 @@ def test_phase_freeze_can_select_one_named_head() -> None:
     assert all(not parameter.requires_grad for parameter in model.encoder.parameters())
     assert all(not parameter.requires_grad for parameter in model.heads["first"].parameters())
     assert all(parameter.requires_grad for parameter in model.heads["second"].parameters())
+
+
+def test_epoch_average_precision_reports_masked_multilabel_macro_ap() -> None:
+    """Epoch AP is computed from logits and respects per-class availability."""
+
+    class FixedHead(nn.Module):
+        def forward(self, spectra):
+            return {"head_molecule_primary": spectra}
+
+    batch = SpectrumBatch(
+        sample_ids=torch.arange(4),
+        spectra=torch.tensor([[4.0, -4.0], [-4.0, 4.0], [3.0, -3.0], [-3.0, 3.0]]),
+        space=SpectrumSpace(torch.tensor([100.0, 101.0])),
+        targets=TargetBatch(
+            values={"molecule": torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]])},
+            masks={"molecule": torch.ones(4, 2, dtype=torch.bool)},
+            schemas={},
+        ),
+    )
+
+    value = MSIPyTorchTrainer._evaluate_multilabel_average_precision(
+        model=FixedHead(),
+        dataloader=[batch],
+        preprocessor=None,
+        compute_device=torch.device("cpu"),
+        head_id="molecule_primary",
+        target_field="molecule",
+    )
+
+    assert value == pytest.approx(1.0)

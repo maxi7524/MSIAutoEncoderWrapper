@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 from msi_dataset_manager.annotations.index import build_annotation_index
 
@@ -116,3 +117,77 @@ def test_pixel_dataset_excludes_spectra_without_retained_annotations() -> None:
 
     assert len(dataset) == 2
     assert [dataset.get_sample_id(index) for index in range(len(dataset))] == [0, 1]
+
+
+def test_pixel_dataset_masks_only_deterministic_train_positive_entries() -> None:
+    """Configured positive masking leaves validation and test labels unchanged."""
+
+    class Reader:
+        def GetNumberOfSpectra(self):
+            return 4
+
+        def GetSpectrum(self, spectrum_id):
+            return np.array([200.1]), np.array([float(spectrum_id + 1)])
+
+    class AnnotationReader:
+        @staticmethod
+        def get_dataset_metadata():
+            return {}
+
+        @staticmethod
+        def get_annotations():
+            return [{"formula": "A", "adduct": "+H"}]
+
+        def get_spectrum_annotation_index(self, _dataset_id):
+            return build_annotation_index(
+                spectrum_ids=[0, 1, 2, 3],
+                entries={index: [(('A', '+H'), 200.1)] for index in range(4)},
+            )
+
+    class Context:
+        annotation_reader = AnnotationReader()
+        binner = LinearBinning(bin_step=0.5, x_min=200.0, x_max=201.0)
+
+        @staticmethod
+        def get_data_reader(_source):
+            return Reader()
+
+    settings = {
+        "mapping": {"x_mapping": "binner"},
+        "targets": {
+            "molecule": {
+                "empty_spectrum_policy": "exclude",
+                "train_positive_mask": {"fraction": 0.5, "seed": 123},
+            }
+        },
+    }
+    split = {
+        "strategy": "predefined",
+        "fractions": {"train": 0.75, "validation": 0.0, "test": 0.25},
+        "assignments": {"train": [0, 1, 2], "validation": [], "test": [3]},
+    }
+    dataset = PixelDataset(
+        active_context=Context(),
+        normalization="none",
+        target_specs={"molecule": {"type": "multi_label"}},
+        annotation_settings=settings,
+        split=split,
+    )
+
+    partitions = dataset.create_partitions()
+    train_targets = dataset.get_target_batch(partitions.train.indices).values["molecule"]
+    test_targets = dataset.get_target_batch(partitions.test.indices).values["molecule"]
+
+    assert int(train_targets.sum()) == 1
+    assert torch.equal(test_targets, torch.tensor([[1.0]]))
+
+    repeated = PixelDataset(
+        active_context=Context(),
+        normalization="none",
+        target_specs={"molecule": {"type": "multi_label"}},
+        annotation_settings=settings,
+        split=split,
+    )
+    repeated_partitions = repeated.create_partitions()
+    repeated_targets = repeated.get_target_batch(repeated_partitions.train.indices)
+    assert torch.equal(train_targets, repeated_targets.values["molecule"])

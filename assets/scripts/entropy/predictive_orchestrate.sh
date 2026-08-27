@@ -58,6 +58,12 @@ FINALIZER_JOB_FILE=${RUN_DIRECTORY}/finalizer-job-id
 # These values must not exceed the Entropy QoS submission and GPU limits.
 TASK_LIMIT=6
 PARALLELISM=3
+TASK_WALLTIME=${TASK_WALLTIME:-01:00:00}
+
+if [[ ! "${TASK_WALLTIME}" =~ ^[0-9]{1,2}:[0-5][0-9]:[0-5][0-9]$ ]]; then
+    echo "Campaign settings contain an invalid task walltime: ${TASK_WALLTIME}" >&2
+    exit 1
+fi
 
 if [[ ! -f "${TASK_COUNT_FILE}" ]]; then
     echo "Missing ${TASK_COUNT_FILE}. Complete staging before orchestration." >&2
@@ -138,6 +144,7 @@ while (( next_task < task_count )); do
     fi
 
     job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
+        --time="${TASK_WALLTIME}" \
         --array="${next_task}-${last_task}%${PARALLELISM}" \
         "${REPOSITORY_ROOT}/assets/scripts/entropy/predictive_task_array.sbatch")
     job_id=${job_id%%;*}

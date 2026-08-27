@@ -79,6 +79,22 @@ if [[ -e "${NODE_LOCAL_DIRECTORY}" || -e "${RUN_DIRECTORY}" ]]; then
     exit 1
 fi
 
+TASK_WALLTIME=$("${PYTHON}" - "${SOURCE_CONFIG}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+import yaml
+
+with Path(sys.argv[1]).open(encoding="utf-8") as stream:
+    config = yaml.safe_load(stream)
+value = config.get("execution", {}).get("entropy", {}).get("task_walltime", "01:00:00")
+if not isinstance(value, str) or re.fullmatch(r"[0-9]{1,2}:[0-5][0-9]:[0-5][0-9]", value) is None:
+    raise SystemExit("execution.entropy.task_walltime must use HH:MM:SS.")
+print(value)
+PY
+)
+
 "${PYTHON}" - <<'PY'
 import torch
 
@@ -111,6 +127,7 @@ rsync -a --delete "${SOURCE_WORKSPACE}/" "${LOCAL_WORKSPACE}/"
     printf 'SOURCE_WORKSPACE=%q\n' "${SOURCE_WORKSPACE}"
     printf 'NODE_LOCAL_DIRECTORY=%q\n' "${NODE_LOCAL_DIRECTORY}"
     printf 'LOCAL_WORKSPACE=%q\n' "${LOCAL_WORKSPACE}"
+    printf 'TASK_WALLTIME=%q\n' "${TASK_WALLTIME}"
 } >"${CAMPAIGN_FILE}"
 
 # Materialize descriptors against the same node-local workspace used by every task.
