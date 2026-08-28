@@ -1,9 +1,0 @@
-campaign,variant,repetition,metryka,wartość
-nnpu_followup,bare,pooled_5rep_mean,spearman_r,0.21513505488533052
-nnpu_followup,bare,pooled_5rep_mean,parametric_p,0.022116906243400916
-nnpu_followup,bare,pooled_5rep_mean,permutation_p,0.02195
-nnpu_followup,bare,pooled_5rep_mean,n_classes,113.0
-nnpu_followup,with regularizers,pooled_5rep_mean,spearman_r,-0.2825562067225038
-nnpu_followup,with regularizers,pooled_5rep_mean,parametric_p,0.0024273070537647653
-nnpu_followup,with regularizers,pooled_5rep_mean,permutation_p,0.00235
-nnpu_followup,with regularizers,pooled_5rep_mean,n_classes,113.0
