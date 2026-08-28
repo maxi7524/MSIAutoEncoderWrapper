@@ -184,6 +184,7 @@ def structure_test(
     u: np.ndarray,
     rng: np.random.Generator,
     pair_count: int = 5000,
+    return_samples: bool = False,
 ) -> Dict[str, float]:
     """Compare observed $\\cos\\theta$ spread against the closed-form uniform-sphere null.
 
@@ -200,8 +201,14 @@ def structure_test(
     :type rng: numpy.random.Generator
     :param pair_count: Number of random (non-identical) pairs to sample.
     :type pair_count: int
+    :param return_samples: If ``True``, also return the raw per-pair ``cos_theta``
+        values under ``cos_theta_samples`` — the summary mean/sd otherwise hides
+        the shape of this distribution (e.g. bimodality, heavy tails), which a
+        violin/histogram plot of the raw samples makes visible.
+    :type return_samples: bool
     :return: ``observed_mean_cos_theta``, ``observed_sd_cos_theta``,
-        ``uniform_baseline_sd_cos_theta``, ``effective_dimension``.
+        ``uniform_baseline_sd_cos_theta``, ``effective_dimension``, and
+        (if ``return_samples``) ``cos_theta_samples``.
     :rtype: Dict[str, float]
     :raises ValidationError: If the canonicalized dimension is not greater than 2.
     """
@@ -215,7 +222,9 @@ def structure_test(
     right = rng.integers(0, n_samples, size=pair_count)
     distinct = left != right
     cos_theta = np.sum(u[left[distinct]] * u[right[distinct]], axis=1) / dimension
+    samples = {"cos_theta_samples": cos_theta} if return_samples else {}
     return {
+        **samples,
         "observed_mean_cos_theta": float(np.mean(cos_theta)),
         "observed_sd_cos_theta": float(np.std(cos_theta)),
         "uniform_baseline_sd_cos_theta": float(np.sqrt(1.0 / (effective_dimension + 1))),

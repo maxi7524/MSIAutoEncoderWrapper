@@ -76,6 +76,35 @@ class TestPerClassMetricsMaskShapes:
 
         assert with_row_mask == restricted
 
+    def test_class_with_zero_available_positives_reports_nan_roc_auc(self) -> None:
+        targets = np.zeros((5, 1))
+        probabilities = np.full((5, 1), 0.3)
+
+        records = per_class_metrics(probabilities, targets, 0.5)
+
+        assert np.isnan(records[0]["roc_auc"])
+
+    def test_class_with_zero_available_negatives_reports_nan_roc_auc(self) -> None:
+        targets = np.ones((5, 1))
+        probabilities = np.full((5, 1), 0.7)
+
+        records = per_class_metrics(probabilities, targets, 0.5)
+
+        assert records[0]["positive_samples"] == 5.0
+        assert np.isnan(records[0]["roc_auc"])
+
+    def test_roc_auc_matches_sklearn_for_a_scoreable_class(self) -> None:
+        from sklearn.metrics import roc_auc_score
+
+        rng = np.random.default_rng(2)
+        targets = (rng.random((30, 1)) > 0.5).astype(np.float32)
+        probabilities = rng.random((30, 1))
+
+        records = per_class_metrics(probabilities, targets, 0.5)
+
+        expected = roc_auc_score(targets[:, 0], probabilities[:, 0])
+        assert records[0]["roc_auc"] == pytest.approx(expected)
+
     def test_incompatible_mask_shape_raises(self) -> None:
         targets = np.zeros((4, 3))
         probabilities = np.zeros((4, 3))
@@ -99,9 +128,34 @@ class TestEvaluateHeadMultiLabelMaskShapes:
         # classifier's micro/macro F1 and precision/recall must all be 1.0.
         assert result["micro_f1"] == pytest.approx(1.0)
         assert result["macro_f1"] == pytest.approx(1.0)
+        assert result["macro_precision"] == pytest.approx(1.0)
+        assert result["macro_recall"] == pytest.approx(1.0)
         assert result["micro_precision"] == pytest.approx(1.0)
         assert result["micro_recall"] == pytest.approx(1.0)
         assert result["hamming_loss"] == pytest.approx(0.0)
+        # Extreme, target-separating logits give every scoreable class perfect
+        # ranking too, so macro roc_auc must also be 1.0.
+        assert result["roc_auc"] == pytest.approx(1.0)
+
+    def test_macro_precision_and_recall_are_the_per_class_mean_not_micro_pooled(
+        self,
+    ) -> None:
+        # Class 0: 1 true positive, model predicts it -> precision=recall=1.0.
+        # Class 1: 3 true positives, model predicts none -> precision=recall=0.0.
+        # Macro (mean over classes) must differ from micro (pooled over samples).
+        targets = np.array(
+            [[1.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 0.0]],
+        )
+        logits = np.array(
+            [[6.0, -6.0], [-6.0, -6.0], [-6.0, -6.0], [-6.0, -6.0]],
+        )
+
+        result = evaluate_head(logits, targets, "multi_label", threshold=0.5)
+
+        assert result["macro_precision"] == pytest.approx(0.5)
+        assert result["macro_recall"] == pytest.approx(0.5)
+        assert result["micro_precision"] == pytest.approx(1.0)
+        assert result["micro_recall"] == pytest.approx(0.25)
 
     def test_masked_entries_do_not_affect_the_result(self) -> None:
         targets = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]])
@@ -114,6 +168,18 @@ class TestEvaluateHeadMultiLabelMaskShapes:
 
         assert result["micro_f1"] == pytest.approx(1.0)
         assert result["hamming_loss"] == pytest.approx(0.0)
+
+    def test_hamming_loss_baseline_matches_an_always_negative_predictor(self) -> None:
+        rng = np.random.default_rng(3)
+        targets = (rng.random((40, 5)) > 0.85).astype(np.float32)  # sparse positives
+        logits = rng.normal(size=(40, 5))  # arbitrary — baseline must not depend on these
+
+        result = evaluate_head(logits, targets, "multi_label", threshold=0.5)
+        always_negative_predictions = np.zeros_like(targets, dtype=bool)
+        expected = float(np.mean(targets.astype(bool) != always_negative_predictions))
+
+        assert result["hamming_loss_baseline_positive_rate"] == pytest.approx(expected)
+        assert result["hamming_loss_baseline_positive_rate"] == pytest.approx(float(targets.mean()))
 
     def test_no_available_entries_raises(self) -> None:
         targets = np.zeros((3, 2))
