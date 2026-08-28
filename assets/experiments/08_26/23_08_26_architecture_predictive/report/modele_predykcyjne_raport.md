@@ -973,13 +973,15 @@ Widzimy, że modele się trenują. Mozemy zaobserwowac także, że nei ma proble
 Widzimy, że najlepszy wynik osiągnęła architektura nnPU (jest znacząco lepszy) 
 
 **Kontrastywność**
-Widzimy, że najlepsze wyniki są osiągnae przez Jaccard - najlepiej się generalizuje. Może to wynikać z tego, że dokładamy nie pewność do modelu. 
+Widzimy, że najmniejsza funkcja kosztu sjet osiągana przez jaccard. Wynika to z tego, że zmniejszami czynnik błędu porpzez uwzględnienie podobieństwa anotacji. 
 
 #### Porówanie różnicy pomiedz widmami 
 
 ##### Globalna rekonstrukcja 
 
-![alt text](image-1.png)
+![alt text](reconstruction_loss_bce_vs_ae.png)
+
+![alt text](reconstruction_loss_img_bce_vs_ae.png)
 
 <div>
 <style scoped>
@@ -1137,7 +1139,7 @@ Widzimy, że najlepsze wyniki są osiągnae przez Jaccard - najlepiej się gener
 </table>
 </div>
 
-Z danych i wykresów związanych z rekonstrukcją, widzimy że score jest gorszy. 
+
 
 ![alt text](image-6.png)
 
@@ -1146,6 +1148,8 @@ Z danych i wykresów związanych z rekonstrukcją, widzimy że score jest gorszy
 ![alt text](image-8.png)
 
 ![alt text](image-9.png)
+
+Z danych i wykresów związanych z rekonstrukcją, widzimy że score jest gorszy, dla modeli predykcyjnych, nie widać tego na obrazach. **Różnica może wynikać z tego, że w samej rekonstrukcji był błąd w implentacji**. Model nie dodawał normalizacji po dekoderze, więc otrzymaliśmy **dwie różne skale**, jak dochodzim
 
 Porównując jednak zdjęcia nie widać tych odchyleń w sposób znaczący. Możemy zawuażyć nawet poprawę. Widać po zbliżeniach, że lokalizacja się poprawiła orazpozybliśmy się skrajnej wartości. Więcej obrazków w (#TODO - wstawić hiperłącze `assets/experiments/08_26/23_08_26_architecture_predictive/notebooks/part_2_prediction_metrics_bce.ipynb`)
 
@@ -1164,95 +1168,236 @@ Porównując jednak zdjęcia nie widać tych odchyleń w sposób znaczący. Moż
 
 #### Predykcyjność bazowa 
 
-**Ilość annotacji**
+Ogólnie mamy bardzo dużo nie istyniejąych klas, podaczas trenigu bylo 508 klas na 208 dosteęnych w zbiorze treningowym. Ekspermyment miał coś takiego mieć, poniewaz chciałem zobaczyć jak w takim przypadku te estymatyory działają. 
+
+W analize rozdzielam te przypadki, w przypadku tych zbiorów nakładam maskę która nie bierze pod uwage nieobecnych anotacji w zbiorze treningowym. 
+
+
+W pożniej tabeli zamieszczam zestawienei tych cech:
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead tr th {
+        text-align: left;
+    }
+
+    .dataframe thead tr:last-of-type th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr>
+      <th></th>
+      <th colspan="4" halign="left">class coverage</th>
+      <th colspan="8" halign="left">all classes (508)</th>
+      <th colspan="8" halign="left">train-active ∩ split-active</th>
+    </tr>
+    <tr>
+      <th></th>
+      <th colspan="4" halign="left"></th>
+      <th colspan="2" halign="left">ranking (threshold-free)</th>
+      <th>macro</th>
+      <th colspan="3" halign="left">micro</th>
+      <th colspan="2" halign="left">calibration @ 0.5</th>
+      <th colspan="2" halign="left">ranking (threshold-free)</th>
+      <th>macro</th>
+      <th colspan="3" halign="left">micro</th>
+      <th colspan="2" halign="left">calibration @ 0.5</th>
+    </tr>
+    <tr>
+      <th></th>
+      <th>size</th>
+      <th>active_classes</th>
+      <th>zero_classes</th>
+      <th>train_active_and_split_active</th>
+      <th>average_precision</th>
+      <th>roc_auc</th>
+      <th>macro_f1</th>
+      <th>micro_f1</th>
+      <th>micro_precision</th>
+      <th>micro_recall</th>
+      <th>hamming_loss</th>
+      <th>hamming_loss_baseline_positive_rate</th>
+      <th>average_precision</th>
+      <th>roc_auc</th>
+      <th>macro_f1</th>
+      <th>micro_f1</th>
+      <th>micro_precision</th>
+      <th>micro_recall</th>
+      <th>hamming_loss</th>
+      <th>hamming_loss_baseline_positive_rate</th>
+    </tr>
+    <tr>
+      <th>split</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>train</th>
+      <td>33553</td>
+      <td>204</td>
+      <td>304</td>
+      <td>204</td>
+      <td>0.613690</td>
+      <td>0.979513</td>
+      <td>0.232623</td>
+      <td>0.208419</td>
+      <td>0.116507</td>
+      <td>0.987307</td>
+      <td>0.327261</td>
+      <td>0.043637</td>
+      <td>0.613690</td>
+      <td>0.979513</td>
+      <td>0.579276</td>
+      <td>0.811944</td>
+      <td>0.689480</td>
+      <td>0.987307</td>
+      <td>0.049697</td>
+      <td>0.108665</td>
+    </tr>
+    <tr>
+      <th>validation</th>
+      <td>4488</td>
+      <td>319</td>
+      <td>189</td>
+      <td>68</td>
+      <td>0.203783</td>
+      <td>0.544563</td>
+      <td>0.094898</td>
+      <td>0.210680</td>
+      <td>0.133094</td>
+      <td>0.505152</td>
+      <td>0.316444</td>
+      <td>0.083602</td>
+      <td>0.310236</td>
+      <td>0.739630</td>
+      <td>0.122375</td>
+      <td>0.313979</td>
+      <td>0.436999</td>
+      <td>0.245007</td>
+      <td>0.121022</td>
+      <td>0.113037</td>
+    </tr>
+    <tr>
+      <th>test</th>
+      <td>4023</td>
+      <td>113</td>
+      <td>395</td>
+      <td>31</td>
+      <td>0.385860</td>
+      <td>0.576276</td>
+      <td>0.051750</td>
+      <td>0.129376</td>
+      <td>0.076493</td>
+      <td>0.419160</td>
+      <td>0.323778</td>
+      <td>0.057393</td>
+      <td>0.599645</td>
+      <td>0.805667</td>
+      <td>0.143593</td>
+      <td>0.216229</td>
+      <td>0.586916</td>
+      <td>0.132527</td>
+      <td>0.258674</td>
+      <td>0.269242</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+Na poniżych wykresach widać rozkąłd poszczególnych metryk dla rodzielnych i wpsólnych zbiorów
 
 ![alt text](image-2.png)
 
-Zauważmy, ze większośc klass ma bardzo małą ilośc annotacji, 
+
+
+#### Zachowanie w przestrzeni
+
+##### Rozłożenie po sferzey 
+
+Poniżej przedstawiam wykresy skrzypcowe rozkłów kąta $\theta$,\. Są one mierzone w taki sposób że ustalany arbitralnie *punkt referencyjny* $(1, 0, \ldots, 0)$ i mierzymy $\cos$ pomiędzy nim i wziętym punktem z $S^{L-2}$. 
+
+
+![alt text](image-11.png)
+
+Z wykresu widzimy, stworzenie klasy predykcyjnej, powoduje rozciągnięcie punktów, na całą sfere.
+
 
 ### Contrastive learning 
 
-####  
+#### 
+
+***
 
 ### Contractive learning 
 
 
+
+
 *******************************************************************************
 
-# BRUDNO - schemat analizy 
-
-## GDZIE PORÓWNUJEMY TE LOSSY 
-- po najlepszy mmiesjcu to pównać powinnićmy, widać że nnpu ma jednak bardz ouży potencjał jeżeli chodzi o NIE PRZEUCZANIE SIĘ - to jest mocne, bo jak wedy dali bardziej złożony model, to moglibyśmy otrzymać znacznie lepsze. 
-
-To jest do zastasnowneia, ale motyw jest tak zżę te niektóre losy bardzo szybko się ucza, więc jest to dosyć problematyczne ze względu na to jak to porówynwac, ponieważ **NIE BĘDZIEMY MIELI** informacji o tym kiedy taki model jest wytriowany (z lossu ternigwoego to nei wynika), ale bazowy błąd jest bardzo duży dla momentu gdzie byśmy to odcieli. 
-
-Zatem będziemy brać te modele od momentu "przegięcia" LUB późniejszego, bo w przypadku nnPU nei jest to problematyczne (ustalmy strategie przyjęcia jaką można ustalić po tych analizach ....) 
-
-
-
-## Jak będziemy to porównywać
-Będziemy to porównywać to w ten sposób, że każdy badana cecha (związana z innym komponentem) będzie "główną analizą" i każda główna analiza będzie składa sie z "pod analiz", (każda będzie miała takie same te analizy), podczas porówynwania tych rezczy aj ja będe patrzył na "jedną anlaize w tył", ponieważ korzystam tutaj z przechoniodści logiki. ... jeżel ipornywałe A - B to porównąć B z C będą wnioski przechodzić ... 
-
-
-### Główne analizy 
-
-#### zastosowanie BCE, porówanie porpzreniedj AE vs BCE 
-Celem jest sprawdzenie jak zmienia się ttuaj widmo, co jest bazowe w tym momencie, czy klasy pomagają w rekosntrukcji 
-
-Dostajemy tutaj takżę BAZOWY poziom predykcji (do niego będziemy się odnosic w kolejnych analiach) 
-
-#### Regularyzacja kontraktywne
-Tutaj będziemy sprwadząc jako sama regularyzacja kontrakywna wpływa na rekonstrukcje widm, oraz jak wpływa na ...
-
-
-#TODO -ciąg dalszy 
-
-#### Uczenie kontrakcyjne 
-
-#### Porównanie przestrzeni latentnej 
-Celem tutaj będzie porównania jak przestrzeń latenta zmienia się pomiędzy modelami 
-
-
-**** 
-
-### Pod analizy 
-
-#### Rekonstrukcja 
-Będziemy badać jak dana zmiana wpływa na rekonstrukcje widma, będziemy wtedy plotowac te best i worst widma na rekonsturkcji, po dwie na kombinacje (z najlepszego modelu wszystko będzie trzeba robić) 
-
-Ja przy nalizowanui tego bęe porównwał tylko jeden w tył fragmetn 
-
-#### Predykcja 
-
-Będziemy porównywać jak zmienia się predykcja, względem tego jaki model wybierzemy, będzieym porównywac tutaj głównie porywnaać metryki jak ja TP FP itd. i potem accuracy preicstion F1 score'y itd. 
-
-#### Przestrzeń ukryta 
-WAŻNE 
-- będziemy tutaj porównwac jak zmienia się struktura przestrzeni ukrytej 
-  - trzeba by wymyślić, jakis jednoznaczny sposób na poróywaneani tego, żeby jakoś geometrycnzie to zachowywać (#TODO - to trzeba przemyśleć i skonstruować) 
-#TODO - teraz 
-
-
-
-
-#### Analiza specjalistyczna 
-Tutaj będziemyw zależnosci od problemu porównywac inny obiekt, to jest będziemy sprawdzać cechce charkaetycnzą dla analizy (np contractive learning czy odpowiednio to rozróżnił itd.) 
 
 
 
 
 
-#TODO jutro
-- trzeba dodać analizy contractive z contrastive i bce na predykcji i rekonsturkcji dodać 
-- zrobić następnie nnpu żeby całość porównać 
-  - WAŻNE, trzeba tutaj zrobić tak, że dobrez rozumei teorie i z teorią to wszystko potiwerdzić, więc każe
+# DODATKOWE POMYSŁY:
 
-więc:
-- od razu każemy kontynuować tą analize z porównaniem
-- od zera spisujemy całą metodologie i wyniki 
-  - na bieżąco porpawiamy wybrkoawen rzeczy ale to ajk bedziemy wyniki ściągąc bo ogólnei widzimy, żę 
-    - contractive działa bardzo dobrze
-    - contrastive polesza ale nei ma znazcneia czyjest label (na predykcji jest troche róznica ale to muszę doczytać)
-        - trzeba sprawdzić czy contrastvie znacznie te wniki poleszpa predykcyjne bo geometrycznie nie ma znaczneia wogóle co się dzieje 
-    - czemu to nnpu miał by lepiej działać 
-    - jak to zrobimy to wtedy trzeba by podac końcowę arhcitektue i to będzie contractvie z contrastive wtedy i trearz czy nnpu czy ten lable_bce 
+## Kontraktywność 
+
+### Nowa metryka 
+- trzeba wprowaidzić inną metrykę, względem której bysmy ten contrastive learning trnoewali, 
+  - np. taka która pomija zmiany intesywności bi bierze pod uwagę tylko przeusnięciea wgzledem osi m/z 
+
+## Predykcje
+
+### Mała ilość klas
+- w przypadku małej ilości klas, moglibyśmy **sztucznie** generowac klasy z takimi labelami, żeby model mógł nauzcyć się je wykrywać
+  - możemy wtedy zrobić dwie fazy treningowe 
+    - jedna 
+
+### 
+
+
+
+# Do zmiany w anlaizach
+
+## latent 
+  - wszędzie zamiast tabel, ploty, zeby widac właswnei te próby i widziec jaka waraincaa ja jest pomiedz tymi obeitkami wiec to wszystko trzeba na plotach,   taki sposób że 
+    - mamy daną statystykę, ona zależ od gurpy, no i widzimy podział na kilka grup i tak byśmy to zebrali. 
+    - wtedy widizmy jak to się zajume na train test itd. i zcem utych sampli jest tak mamły w tym latencie, tgo więcej powinno być, żeby tego testu i walidacji (oba prośże) dac przynajmniej na 200 żeby to wogłe coś nam mówiło. 
+
+## predykcja 
+  - w przypadku słabo oznaczonych moelkuł wyszukać co to są za molekuły oryginalnie, żeby móc porównwac jak to działa dokładnie. 
+  - trzeba je będzie podzielićwzględem jakiś grp, żeby otrzymać które warto śledzić, prezmyśleć które z jakeigo eksperymetnu, przejrzeć te eksperymenty itd., 
+  - będzie trzeba jeszcze odpoweidnio znormalizować te dane, żeby zobaczyć czy inne błędy występują
+  - UWAGA - trzeba sprawdzić jak bardzo rozechejane są te piki pomiedzy datasetatmi 

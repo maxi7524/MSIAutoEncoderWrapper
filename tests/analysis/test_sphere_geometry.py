@@ -173,6 +173,22 @@ class TestStructureTest:
         with pytest.raises(ValidationError):
             geometry.structure_test(u, np.random.default_rng(0))
 
+    def test_return_samples_exposes_raw_cos_theta_matching_the_summary(self) -> None:
+        u = _uniform_sphere_samples(200, 10, seed=8)
+        result = geometry.structure_test(
+            u, np.random.default_rng(9), pair_count=500, return_samples=True
+        )
+        samples = result["cos_theta_samples"]
+        assert samples.ndim == 1
+        assert samples.shape[0] <= 500
+        assert samples.mean() == pytest.approx(result["observed_mean_cos_theta"])
+        assert samples.std() == pytest.approx(result["observed_sd_cos_theta"])
+
+    def test_samples_omitted_by_default(self) -> None:
+        u = _uniform_sphere_samples(200, 10, seed=8)
+        result = geometry.structure_test(u, np.random.default_rng(9), pair_count=500)
+        assert "cos_theta_samples" not in result
+
 
 class TestDimensionUsage:
     def test_trace_bounded_by_dimension_and_one_null_direction(self) -> None:

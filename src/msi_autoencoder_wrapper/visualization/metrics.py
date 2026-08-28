@@ -44,6 +44,37 @@ def plot_metric_distribution(values: np.ndarray, metric: str, ax: Axes | None = 
     return figure, ax
 
 
+def plot_violin_with_points(values: np.ndarray, position: float, ax: Axes | None = None, width: float = 0.8, color: str | None = None, jitter: float = 0.05, point_size: float = 18.0, label: str | None = None, theme: VisualizationTheme | str | None = None):
+    """Draw one violin body plus its raw values as jittered scatter, at one x position.
+
+    A violin's estimated density shape can visually smooth over the fact that a
+    small-repetition-count group (this project typically has 5) is really just a
+    handful of points — overlaying the raw values keeps that honest instead of
+    implying a smoother distribution than the data supports. Repeated calls on the
+    same ``ax`` at different ``position``s build up a multi-group plot (same pattern
+    as ``plot_metric_distribution``).
+    """
+    resolved = resolve_theme(theme)
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if ax is None:
+        figure, ax = plt.subplots(figsize=resolved.figure_size, dpi=resolved.figure_dpi)
+    else:
+        figure = ax.figure
+    if values.size == 0:
+        return figure, ax
+    parts = ax.violinplot([values], positions=[position], widths=width, showmeans=True, showextrema=True)
+    for body in parts["bodies"]:
+        body.set_facecolor(color)
+        body.set_alpha(resolved.distribution_fill_alpha)
+    for key in ("cmeans", "cmins", "cmaxes", "cbars"):
+        if key in parts:
+            parts[key].set_color(color)
+    jittered_x = position + np.random.default_rng(0).uniform(-jitter, jitter, size=values.size)
+    ax.scatter(jittered_x, values, color=color, s=point_size, alpha=resolved.primary_alpha, edgecolor=resolved.panel_color, linewidth=0.3, zorder=3, label=label)
+    return figure, ax
+
+
 def plot_metric_tradeoff(x: Sequence[float], y: Sequence[float], x_label: str, metric: str, ax: Axes | None = None, label: str | None = None, theme: VisualizationTheme | str | None = None):
     """Plot one metric against a configurable complexity or compression axis."""
     resolved = resolve_theme(theme)

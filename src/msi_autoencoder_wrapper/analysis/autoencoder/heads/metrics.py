@@ -14,6 +14,7 @@ from sklearn.metrics import (
     hamming_loss,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 
 from ....utils.exceptions import raise_validation_error
@@ -152,14 +153,22 @@ def evaluate_head(
     return {
         "micro_f1": float(f1_score(flat_true, flat_pred, zero_division=0)),
         "macro_f1": float(np.mean([record["f1"] for record in per_class])),
+        "macro_precision": float(np.mean([record["precision"] for record in per_class])),
+        "macro_recall": float(np.mean([record["recall"] for record in per_class])),
         "micro_precision": float(
             precision_score(flat_true, flat_pred, zero_division=0)
         ),
         "micro_recall": float(recall_score(flat_true, flat_pred, zero_division=0)),
         "hamming_loss": float(np.mean(flat_true != flat_pred)),
+        # An always-negative predictor is wrong on every true-positive cell and right
+        # on every true-negative cell, so its hamming_loss equals exactly the fraction
+        # of positive cells (mean(flat_true)) — the free, zero-inference baseline that
+        # makes a bare hamming_loss number interpretable instead of floating alone.
+        "hamming_loss_baseline_positive_rate": float(np.mean(flat_true)),
         "average_precision": float(
             np.nanmean([record["average_precision"] for record in per_class])
         ),
+        "roc_auc": float(np.nanmean([record["roc_auc"] for record in per_class])),
     }
 
 
@@ -191,6 +200,7 @@ def _per_class_records(
         class_prediction = predicted[column_available, class_index]
         class_probabilities = probabilities[column_available, class_index]
         has_positive = bool(class_truth.any())
+        has_negative = bool((~class_truth).any())
         records.append(
             {
                 "class_index": float(class_index),
@@ -208,6 +218,13 @@ def _per_class_records(
                 "average_precision": (
                     float(average_precision_score(class_truth, class_probabilities))
                     if has_positive
+                    else float("nan")
+                ),
+                # roc_auc_score additionally requires at least one negative — undefined
+                # (nan) for a class with only-positive or only-negative availability.
+                "roc_auc": (
+                    float(roc_auc_score(class_truth, class_probabilities))
+                    if has_positive and has_negative
                     else float("nan")
                 ),
             }
@@ -235,7 +252,8 @@ def per_class_metrics(
     :type mask: numpy.ndarray | None
     :return: One record per class: ``class_index``, ``positive_samples``,
         ``precision``, ``recall``, ``f1``, ``average_precision`` (``nan`` for a class
-        with zero available positives).
+        with zero available positives), ``roc_auc`` (``nan`` for a class with zero
+        available positives or zero available negatives).
     :rtype: list[Dict[str, float]]
     """
     targets_array = np.asarray(targets)
