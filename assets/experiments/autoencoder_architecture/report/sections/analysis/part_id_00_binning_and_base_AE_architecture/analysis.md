@@ -1,3 +1,7 @@
+#### Końcowa decyzja 
+
+Ostatecznie wybieramy sieć konwolucyjną z parametrami (#TODO), oraz binningiem $\mathrm{\Delta m\backslash z} \= 0.55$, ponieważ,  interpretuje to jako największą gęstość, pozwalającą modelowi na wychwycenie informacji. 
+
 #### Wychwytywanie informacji przez model
 
 ##### Metryka Wasserstein
@@ -103,7 +107,7 @@ Wziąłem tylko widma testowe, ponieważ wyniki są analogiczne.
 ![alt text](spectrum_comparison_conv_1_00_train.png)
 
 
-##### Globalna generalizacja
+#### Globalna generalizacja
 
 Żeby szybko porównać, czy błąd różni się pomiędzy pixelami znacząco, pokazałem po prostu heatmape z błędem. Zauważmy, że nie możemy wyróżnić żadnego obszaru gdzie błąd znacząco odstaje. 
 

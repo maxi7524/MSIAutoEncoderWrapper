@@ -54,13 +54,31 @@ format:
 
 ### Binning oraz podstawowa architektura 
 
-{{< include sections/analysis/binning_and_base_AE_architecture/methodology.md >}}
+{{< include sections/analysis/part_id_00_binning_and_base_AE_architecture/methodology.md >}}
 
-{{< include sections/analysis/binning_and_base_AE_architecture/analysis.md >}}
+{{< include sections/analysis/part_id_00_binning_and_base_AE_architecture/analysis.md >}}
+
+### Baseline architektury predykcyjnej 
+
+
+{{< include sections/analysis/part_id_01_prediction_architecutre_baseline/methodology.md >}}
+
+{{< include sections/analysis/part_id_01_prediction_architecutre_baseline/analysis.md >}}
+
 
 ### Kontraktywność
 
+{{< include sections/analysis/part_id_02_contractive/methodology.md >}}
+
+{{< include sections/analysis/part_id_02_contractive/analysis.md >}}
+
 ### Kontrastywność
+
+{{< include sections/analysis/part_id_03_contrastive/methodology.md >}}
+
+{{< include sections/analysis/part_id_03_contrastive/analysis.md >}}
+
+
 
 ### Rekonstrukcja widm
 
