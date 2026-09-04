@@ -15,7 +15,6 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
     parallelism = int(options.get("array_parallelism", 1))
     directives = [
         "#!/usr/bin/env bash",
-        "set -euo pipefail",
         f"#SBATCH --array=0-{task_count - 1}%{parallelism}",
     ]
     mapping = {
@@ -39,6 +38,7 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
     python = shlex.quote(sys.executable)
     directives.extend(
         [
+            "set -euo pipefail",
             f'TASK_FILE=$(printf {task_pattern} "$SLURM_ARRAY_TASK_ID")',
             f'{python} -m msi_autoencoder_wrapper.runtime.cli task "$TASK_FILE"',
         ]
@@ -71,8 +71,8 @@ def write_finalize_script(
     identifier = shlex.quote(execution_id)
     lines = [
         "#!/usr/bin/env bash",
-        "set -euo pipefail",
         f"#SBATCH --dependency=afterany:{job_id}",
+        "set -euo pipefail",
         f"{python} -m msi_autoencoder_wrapper.runtime.cli finalize "
         f"{config} --staging-directory {staging} "
         f"--output {persistent} --execution-id {identifier}",
