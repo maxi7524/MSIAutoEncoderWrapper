@@ -125,9 +125,16 @@ class AnnotationAwareDatasetMixin:
                 source_indices = [int(visible[index]) for index in public_indices]
                 return self._source_subset_groups(source_indices, **parameters)
 
+            def multilabel_provider(
+                public_indices: range, **parameters: Any
+            ) -> tuple[list[Any], list[frozenset[int]]]:
+                source_indices = [int(visible[index]) for index in public_indices]
+                return self._source_subset_multilabel_data(source_indices, **parameters)
+
             selected_positions = DatasetSubsetter.select_indices(
                 source_length=int(visible.size),
                 group_provider=group_provider,
+                multilabel_provider=multilabel_provider,
                 config=self._subset_config,
             )
             self._selection = IndexSelection(
@@ -139,3 +146,17 @@ class AnnotationAwareDatasetMixin:
     def _annotation_visible_source_indices(self) -> np.ndarray:
         """Return source IDs remaining after dataset annotation selection."""
         return self._annotation_manager.get_selected_source_indices(self._source_length())
+
+    def _source_subset_multilabel_data(
+        self,
+        source_indices: list[int],
+        **_: Any,
+    ) -> tuple[list[Any], list[frozenset[int]]]:
+        """Return image groups and positive labels for coverage-aware sampling.
+
+        Concrete annotation-aware datasets must override this method when they
+        expose the ``proportional_multilabel`` subset method.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose multi-label subset metadata."
+        )

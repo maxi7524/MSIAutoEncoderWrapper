@@ -26,6 +26,8 @@ class DatasetSplitter:
             indices = cls._predefined_indices(dataset, resolved)
         elif resolved.strategy in {"target_stratified", "mask_stratified"}:
             indices = cls._stratified_indices(dataset, resolved)
+        elif resolved.strategy == "proportional_multilabel":
+            indices = cls._proportional_multilabel_indices(dataset, resolved)
         else:
             groups = cls._groups(dataset, resolved)
             indices = cls._assign_groups(groups, len(dataset), resolved)
@@ -109,6 +111,33 @@ class DatasetSplitter:
         for values in result.values():
             values.sort()
         return result
+
+    @classmethod
+    def _proportional_multilabel_indices(
+        cls, dataset: Dataset, config: SplitConfig
+    ) -> Dict[str, List[int]]:
+        """Split per-image pixels while preserving sparse label support."""
+        getter = getattr(dataset, "get_multilabel_split_data", None)
+        if not callable(getter):
+            raise_validation_error(
+                "DatasetSplit",
+                "proportional_multilabel splitting requires "
+                "get_multilabel_split_data().",
+            )
+        parameters = dict(config.parameters)
+        minimum_positive_per_split = int(
+            parameters.pop("minimum_positive_per_split", 1)
+        )
+        groups, positive_labels = getter(range(len(dataset)), **parameters)
+        from ..multilabel_sampling import split_proportional_multilabel_indices
+
+        return split_proportional_multilabel_indices(
+            list(groups),
+            [frozenset(labels) for labels in positive_labels],
+            fractions=config.fractions,
+            seed=config.seed,
+            minimum_positive_per_split=minimum_positive_per_split,
+        )
 
     @staticmethod
     def _assign_groups(

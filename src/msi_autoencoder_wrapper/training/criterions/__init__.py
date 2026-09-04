@@ -24,6 +24,7 @@ from .autoencoder.reconstruction.masserstein_loss import MSIMassersteinLoss
 from .autoencoder.reconstruction.mse_loss import MSIMSELoss
 from .autoencoder.reconstruction.sobolev_loss import MSISobolevLoss
 from .autoencoder.regularization.contractive_loss import MSIContractiveLoss
+from .autoencoder.regularization.uniformity_loss import MSIUniformityLoss
 
 __all__ = [
     "CompositeLoss",
@@ -42,4 +43,5 @@ __all__ = [
     "MSIReconstructionCriterion",
     "MSIRegularizationCriterion",
     "MSISobolevLoss",
+    "MSIUniformityLoss",
 ]

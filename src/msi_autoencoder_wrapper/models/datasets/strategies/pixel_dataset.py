@@ -3,7 +3,7 @@ Concrete dataset strategy executing single-pixel spectra mapping sequences drive
 """
 
 from collections import defaultdict
-from typing import Tuple, Any, Optional, Literal, Mapping, Dict
+from typing import Tuple, Any, Optional, Literal, Mapping, Dict, Sequence
 import random
 import torch
 import numpy as np
@@ -186,6 +186,51 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         values = tuple(metadata.get(field, nested.get(field)) for field in fields)
         values = tuple(value for value in values if value is not None and value != "")
         return [values or ("__all_samples__",) for _ in indices]
+
+    def _source_subset_multilabel_data(
+        self,
+        source_indices: list[int],
+        **parameters: Any,
+    ) -> tuple[list[Any], list[frozenset[int]]]:
+        """Return image groups and sparse positive molecules for source rows.
+
+        :param source_indices: Original source spectrum identifiers.
+        :type source_indices: list[int]
+        :param parameters: Grouping parameters forwarded to the annotation
+            reader.
+        :type parameters: Any
+        :return: Aligned image-group keys and positive molecule class sets.
+        :rtype: tuple[list[Any], list[frozenset[int]]]
+        """
+        groups = self._source_subset_groups(source_indices, **parameters)
+        mapped_index = self.get_mapped_annotation_index()
+        positive_labels = [
+            frozenset(
+                int(label)
+                for label in mapped_index.annotation_indices[
+                    mapped_index.entry_slice(source_index)
+                ]
+            )
+            for source_index in source_indices
+        ]
+        return groups, positive_labels
+
+    def get_multilabel_split_data(
+        self,
+        indices: Sequence[int],
+        **parameters: Any,
+    ) -> tuple[list[Any], list[frozenset[int]]]:
+        """Return split metadata in the current public dataset index space.
+
+        :param indices: Public dataset positions being split.
+        :type indices: Sequence[int]
+        :param parameters: Image grouping parameters.
+        :type parameters: Any
+        :return: Aligned image groups and sparse positive molecule class sets.
+        :rtype: tuple[list[Any], list[frozenset[int]]]
+        """
+        source_indices = [self._source_index(int(index)) for index in indices]
+        return self._source_subset_multilabel_data(source_indices, **parameters)
 
     def _source_length(self) -> int:
         """

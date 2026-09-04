@@ -1,0 +1,431 @@
+"""Deterministic proportional sampling for image-associated multi-label pixels."""
+
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+import math
+import random
+from typing import Hashable, Mapping, Sequence
+
+from ...utils.exceptions import raise_validation_error
+
+
+_SPLIT_NAMES = ("train", "validation", "test")
+
+
+def select_proportional_multilabel_indices(
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    *,
+    fraction: float,
+    seed: int,
+    minimum_positive_count: int,
+) -> tuple[int, ...]:
+    """Select image-proportional pixels while retaining rare positive classes.
+
+    :param groups: Source-image group for every candidate pixel.
+    :type groups: Sequence[Hashable]
+    :param positive_labels: Positive class-index sets for every candidate pixel.
+    :type positive_labels: Sequence[frozenset[int]]
+    :param fraction: Fraction of candidate pixels to retain.
+    :type fraction: float
+    :param seed: Deterministic sampling seed.
+    :type seed: int
+    :param minimum_positive_count: Required selected support for every positive
+        class.
+    :type minimum_positive_count: int
+    :return: Sorted selected positions in the candidate sequence.
+    :rtype: tuple[int, ...]
+    :raises ValidationError: If the requested fraction cannot retain every
+        positive class with the required support.
+    """
+    _validate_population(groups, positive_labels)
+    if not 0.0 < fraction <= 1.0:
+        raise_validation_error("MultilabelSubset", "fraction must belong to (0, 1].")
+    if minimum_positive_count < 1:
+        raise_validation_error(
+            "MultilabelSubset", "minimum_positive_count must be positive."
+        )
+
+    target_size = min(len(groups), max(1, math.floor(len(groups) * fraction)))
+    group_indices = _group_indices(groups)
+    capacities = _proportional_capacities(
+        {group: len(indices) for group, indices in group_indices.items()},
+        target_size,
+    )
+    label_positions = _label_positions(positive_labels)
+    desired_counts = {
+        label: min(
+            len(indices),
+            max(minimum_positive_count, math.ceil(len(indices) * fraction)),
+        )
+        for label, indices in label_positions.items()
+    }
+    generator = random.Random(seed)
+    selected = _select_required_positives(
+        groups=groups,
+        positive_labels=positive_labels,
+        label_positions=label_positions,
+        desired_counts=desired_counts,
+        capacities=capacities,
+        generator=generator,
+    )
+
+    # Complete every image quota with an unbiased deterministic sample. The
+    # forced rare-class positions above are the minimum deviation from the
+    # source image and positive-label distributions needed for coverage.
+    for group, indices in group_indices.items():
+        remaining = capacities[group] - sum(index in selected for index in indices)
+        available = [index for index in indices if index not in selected]
+        if remaining < 0 or remaining > len(available):
+            raise_validation_error(
+                "MultilabelSubset",
+                "Image quotas are incompatible with required positive-class coverage.",
+            )
+        selected.update(generator.sample(available, remaining))
+
+    _validate_selected_coverage(selected, label_positions, minimum_positive_count)
+    return tuple(sorted(selected))
+
+
+def split_proportional_multilabel_indices(
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    *,
+    fractions: Mapping[str, float],
+    seed: int,
+    minimum_positive_per_split: int,
+) -> dict[str, list[int]]:
+    """Split pixels with per-image capacities and positive-class coverage.
+
+    Every source image receives its requested train/validation/test allocation
+    independently. Rare positive labels are assigned first, then remaining
+    samples fill the still-open image capacities while minimizing per-class
+    deviation from the requested split fractions.
+
+    :param groups: Source-image group for every selected pixel.
+    :type groups: Sequence[Hashable]
+    :param positive_labels: Positive class-index sets for every selected pixel.
+    :type positive_labels: Sequence[frozenset[int]]
+    :param fractions: Fractions keyed by train, validation, and test.
+    :type fractions: Mapping[str, float]
+    :param seed: Deterministic allocation seed.
+    :type seed: int
+    :param minimum_positive_per_split: Required positive samples for each class
+        in every non-empty split.
+    :type minimum_positive_per_split: int
+    :return: Public sample positions per split.
+    :rtype: dict[str, list[int]]
+    :raises ValidationError: If a class cannot be represented in every split.
+    """
+    _validate_population(groups, positive_labels)
+    if minimum_positive_per_split < 1:
+        raise_validation_error(
+            "MultilabelSplit", "minimum_positive_per_split must be positive."
+        )
+    active_splits = tuple(name for name in _SPLIT_NAMES if fractions[name] > 0)
+    group_indices = _group_indices(groups)
+    group_capacities = {
+        group: _fraction_capacities(len(indices), fractions)
+        for group, indices in group_indices.items()
+    }
+    label_positions = _label_positions(positive_labels)
+    required_count = minimum_positive_per_split * len(active_splits)
+    unavailable = {
+        label: len(indices)
+        for label, indices in label_positions.items()
+        if len(indices) < required_count
+    }
+    if unavailable:
+        raise_validation_error(
+            "MultilabelSplit",
+            "Positive classes cannot cover every split: "
+            + _format_label_counts(unavailable),
+        )
+
+    generator = random.Random(seed)
+    assignments = {name: [] for name in _SPLIT_NAMES}
+    assigned: set[int] = set()
+    class_counts = {name: Counter() for name in _SPLIT_NAMES}
+    remaining = {group: dict(capacities) for group, capacities in group_capacities.items()}
+
+    # Reserve support for rare classes before common or unlabelled pixels occupy
+    # an image's validation/test capacity.
+    for label, indices in sorted(label_positions.items(), key=lambda item: len(item[1])):
+        for split_name in active_splits:
+            for _ in range(minimum_positive_per_split):
+                candidate = _best_coverage_candidate(
+                    indices=indices,
+                    positive_labels=positive_labels,
+                    groups=groups,
+                    assigned=assigned,
+                    split_name=split_name,
+                    remaining=remaining,
+                    class_counts=class_counts,
+                    generator=generator,
+                )
+                if candidate is None:
+                    raise_validation_error(
+                        "MultilabelSplit",
+                        f"Class {label} cannot be allocated to every split under image quotas.",
+                    )
+                _assign(
+                    candidate,
+                    split_name,
+                    groups,
+                    positive_labels,
+                    assignments,
+                    assigned,
+                    remaining,
+                    class_counts,
+                )
+
+    target_counts = {
+        split_name: {
+            label: len(indices) * fractions[split_name]
+            for label, indices in label_positions.items()
+        }
+        for split_name in _SPLIT_NAMES
+    }
+    unassigned = [index for index in range(len(groups)) if index not in assigned]
+    generator.shuffle(unassigned)
+    unassigned.sort(key=lambda index: len(positive_labels[index]), reverse=True)
+    for index in unassigned:
+        group = groups[index]
+        candidates = [
+            split_name
+            for split_name in active_splits
+            if remaining[group][split_name] > 0
+        ]
+        if not candidates:
+            raise_validation_error(
+                "MultilabelSplit", "Image split capacities were exhausted prematurely."
+            )
+        split_name = max(
+            candidates,
+            key=lambda name: _assignment_score(
+                positive_labels[index],
+                name,
+                group,
+                target_counts,
+                class_counts,
+                remaining,
+            ),
+        )
+        _assign(
+            index,
+            split_name,
+            groups,
+            positive_labels,
+            assignments,
+            assigned,
+            remaining,
+            class_counts,
+        )
+
+    _validate_split_coverage(class_counts, label_positions, active_splits, minimum_positive_per_split)
+    for values in assignments.values():
+        values.sort()
+    return assignments
+
+
+def _validate_population(groups: Sequence[Hashable], positive_labels: Sequence[frozenset[int]]) -> None:
+    """Validate aligned non-empty candidate metadata."""
+    if not groups or len(groups) != len(positive_labels):
+        raise_validation_error(
+            "MultilabelSampling", "groups and positive_labels must be aligned non-empty sequences."
+        )
+
+
+def _group_indices(groups: Sequence[Hashable]) -> dict[Hashable, list[int]]:
+    """Return source positions grouped by their image identifier."""
+    values: dict[Hashable, list[int]] = defaultdict(list)
+    for index, group in enumerate(groups):
+        values[group].append(index)
+    return dict(values)
+
+
+def _label_positions(positive_labels: Sequence[frozenset[int]]) -> dict[int, list[int]]:
+    """Invert sparse positive-label sets into class-to-position lists."""
+    values: dict[int, list[int]] = defaultdict(list)
+    for index, labels in enumerate(positive_labels):
+        for label in labels:
+            values[int(label)].append(index)
+    return dict(values)
+
+
+def _proportional_capacities(group_sizes: Mapping[Hashable, int], target_size: int) -> dict[Hashable, int]:
+    """Allocate a fixed total sample count proportionally by largest remainder."""
+    source_size = sum(group_sizes.values())
+    exact = {group: target_size * size / source_size for group, size in group_sizes.items()}
+    capacities = {group: min(size, math.floor(exact[group])) for group, size in group_sizes.items()}
+    remainder = target_size - sum(capacities.values())
+    for group in sorted(group_sizes, key=lambda value: exact[value] - capacities[value], reverse=True):
+        if remainder == 0:
+            break
+        if capacities[group] < group_sizes[group]:
+            capacities[group] += 1
+            remainder -= 1
+    return capacities
+
+
+def _fraction_capacities(size: int, fractions: Mapping[str, float]) -> dict[str, int]:
+    """Allocate one image's pixels by largest remainder across splits."""
+    exact = {name: size * fractions[name] for name in _SPLIT_NAMES}
+    capacities = {name: math.floor(exact[name]) for name in _SPLIT_NAMES}
+    remainder = size - sum(capacities.values())
+    for name in sorted(_SPLIT_NAMES, key=lambda value: exact[value] - capacities[value], reverse=True):
+        if remainder == 0:
+            break
+        capacities[name] += 1
+        remainder -= 1
+    return capacities
+
+
+def _select_required_positives(
+    *,
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    label_positions: Mapping[int, Sequence[int]],
+    desired_counts: Mapping[int, int],
+    capacities: Mapping[Hashable, int],
+    generator: random.Random,
+) -> set[int]:
+    """Reserve selected positions until every class reaches its target support."""
+    selected: set[int] = set()
+    selected_counts: Counter[int] = Counter()
+    remaining = dict(capacities)
+    for label, indices in sorted(label_positions.items(), key=lambda item: len(item[1])):
+        while selected_counts[label] < desired_counts[label]:
+            candidates = [
+                index
+                for index in indices
+                if index not in selected and remaining[groups[index]] > 0
+            ]
+            if not candidates:
+                raise_validation_error(
+                    "MultilabelSubset",
+                    f"Class {label} cannot satisfy required support under image quotas.",
+                )
+            generator.shuffle(candidates)
+            candidate = max(
+                candidates,
+                key=lambda index: sum(
+                    selected_counts[other] < desired_counts.get(other, 0)
+                    for other in positive_labels[index]
+                ),
+            )
+            selected.add(candidate)
+            remaining[groups[candidate]] -= 1
+            selected_counts.update(positive_labels[candidate])
+    return selected
+
+
+def _best_coverage_candidate(
+    *,
+    indices: Sequence[int],
+    positive_labels: Sequence[frozenset[int]],
+    groups: Sequence[Hashable],
+    assigned: set[int],
+    split_name: str,
+    remaining: Mapping[Hashable, Mapping[str, int]],
+    class_counts: Mapping[str, Counter[int]],
+    generator: random.Random,
+) -> int | None:
+    """Choose an unassigned class-positive pixel with available image capacity."""
+    candidates = [
+        index
+        for index in indices
+        if index not in assigned and remaining[groups[index]][split_name] > 0
+    ]
+    if not candidates:
+        return None
+    generator.shuffle(candidates)
+    return max(
+        candidates,
+        key=lambda index: sum(
+            class_counts[split_name][label] == 0 for label in positive_labels[index]
+        ),
+    )
+
+
+def _assignment_score(
+    labels: frozenset[int],
+    split_name: str,
+    group: Hashable,
+    target_counts: Mapping[str, Mapping[int, float]],
+    class_counts: Mapping[str, Counter[int]],
+    remaining: Mapping[Hashable, Mapping[str, int]],
+) -> float:
+    """Score one feasible split by remaining label deficit and image capacity."""
+    label_score = sum(
+        max(0.0, target_counts[split_name][label] - class_counts[split_name][label])
+        / max(target_counts[split_name][label], 1.0)
+        for label in labels
+    )
+    return label_score + remaining[group][split_name] * 1.0e-6
+
+
+def _assign(
+    index: int,
+    split_name: str,
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    assignments: Mapping[str, list[int]],
+    assigned: set[int],
+    remaining: Mapping[Hashable, dict[str, int]],
+    class_counts: Mapping[str, Counter[int]],
+) -> None:
+    """Assign one source position and update sparse allocation state."""
+    assignments[split_name].append(index)
+    assigned.add(index)
+    remaining[groups[index]][split_name] -= 1
+    class_counts[split_name].update(positive_labels[index])
+
+
+def _validate_selected_coverage(
+    selected: set[int],
+    label_positions: Mapping[int, Sequence[int]],
+    minimum_positive_count: int,
+) -> None:
+    """Ensure subset support for every original positive class."""
+    unavailable = {
+        label: sum(index in selected for index in indices)
+        for label, indices in label_positions.items()
+        if sum(index in selected for index in indices) < minimum_positive_count
+    }
+    if unavailable:
+        raise_validation_error(
+            "MultilabelSubset",
+            "Selected subset lacks required positive support: " + _format_label_counts(unavailable),
+        )
+
+
+def _validate_split_coverage(
+    class_counts: Mapping[str, Counter[int]],
+    label_positions: Mapping[int, Sequence[int]],
+    active_splits: Sequence[str],
+    minimum_positive_per_split: int,
+) -> None:
+    """Ensure every positive class occurs in every active split."""
+    missing = {
+        label: {
+            split_name: class_counts[split_name][label]
+            for split_name in active_splits
+            if class_counts[split_name][label] < minimum_positive_per_split
+        }
+        for label in label_positions
+    }
+    missing = {label: counts for label, counts in missing.items() if counts}
+    if missing:
+        formatted = ", ".join(
+            f"{label}: {dict(counts)}" for label, counts in sorted(missing.items())
+        )
+        raise_validation_error(
+            "MultilabelSplit", "Positive-class coverage failed: " + formatted
+        )
+
+
+def _format_label_counts(values: Mapping[int, int]) -> str:
+    """Render compact deterministic class support diagnostics."""
+    return ", ".join(f"{label}={count}" for label, count in sorted(values.items()))

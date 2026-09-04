@@ -1,0 +1,273 @@
+# Joint metric and regularization-weight campaign.
+# 3 penalty metrics x 4 weights x 5 repetitions = 60 training tasks.
+
+schema_version: 1
+
+experiment:
+  name: kidney-contractive-metric-weight
+
+task:
+  entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
+  preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
+  test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
+  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
+  parameters:
+    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
+    factory_parameters:
+      project_path: data/kidney_workspace
+      project_path_anchor: repository
+      image_path: datasets/kidney/kidney.imzML
+      device: null
+      reader:
+        strategy: PyImzMLReader
+        parameters: {}
+      annotations:
+        strategy: auto
+        parameters: {}
+      binning:
+        strategy: LinearBinning
+        parameters:
+          bin_step: 0.55
+          x_min: 200.0
+          x_max: 900.0
+          aggregation: sum
+      inverse_binning:
+        strategy: PassthroughInverseBinner
+      dataset:
+        strategy: PixelDataset
+        parameters:
+          source: image
+          normalization: tic
+          target_specs:
+            molecule:
+              type: multi_label
+          annotation_settings:
+            mapping:
+              x_mapping: binner
+            selection:
+              annotated_fraction: 1.0
+              unannotated_fraction: 0.0
+              max_unannotated_to_annotated_ratio: 0.0
+              seed: 42
+            targets:
+              molecule:
+                empty_spectrum_policy: exclude
+                unobserved_label_policy: unlabelled
+                add_annotation_presence_target: false
+          # Pixels remain proportional to source-image size. The sparse-label
+          # reservation guarantees that every retained molecule remains present.
+          subset:
+            fraction: 0.1
+            seed: 42
+            method: proportional_multilabel
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_count: 1
+          # Pixels from every source image are distributed across all three
+          # partitions. Each positive molecule must occur in every partition.
+          split:
+            strategy: proportional_multilabel
+            fractions:
+              train: 0.8
+              validation: 0.1
+              test: 0.1
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_per_split: 1
+      variant:
+        grid: architectures
+      predictive:
+        projector:
+          strategy: LinearProjector
+          parameters:
+            latent_dim: 10
+            projection_dim: 64
+        heads:
+          molecule_primary:
+            target_field: molecule
+            strategy: LinearClassificationHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+    model_name: null
+    training:
+      patience: 10
+      continuation:
+        enabled: true
+        resume: true
+        checkpoint_every_epochs: 1
+      checkpoint:
+        enabled: true
+        restore_best: true
+      phases:
+        - phase_name: joint_predictive
+          epochs: 15
+          batch_size: 64
+          gradient_clip_norm: 5.0
+          optimizer:
+            type: AdamW
+            params:
+              lr: 0.001
+              weight_decay: 0.0001
+          criterions:
+            grid: objectives
+
+runs:
+  repetitions: 5
+
+seeds:
+  common_seeds:
+    split: 42
+    dataloader: 43
+  run_seeds:
+    model_initialization: 1000
+    training: 2000
+
+grid:
+  architectures:
+    values:
+      - name: conv1d-ae-32-16-8-latent-10
+        preset: CNNAutoencoder
+        parameters:
+          latent_dim: 10
+          channels: [1, 32, 16, 8]
+          kernels: [5, 7, 3]
+          strides: [3, 3, 3]
+          output_normalization:
+            type: tic
+            parameters:
+              epsilon: 1.0e-12
+
+  objectives:
+    values:
+      - reconstruction: &reconstruction
+          masserstein:
+            target: MassersteinLoss
+            weight: 1.0
+        heads: &molecule_head_loss
+          molecule_primary:
+            balanced_bce:
+              target: ClassBalancedMultiLabelBCELoss
+              weight: 0.2
+              params: &balanced_bce_params
+                class_balance_method: train_inverse_prevalence
+                max_positive_weight: 20.0
+                reduction: balanced_class_mean
+                unknown_label_policy: assume_negative
+        regularization:
+          contractive: &contractive_frobenius
+            target: ContractiveLoss
+            weight: 1.0e-5
+            params: &frobenius_params
+              calculation_method: approximate_hutchinson_vjp
+              num_probes: 5
+              probe_distribution: rademacher
+              latent_source: auto
+              penalty_metric: frobenius
+              penalized_space: u
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_frobenius
+            weight: 1.0e-4
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_frobenius
+            weight: 1.0e-3
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_frobenius
+            weight: 1.0e-2
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive: &contractive_spectral
+            target: ContractiveLoss
+            weight: 1.0e-5
+            params: &spectral_params
+              calculation_method: approximate_hutchinson_vjp
+              num_probes: 5
+              probe_distribution: rademacher
+              latent_source: auto
+              penalty_metric: spectral
+              penalized_space: u
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_spectral
+            weight: 1.0e-4
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_spectral
+            weight: 1.0e-3
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_spectral
+            weight: 1.0e-2
+
+      # The threshold is the provisional baseline median ||J_u||_F. It must
+      # be replaced by the exact value measured on the new validation split
+      # before interpreting the hinged rows as a definitive comparison.
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive: &contractive_hinged
+            target: ContractiveLoss
+            weight: 1.0e-5
+            params: &hinged_params
+              calculation_method: approximate_hutchinson_vjp
+              num_probes: 5
+              probe_distribution: rademacher
+              latent_source: auto
+              penalty_metric: hinged
+              hinge_threshold: 400.0
+              penalized_space: u
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_hinged
+            weight: 1.0e-4
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_hinged
+            weight: 1.0e-3
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *contractive_hinged
+            weight: 1.0e-2
+
+execution:
+  backend: local
+  max_parallel_runs: 1
+
+reports: []
+
+reporting:
+  continue_on_error: true

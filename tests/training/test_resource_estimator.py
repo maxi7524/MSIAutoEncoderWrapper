@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 
 from msi_autoencoder_wrapper.core.wrapper import MSIAutoEncoderWrapper
+from msi_autoencoder_wrapper.training.resource_estimator import TrainingResourceEstimator
 from tests.mocks.components import build_small_autoencoder
 
 
@@ -91,3 +92,23 @@ def test_resource_estimator_can_reduce_batch_size_to_absolute_ram_limit(
     assert report["phases"][0]["fits_limits"]
     assert report["recommended_training_config"]["phases"][0]["batch_size"] == 1
     assert config["phases"][0]["batch_size"] == 64
+
+
+def test_resource_estimator_accounts_for_uniformity_pairwise_workspace() -> None:
+    """Uniformity requires retained pairwise Gram and distance matrices."""
+    phase = {
+        "criterions": {
+            "regularization": {
+                "uniformity": {"target": "UniformityLoss", "params": {}},
+            }
+        }
+    }
+
+    workspace = TrainingResourceEstimator._criterion_workspace_bytes(
+        phase,
+        batch_size=8,
+        bins=32,
+        element_size=4,
+    )
+
+    assert workspace == 3 * 8**2 * 4
