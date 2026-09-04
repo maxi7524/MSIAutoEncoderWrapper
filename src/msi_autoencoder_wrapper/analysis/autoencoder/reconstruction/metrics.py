@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
+from scipy.signal import find_peaks
 
 from ....metrics import (
     SpectrumMasserstein,
@@ -217,6 +218,141 @@ def feature_error_distribution(
         profiles["lower"][start:stop] = np.quantile(contribution, lower, axis=0)
         profiles["upper"][start:stop] = np.quantile(contribution, upper, axis=0)
     return profiles
+
+
+def peak_matching_errors(
+    inputs: np.ndarray,
+    outputs: np.ndarray,
+    mass_axis: np.ndarray,
+    window_bins: int = 5,
+    prominence_fraction: float = 0.02,
+    min_detection_fraction: float = 0.05,
+) -> Dict[str, np.ndarray]:
+    """Match every detected peak in each input spectrum to its nearest local
+    maximum in the corresponding reconstruction, and report the two errors
+    separately: where the peak moved (m/z) and how its abundance changed
+    (TIC-normalized intensity).
+
+    A peak's mass axis position and its intensity are two independent
+    reconstruction failure modes — a broadened peak envelope can sit at the
+    correct m/z with a large intensity error, or vice versa — so they are
+    never combined into one scalar here.
+
+    :param inputs: Original binned spectra, shape ``(samples, features)``.
+    :type inputs: numpy.ndarray
+    :param outputs: Reconstructed spectra with the same shape.
+    :type outputs: numpy.ndarray
+    :param mass_axis: Physical m/z coordinate for every feature.
+    :type mass_axis: numpy.ndarray
+    :param window_bins: Half-width, in bins, of the reconstruction search
+        window centered on each detected input peak.
+    :type window_bins: int
+    :param prominence_fraction: Minimum peak prominence in ``scipy.signal.find_peaks``,
+        as a fraction of that spectrum's own maximum intensity (peak detection
+        is run once per spectrum, so this adapts to each spectrum's own scale).
+    :type prominence_fraction: float
+    :param min_detection_fraction: Minimum reconstructed intensity at the matched
+        bin, as a fraction of the original peak's own height, below which the
+        peak is treated as undetected rather than mislocalized (see REMARK below).
+    :type min_detection_fraction: float
+    :return: Per-matched-peak arrays: ``spectrum_index``, ``peak_mz``,
+        ``mz_error`` (absolute, physical units; ``NaN`` where ``detected`` is
+        ``False``), ``relative_intensity_error`` (signed, TIC-normalized, always
+        populated), ``original_intensity`` (raw, for filtering), ``detected``
+        (bool).
+    :rtype: Dict[str, numpy.ndarray]
+    :raises ValidationError: If arrays, axis, or settings are incompatible.
+
+    .. note::
+        REMARK: Reconstruction decoders in this project end in a nonnegative
+        (ReLU-family) output activation, so a search window with no real
+        reconstructed signal is often *exactly* zero everywhere; ``np.argmax``
+        then deterministically returns the window's first index regardless of
+        model quality, producing an artificial constant "shift" that has
+        nothing to do with localization. ``min_detection_fraction`` filters
+        these ties out of ``mz_error`` (set to ``NaN``) while still reporting
+        the (strongly negative) ``relative_intensity_error`` and the
+        ``detected`` flag, so an undetected peak's own miss rate remains
+        visible rather than silently inflating the localization-error stats.
+        Peaks closer together than ``2 * window_bins`` bins can also match the
+        same reconstructed local maximum (ambiguous assignment); acceptable for
+        aggregate distributions, but individual rows are not a one-to-one
+        peak correspondence in dense regions.
+    """
+    original = np.asarray(inputs, dtype=np.float64)
+    reconstructed = np.asarray(outputs, dtype=np.float64)
+    axis = np.asarray(mass_axis, dtype=np.float64)
+    if original.ndim != 2 or original.shape != reconstructed.shape:
+        raise_validation_error(
+            "ReconstructionAnalysis",
+            "Peak matching requires equal two-dimensional spectrum arrays.",
+        )
+    if axis.ndim != 1 or axis.size != original.shape[1]:
+        raise_validation_error(
+            "ReconstructionAnalysis",
+            "Peak matching mass axis size must match the input matrix.",
+        )
+    if window_bins < 1 or not 0.0 < prominence_fraction < 1.0:
+        raise_validation_error(
+            "ReconstructionAnalysis",
+            "window_bins must be >= 1 and prominence_fraction must be in (0, 1).",
+        )
+    if not 0.0 <= min_detection_fraction < 1.0:
+        raise_validation_error(
+            "ReconstructionAnalysis", "min_detection_fraction must be in [0, 1)."
+        )
+
+    spectrum_indices: list[int] = []
+    peak_mz_values: list[float] = []
+    mz_errors: list[float] = []
+    relative_intensity_errors: list[float] = []
+    original_intensities: list[float] = []
+    detected_flags: list[bool] = []
+
+    n_features = original.shape[1]
+    for spectrum_index in range(original.shape[0]):
+        original_spectrum = original[spectrum_index]
+        reconstructed_spectrum = reconstructed[spectrum_index]
+        original_tic = original_spectrum.sum()
+        reconstructed_tic = reconstructed_spectrum.sum()
+        if original_tic <= 0.0 or reconstructed_tic <= 0.0:
+            continue
+
+        peak_indices, _ = find_peaks(
+            original_spectrum, prominence=prominence_fraction * original_spectrum.max()
+        )
+        for peak_index in peak_indices:
+            window_start = max(0, peak_index - window_bins)
+            window_stop = min(n_features, peak_index + window_bins + 1)
+            matched_index = window_start + int(
+                np.argmax(reconstructed_spectrum[window_start:window_stop])
+            )
+
+            original_peak_intensity = original_spectrum[peak_index]
+            matched_intensity = reconstructed_spectrum[matched_index]
+            detected = matched_intensity >= min_detection_fraction * original_peak_intensity
+
+            original_relative_intensity = original_peak_intensity / original_tic
+            reconstructed_relative_intensity = matched_intensity / reconstructed_tic
+
+            spectrum_indices.append(spectrum_index)
+            peak_mz_values.append(axis[peak_index])
+            mz_errors.append(abs(axis[matched_index] - axis[peak_index]) if detected else np.nan)
+            relative_intensity_errors.append(
+                (reconstructed_relative_intensity - original_relative_intensity)
+                / original_relative_intensity
+            )
+            original_intensities.append(original_peak_intensity)
+            detected_flags.append(detected)
+
+    return {
+        "spectrum_index": np.asarray(spectrum_indices, dtype=np.int64),
+        "peak_mz": np.asarray(peak_mz_values, dtype=np.float64),
+        "mz_error": np.asarray(mz_errors, dtype=np.float64),
+        "relative_intensity_error": np.asarray(relative_intensity_errors, dtype=np.float64),
+        "original_intensity": np.asarray(original_intensities, dtype=np.float64),
+        "detected": np.asarray(detected_flags, dtype=bool),
+    }
 
 
 def rank_models(
