@@ -390,6 +390,35 @@ def test_proportional_multilabel_split_preserves_each_image_and_class() -> None:
         )
 
 
+def test_proportional_multilabel_split_repairs_shared_rare_label_coverage() -> None:
+    """A within-image swap preserves a rare label shared by two classes."""
+    groups = ["image"] * 6
+    labels = [
+        frozenset({0, 1}),
+        frozenset({0}),
+        frozenset({0}),
+        frozenset({1}),
+        frozenset({1}),
+        frozenset(),
+    ]
+
+    assignments = split_proportional_multilabel_indices(
+        groups,
+        labels,
+        fractions={"train": 0.5, "validation": 1.0 / 3.0, "test": 1.0 / 6.0},
+        seed=7,
+        minimum_positive_per_split=1,
+    )
+
+    assert {name: len(indices) for name, indices in assignments.items()} == {
+        "train": 3,
+        "validation": 2,
+        "test": 1,
+    }
+    for indices in assignments.values():
+        assert {label for index in indices for label in labels[index]} == {0, 1}
+
+
 def test_proportional_multilabel_split_rejects_uncoverable_class() -> None:
     """A class with insufficient source support cannot silently disappear."""
     with pytest.raises(ValidationError, match="cannot cover every split"):
