@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
+import random
+
 import pytest
 import torch
 
@@ -9,6 +12,7 @@ from msi_autoencoder_wrapper.models.datasets.base_dataset import MSIBaseDataset
 from msi_autoencoder_wrapper.models.datasets.base_dataset import RawMSIBaseDataset
 from msi_autoencoder_wrapper.models.datasets.splitting import DatasetSplitter
 from msi_autoencoder_wrapper.models.datasets.multilabel_sampling import (
+    _find_coverage_swap,
     select_proportional_multilabel_indices,
     split_proportional_multilabel_indices,
 )
@@ -417,6 +421,52 @@ def test_proportional_multilabel_split_repairs_shared_rare_label_coverage() -> N
     }
     for indices in assignments.values():
         assert {label for index in indices for label in labels[index]} == {0, 1}
+
+
+def test_multilabel_coverage_repair_relaxes_only_infeasible_image_quotas() -> None:
+    """A cross-image exchange is used only when a same-image swap breaks coverage."""
+    groups = ["a", "a", "b", "b", "c", "c"]
+    labels = [
+        frozenset({1}),
+        frozenset({0}),
+        frozenset({0}),
+        frozenset(),
+        frozenset({1}),
+        frozenset(),
+    ]
+    split_by_index = {
+        0: "train",
+        1: "validation",
+        2: "train",
+        3: "validation",
+        4: "train",
+        5: "validation",
+    }
+    grouped_indices = {
+        "train": {"a": [0], "b": [2], "c": [4]},
+        "validation": {"a": [1], "b": [3], "c": [5]},
+    }
+    class_counts = {
+        "train": Counter({1: 2, 0: 1}),
+        "validation": Counter({0: 1}),
+    }
+
+    swap = _find_coverage_swap(
+        label=1,
+        split_name="validation",
+        label_indices=[0],
+        split_by_index=split_by_index,
+        indices_by_split_and_group=grouped_indices,
+        groups=groups,
+        positive_labels=labels,
+        class_counts=class_counts,
+        protected_labels={0, 1},
+        minimum_positive_per_split=1,
+        generator=random.Random(5),
+    )
+
+    assert swap is not None
+    assert swap[1:] == (3, False)
 
 
 def test_proportional_multilabel_split_rejects_uncoverable_class() -> None:

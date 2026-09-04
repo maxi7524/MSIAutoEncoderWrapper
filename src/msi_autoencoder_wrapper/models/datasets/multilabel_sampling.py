@@ -397,7 +397,7 @@ def _repair_split_coverage(
                         "MultilabelSplit",
                         f"Class {label} cannot be allocated to every split under image quotas.",
                     )
-                source_index, target_index = swap
+                source_index, target_index, _ = swap
                 source_split = split_by_index[source_index]
                 _swap_split_assignments(
                     source_index=source_index,
@@ -427,35 +427,89 @@ def _find_coverage_swap(
     protected_labels: set[int],
     minimum_positive_per_split: int,
     generator: random.Random,
-) -> tuple[int, int] | None:
-    """Find one coverage-preserving swap for a missing label and split."""
+) -> tuple[int, int, bool] | None:
+    """Find one coverage-preserving swap for a missing label and split.
+
+    Same-image swaps are attempted first. When no such swap exists, a
+    cross-image exchange preserves global split sizes and restores the required
+    class coverage at the smallest possible image-level deviation.
+    """
     sources = [index for index in label_indices if split_by_index[index] != split_name]
     generator.shuffle(sources)
+    same_image = _best_coverage_swap(
+        sources=sources,
+        target_groups={index: (groups[index],) for index in sources},
+        split_name=split_name,
+        split_by_index=split_by_index,
+        indices_by_split_and_group=indices_by_split_and_group,
+        groups=groups,
+        positive_labels=positive_labels,
+        class_counts=class_counts,
+        protected_labels=protected_labels,
+        minimum_positive_per_split=minimum_positive_per_split,
+        generator=generator,
+    )
+    if same_image is not None:
+        return (*same_image, True)
+
+    all_groups = tuple(indices_by_split_and_group[split_name])
+    cross_image = _best_coverage_swap(
+        sources=sources,
+        target_groups={index: all_groups for index in sources},
+        split_name=split_name,
+        split_by_index=split_by_index,
+        indices_by_split_and_group=indices_by_split_and_group,
+        groups=groups,
+        positive_labels=positive_labels,
+        class_counts=class_counts,
+        protected_labels=protected_labels,
+        minimum_positive_per_split=minimum_positive_per_split,
+        generator=generator,
+    )
+    return None if cross_image is None else (*cross_image, False)
+
+
+def _best_coverage_swap(
+    *,
+    sources: Sequence[int],
+    target_groups: Mapping[int, Sequence[Hashable]],
+    split_name: str,
+    split_by_index: Mapping[int, str],
+    indices_by_split_and_group: Mapping[str, Mapping[Hashable, Sequence[int]]],
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    class_counts: Mapping[str, Counter[int]],
+    protected_labels: set[int],
+    minimum_positive_per_split: int,
+    generator: random.Random,
+) -> tuple[int, int] | None:
+    """Return the highest-value feasible swap from the requested target groups."""
     best: tuple[int, int] | None = None
-    best_score = -1
+    best_score = -math.inf
     for source_index in sources:
         source_split = split_by_index[source_index]
-        targets = list(indices_by_split_and_group[split_name][groups[source_index]])
-        generator.shuffle(targets)
-        for target_index in targets:
-            if not _swap_preserves_coverage(
-                source_index=source_index,
-                target_index=target_index,
-                source_split=source_split,
-                target_split=split_name,
-                positive_labels=positive_labels,
-                class_counts=class_counts,
-                protected_labels=protected_labels,
-                minimum_positive_per_split=minimum_positive_per_split,
-            ):
-                continue
-            score = sum(
-                class_counts[split_name][candidate_label] < minimum_positive_per_split
-                for candidate_label in positive_labels[source_index]
-            ) - len(positive_labels[target_index])
-            if score > best_score:
-                best = (source_index, target_index)
-                best_score = score
+        for group in target_groups[source_index]:
+            targets = list(indices_by_split_and_group[split_name][group])
+            generator.shuffle(targets)
+            for target_index in targets:
+                if not _swap_preserves_coverage(
+                    source_index=source_index,
+                    target_index=target_index,
+                    source_split=source_split,
+                    target_split=split_name,
+                    positive_labels=positive_labels,
+                    class_counts=class_counts,
+                    protected_labels=protected_labels,
+                    minimum_positive_per_split=minimum_positive_per_split,
+                ):
+                    continue
+                score = sum(
+                    class_counts[split_name][candidate_label] < minimum_positive_per_split
+                    for candidate_label in positive_labels[source_index]
+                ) - len(positive_labels[target_index])
+                if score > best_score:
+                    best = (source_index, target_index)
+                    best_score = score
     return best
 
 
@@ -504,11 +558,12 @@ def _swap_split_assignments(
     split_by_index[source_index] = target_split
     split_by_index[target_index] = source_split
 
-    group = groups[source_index]
-    indices_by_split_and_group[source_split][group].remove(source_index)
-    indices_by_split_and_group[source_split][group].append(target_index)
-    indices_by_split_and_group[target_split][group].remove(target_index)
-    indices_by_split_and_group[target_split][group].append(source_index)
+    source_group = groups[source_index]
+    target_group = groups[target_index]
+    indices_by_split_and_group[source_split][source_group].remove(source_index)
+    indices_by_split_and_group[source_split][target_group].append(target_index)
+    indices_by_split_and_group[target_split][target_group].remove(target_index)
+    indices_by_split_and_group[target_split][source_group].append(source_index)
 
     class_counts[source_split].subtract(positive_labels[source_index])
     class_counts[source_split].update(positive_labels[target_index])
