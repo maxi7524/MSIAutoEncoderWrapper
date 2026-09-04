@@ -31,6 +31,7 @@ def test_slurm_array_is_bounded_and_uses_materialized_tasks(tmp_path: Path) -> N
     assert "#SBATCH --partition=gpu" in content
     assert "#SBATCH --qos=student_gpu" in content
     assert "#SBATCH --nodelist=gpu-node-1" in content
+    assert content.index("#SBATCH --array=0-4%2") < content.index("set -euo pipefail")
     assert "task_%06d.yaml" in content
     assert build_sbatch_command(script, parsable=True)[:2] == ["sbatch", "--parsable"]
 
@@ -48,5 +49,6 @@ def test_finalizer_runs_after_any_array_outcome(tmp_path: Path) -> None:
     content = script.read_text(encoding="utf-8")
 
     assert "#SBATCH --dependency=afterany:1234" in content
+    assert content.index("#SBATCH --dependency=afterany:1234") < content.index("set -euo pipefail")
     assert " execution_id" not in content
     assert "--execution-id execution-1" in content
