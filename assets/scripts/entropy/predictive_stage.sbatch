@@ -154,6 +154,31 @@ PY
     "${RUNTIME_CONFIG}" \
     --output "${RUN_DIRECTORY}/plan"
 
+# Scope persistent model artifacts to this execution instance.
+## The underlying experiment fingerprint identifies a configuration, not a repeat
+## execution. A new campaign must therefore not reuse its model directory names.
+"${PYTHON}" - "${RUN_DIRECTORY}/plan/tasks" "${CAMPAIGN_ID}" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+tasks_directory = Path(sys.argv[1])
+campaign_id = sys.argv[2]
+
+for task_path in sorted(tasks_directory.glob("task_*.yaml")):
+    with task_path.open(encoding="utf-8") as stream:
+        task = yaml.safe_load(stream)
+    if not isinstance(task, dict) or not isinstance(task.get("parameters"), dict):
+        raise SystemExit(f"Invalid materialized task descriptor: {task_path}")
+    task_id = task.get("task_id")
+    if not isinstance(task_id, str):
+        raise SystemExit(f"Task descriptor has no task ID: {task_path}")
+    task["parameters"]["model_name"] = f"{campaign_id}__{task_id}"
+    with task_path.open("w", encoding="utf-8") as stream:
+        yaml.safe_dump(task, stream, sort_keys=False)
+PY
+
 # Record the task count for the login-node coordinator.
 ## The coordinator keeps each submitted array within the Entropy QoS limits.
 task_count=$(find "${RUN_DIRECTORY}/plan/tasks" -maxdepth 1 -name 'task_*.yaml' -type f | wc -l)

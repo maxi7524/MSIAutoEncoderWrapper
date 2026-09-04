@@ -32,8 +32,8 @@ new campaign whenever model, dataset, loss, or training parameters change.
 - `predictive_orchestrate.sh` submits bounded arrays, validates status files,
   and submits finalization.
 - `predictive_task_array.sbatch` executes one materialized task.
-- `predictive_finalize.sbatch` copies `models/` and `configs/` back to the
-  source workspace and removes node-local staging.
+- `predictive_finalize.sbatch` copies only model directories created by that
+  campaign back to the source workspace and removes node-local staging.
 
 ## Commands
 
@@ -123,9 +123,10 @@ the same workspace copy.
 
 The coordinator submits at most six elements in a batch and limits the array to
 three concurrent elements. It waits for a batch, verifies task status manifests,
-then submits the next batch. After all tasks complete, finalization performs one
-`rsync` of `models/` and `configs/` to the source workspace and removes the
-campaign directory from `/tmp`.
+then submits the next batch. Each materialized task receives a model name based
+on `<campaign-id>__<task-id>`. After all tasks complete, finalization copies
+only those new model directories to the source workspace, refuses an existing
+destination, and removes the campaign directory from `/tmp`.
 
 The optional YAML setting `execution.entropy.task_walltime` controls the Slurm
 walltime of task-array elements. It defaults to `01:00:00`; the long nnPU

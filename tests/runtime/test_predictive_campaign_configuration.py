@@ -86,6 +86,40 @@ def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
     }
 
 
+def test_contractive_metric_weight_campaign_expands_all_metric_weight_pairs() -> None:
+    """The contractive campaign has twelve metric-weight cells and five repeats."""
+    repository = Path(__file__).resolve().parents[2]
+    config = load_experiment_config(
+        repository
+        / "assets"
+        / "experiments"
+        / "autoencoder_architecture"
+        / "experiment_runs_configs"
+        / "05_09_26_contractive_expaned"
+        / "contractive_metric_weight_experiment.yaml"
+    )
+
+    plan = build_plan(config)
+
+    assert len(plan.tasks) == 60
+    metric_weights = set()
+    for task in plan.tasks:
+        contractive = task.parameters["training"]["phases"][0]["criterions"][
+            "regularization"
+        ]["contractive"]
+        metric_weights.add(
+            (contractive["params"]["penalty_metric"], contractive["weight"])
+        )
+        assert contractive["params"]["penalized_space"] == "u"
+
+    expected_weights = {1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2}
+    assert metric_weights == {
+        (metric, weight)
+        for metric in ("frobenius", "spectral", "hinged")
+        for weight in expected_weights
+    }
+
+
 def test_predictive_components_resolve_target_width_and_nested_descriptors() -> None:
     """Planning resolves head dimensions and serializes named heads recursively."""
 
