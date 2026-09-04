@@ -25,7 +25,6 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
         "time": "time",
         "cpus_per_task": "cpus-per-task",
         "memory": "mem",
-        "gpus_per_task": "gpus-per-task",
     }
     for key, flag in mapping.items():
         if options.get(key) is not None:
@@ -33,6 +32,13 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
             if "\n" in value or "\r" in value:
                 raise ValueError(f"Invalid newline in Slurm option: {key}")
             directives.append(f"#SBATCH --{flag}={value}")
+    if options.get("gpus_per_task") is not None:
+        gpu_count = str(options["gpus_per_task"])
+        if "\n" in gpu_count or "\r" in gpu_count:
+            raise ValueError("Invalid newline in Slurm option: gpus_per_task")
+        # REMARK: Entropy documents GPU requests through the portable GRES
+        # syntax. Its Slurm deployment rejects --gpus-per-task.
+        directives.append(f"#SBATCH --gres=gpu:{gpu_count}")
     tasks = (plan_directory / "tasks").resolve()
     task_pattern = shlex.quote(str(tasks / "task_%06d.yaml"))
     python = shlex.quote(sys.executable)

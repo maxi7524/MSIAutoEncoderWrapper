@@ -31,6 +31,8 @@ def test_slurm_array_is_bounded_and_uses_materialized_tasks(tmp_path: Path) -> N
     assert "#SBATCH --partition=gpu" in content
     assert "#SBATCH --qos=student_gpu" in content
     assert "#SBATCH --nodelist=gpu-node-1" in content
+    assert "#SBATCH --gres=gpu:1" in content
+    assert "#SBATCH --gpus-per-task" not in content
     assert content.index("#SBATCH --array=0-4%2") < content.index("set -euo pipefail")
     assert "task_%06d.yaml" in content
     assert build_sbatch_command(script, parsable=True)[:2] == ["sbatch", "--parsable"]
