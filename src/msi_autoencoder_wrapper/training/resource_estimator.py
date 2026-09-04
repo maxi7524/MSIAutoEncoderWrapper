@@ -371,6 +371,9 @@ class TrainingResourceEstimator:
                     parameters.get("num_probes", 1)
                 )
                 workspace += multiplier * batch_size * bins * element_size
+            if target == "UniformityLoss":
+                # Gram products, squared distances, and their autograd state are B x B.
+                workspace += 3 * batch_size**2 * element_size
         return workspace
 
     def _find_fitting_batch_size(

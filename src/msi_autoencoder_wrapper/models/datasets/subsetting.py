@@ -35,6 +35,9 @@ class DatasetSubsetter:
         *,
         source_length: int,
         group_provider: Callable[..., Sequence[Any]],
+        multilabel_provider: (
+            Callable[..., tuple[Sequence[Any], Sequence[frozenset[int]]]] | None
+        ) = None,
         config: Mapping[str, Any],
     ) -> tuple[int, ...]:
         """Return selected original indices without modifying a dataset.
@@ -44,6 +47,9 @@ class DatasetSubsetter:
         :param group_provider: Bulk source-metadata provider used only for
             stratified selection.
         :type group_provider: Callable[..., Sequence[Any]]
+        :param multilabel_provider: Bulk provider returning image groups and
+            sparse positive labels for ``proportional_multilabel`` selection.
+        :type multilabel_provider: Callable[..., tuple[Sequence[Any], Sequence[frozenset[int]]]] | None
         :param config: ``fraction``, ``seed``, ``method``, and optional
             strategy parameters.
         :type config: Mapping[str, Any]
@@ -62,10 +68,29 @@ class DatasetSubsetter:
         method = str(config.get("method", "random"))
         if method == "random":
             return cls._random_indices(source_length, target_size, seed)
+        if method == "proportional_multilabel":
+            if multilabel_provider is None:
+                raise ValueError(
+                    "proportional_multilabel selection requires sparse positive labels."
+                )
+            parameters = dict(config.get("parameters", {}))
+            minimum_positive_count = int(parameters.pop("minimum_positive_count", 1))
+            groups, positive_labels = multilabel_provider(
+                range(source_length), **parameters
+            )
+            from .multilabel_sampling import select_proportional_multilabel_indices
+
+            return select_proportional_multilabel_indices(
+                list(groups),
+                [frozenset(labels) for labels in positive_labels],
+                fraction=fraction,
+                seed=seed,
+                minimum_positive_count=minimum_positive_count,
+            )
         if method != "stratified_random":
             raise ValueError(
-                "Unsupported subset method %r; use 'random' or "
-                "'stratified_random'." % method
+                "Unsupported subset method %r; use 'random', "
+                "'stratified_random', or 'proportional_multilabel'." % method
             )
         source_indices = range(source_length)
         groups = list(group_provider(source_indices, **dict(config.get("parameters", {}))))

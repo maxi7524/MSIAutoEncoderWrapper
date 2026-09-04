@@ -19,6 +19,9 @@ from msi_autoencoder_wrapper.training.criterions.autoencoder.contrastive.infoNCE
 from msi_autoencoder_wrapper.training.criterions.autoencoder.regularization.contractive_loss import (
     MSIContractiveLoss,
 )
+from msi_autoencoder_wrapper.training.criterions.autoencoder.regularization.uniformity_loss import (
+    MSIUniformityLoss,
+)
 from msi_autoencoder_wrapper.utils.exceptions import IncompatibleInterfaceError
 
 
@@ -37,6 +40,7 @@ def test_criterion_discovery_returns_uniform_component_information() -> None:
     assert "SobolevLoss" in available["reconstruction"]
     assert "InfoNCELoss" in available["contrastive"]
     assert "ContractiveLoss" in available["regularization"]
+    assert "UniformityLoss" in available["regularization"]
     assert "MultiLabelBCELoss" in available["head"]
     assert "ClassBalancedMultiLabelBCELoss" in available["head"]
     assert "NNPUMultiLabelLoss" in available["head"]
@@ -214,6 +218,216 @@ def test_contractive_loss_matches_linear_encoder_jacobian(
     assert loss.item() == pytest.approx(5.25)
     assert encoder.weight.grad is not None
     assert torch.isfinite(encoder.weight.grad).all()
+
+
+class _LinearAutoencoder(torch.nn.Module):
+    """Minimal model exposing the autoencoder output contract for loss tests."""
+
+    def __init__(self, weight: torch.Tensor) -> None:
+        super().__init__()
+        self.encoder = torch.nn.Linear(weight.shape[1], weight.shape[0], bias=False)
+        self.encoder.weight.data.copy_(weight)
+        self.forward_calls = 0
+
+    def forward(self, spectra: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return the test encoder output."""
+        self.forward_calls += 1
+        return {"latent_space": self.encoder(spectra)}
+
+
+def test_spectral_contractive_loss_matches_materialized_linear_jacobian() -> None:
+    """Power iteration recovers the dominant singular-value penalty."""
+    model = _LinearAutoencoder(torch.diag(torch.tensor([2.0, 0.25])))
+    spectra = torch.randn(4, 2)
+    criterion = MSIContractiveLoss(
+        calculation_method="exact_autograd_jacobian",
+        penalty_metric="spectral",
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(4), spectra), {})
+
+    torch.manual_seed(7)
+    loss = criterion(model(batch[1]), batch)
+    materialized = model.encoder.weight.detach()
+    expected = torch.linalg.svdvals(materialized)[0].square()
+
+    loss.backward()
+
+    assert loss.item() == pytest.approx(expected.item(), rel=1.0e-4)
+    assert model.encoder.weight.grad is not None
+    assert model.forward_calls == 1
+
+
+class _NonlinearAutoencoder(torch.nn.Module):
+    """Tanh encoder used to verify spectral VJP directions."""
+
+    def __init__(self, weight: torch.Tensor) -> None:
+        super().__init__()
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Linear(3, 3, bias=False),
+            torch.nn.Tanh(),
+        )
+        self.encoder[0].weight.data.copy_(weight)
+
+    def forward(self, spectra: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return a nonlinear latent representation."""
+        return {"latent_space": self.encoder(spectra)}
+
+
+def test_spectral_contractive_loss_detaches_power_iteration_directions() -> None:
+    """Power iteration estimates a nonlinear Jacobian singular value correctly."""
+    torch.manual_seed(62)
+    model = _NonlinearAutoencoder(2.0 * torch.randn(3, 3))
+    spectra = 2.0 * torch.randn(1, 3)
+    criterion = MSIContractiveLoss(penalty_metric="spectral")
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(1), spectra), {})
+
+    torch.manual_seed(1062)
+    loss = criterion(model(batch[1]), batch)
+    latent = model(batch[1])["latent_space"]
+    jacobian_rows = [
+        torch.autograd.grad(latent[0, index], batch[1], retain_graph=True)[0][0]
+        for index in range(latent.shape[1])
+    ]
+    expected = torch.linalg.svdvals(torch.stack(jacobian_rows))[0].square()
+
+    assert loss.item() == pytest.approx(expected.item(), rel=1.0e-5)
+
+
+def test_contractive_loss_rejects_batch_normalized_encoder() -> None:
+    """Per-spectrum Jacobian regularization requires batch-separable encoders."""
+    model = _LinearAutoencoder(torch.eye(2))
+    model.encoder = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.BatchNorm1d(2))
+    criterion = MSIContractiveLoss()
+
+    with pytest.raises(IncompatibleInterfaceError, match="LayerNorm instead of BatchNorm"):
+        criterion.on_phase_start(model, object(), {})
+
+
+def test_hinged_contractive_loss_has_zero_input_gradient_below_threshold() -> None:
+    """The hinge stops further contraction once the Frobenius norm is small."""
+    encoder = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.Tanh())
+    spectra = torch.randn(3, 2)
+    criterion = MSIContractiveLoss(
+        calculation_method="exact_autograd_jacobian",
+        penalty_metric="hinged",
+        hinge_threshold=100.0,
+    )
+    batch = criterion.on_batch_start((torch.arange(3), spectra), {})
+    loss = criterion({"latent_space": encoder(batch[1])}, batch)
+    input_gradient = torch.autograd.grad(loss, batch[1])[0]
+
+    assert loss.item() == pytest.approx(0.0)
+    assert torch.equal(input_gradient, torch.zeros_like(input_gradient))
+
+
+class _LayerNormEncoder(torch.nn.Module):
+    """Small affine-LayerNorm encoder matching the canonicalization contract."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bottleneck_layer = torch.nn.Sequential(
+            torch.nn.Linear(3, 3, bias=False),
+            torch.nn.LayerNorm(3),
+        )
+
+    def forward(self, spectra: torch.Tensor) -> torch.Tensor:
+        """Return post-LayerNorm latents."""
+        return self.bottleneck_layer(spectra)
+
+
+class _CanonicalizedAutoencoder(torch.nn.Module):
+    """Expose a canonicalizable encoder using the autoencoder output contract."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.encoder = _LayerNormEncoder()
+
+    def forward(self, spectra: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return the post-LayerNorm representation."""
+        return {"latent_space": self.encoder(spectra)}
+
+
+def _contractive_penalty_for_gamma(
+    gamma: float,
+    penalized_space: str,
+) -> float:
+    """Evaluate a contractive loss after setting the bottleneck affine scale."""
+    torch.manual_seed(11)
+    model = _CanonicalizedAutoencoder()
+    layer_norm = model.encoder.bottleneck_layer[-1]
+    assert isinstance(layer_norm, torch.nn.LayerNorm)
+    layer_norm.weight.data.fill_(gamma)
+    layer_norm.bias.data.copy_(torch.tensor([0.2, -0.1, 0.4]))
+    criterion = MSIContractiveLoss(
+        calculation_method="exact_autograd_jacobian",
+        penalized_space=penalized_space,
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(4), torch.randn(4, 3)), {})
+    return criterion(model(batch[1]), batch).item()
+
+
+def test_canonicalized_contractive_penalty_is_invariant_to_layer_norm_gamma() -> None:
+    """Canonicalized penalties cannot be reduced by affine LayerNorm rescaling."""
+    u_gamma_one = _contractive_penalty_for_gamma(1.0, "u")
+    u_gamma_three = _contractive_penalty_for_gamma(3.0, "u")
+    z_gamma_one = _contractive_penalty_for_gamma(1.0, "z")
+    z_gamma_three = _contractive_penalty_for_gamma(3.0, "z")
+
+    assert u_gamma_three == pytest.approx(u_gamma_one, rel=1.0e-5)
+    assert z_gamma_three == pytest.approx(9.0 * z_gamma_one, rel=1.0e-5)
+
+
+def test_uniformity_loss_prefers_spread_canonicalized_latents() -> None:
+    """A spread set on the LayerNorm sphere has lower uniformity loss."""
+    model = _CanonicalizedAutoencoder()
+    layer_norm = model.encoder.bottleneck_layer[-1]
+    assert isinstance(layer_norm, torch.nn.LayerNorm)
+    layer_norm.weight.data.fill_(2.0)
+    layer_norm.bias.data.copy_(torch.tensor([0.3, -0.2, 0.1]))
+    criterion = MSIUniformityLoss()
+    criterion.on_phase_start(model, object(), {})
+    scale = float(np.sqrt(1.5))
+    clustered_u = torch.tensor([[scale, -scale, 0.0]]).repeat(4, 1)
+    spread_u = torch.tensor(
+        [
+            [scale, -scale, 0.0],
+            [-scale, scale, 0.0],
+            [scale, 0.0, -scale],
+            [-scale, 0.0, scale],
+        ],
+        requires_grad=True,
+    )
+    clustered_z = clustered_u * layer_norm.weight + layer_norm.bias
+    spread_z = spread_u * layer_norm.weight + layer_norm.bias
+
+    batch = (torch.arange(4), torch.zeros(4, 3))
+    clustered_loss = criterion({"latent_space": clustered_z}, batch)
+    spread_loss = criterion({"latent_space": spread_z}, batch)
+    spread_loss.backward()
+
+    assert criterion.requires_input_grad is False
+    assert spread_loss < clustered_loss
+    assert spread_u.grad is not None
+    assert torch.isfinite(spread_u.grad).all()
+
+
+def test_uniformity_loss_is_finite_for_large_pairwise_penalties() -> None:
+    """Log-sum-exp evaluation avoids exponential underflow for distant pairs."""
+    model = _CanonicalizedAutoencoder()
+    criterion = MSIUniformityLoss(temperature=200.0)
+    criterion.on_phase_start(model, object(), {})
+    scale = float(np.sqrt(1.5))
+    canonical_u = torch.tensor([[scale, -scale, 0.0], [-scale, scale, 0.0]])
+    layer_norm = model.encoder.bottleneck_layer[-1]
+    assert isinstance(layer_norm, torch.nn.LayerNorm)
+    latent = canonical_u * layer_norm.weight + layer_norm.bias
+
+    loss = criterion({"latent_space": latent}, (torch.arange(2), torch.zeros(2, 3)))
+
+    assert torch.isfinite(loss)
 
 
 @pytest.mark.parametrize(

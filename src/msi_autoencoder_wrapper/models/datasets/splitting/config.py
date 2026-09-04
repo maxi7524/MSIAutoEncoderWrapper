@@ -29,6 +29,7 @@ class SplitConfig:
             "grouped",
             "target_stratified",
             "mask_stratified",
+            "proportional_multilabel",
             "predefined",
         }:
             raise_validation_error(
@@ -80,4 +81,3 @@ class SplitConfig:
         if self.assignments is not None:
             result["assignments"] = dict(self.assignments)
         return result
-

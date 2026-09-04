@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from msi_autoencoder_wrapper.models.datasets.base_dataset import MSIBaseDataset
 from msi_autoencoder_wrapper.models.datasets.base_dataset import RawMSIBaseDataset
 from msi_autoencoder_wrapper.models.datasets.splitting import DatasetSplitter
+from msi_autoencoder_wrapper.models.datasets.multilabel_sampling import (
+    select_proportional_multilabel_indices,
+    split_proportional_multilabel_indices,
+)
 from msi_autoencoder_wrapper.models.datasets.subsetting import DatasetSubsetter
+from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 
 
 class SplitDataset(MSIBaseDataset):
@@ -77,6 +83,32 @@ class UnevenGroupedDataset(MSIBaseDataset):
     def _get_source_split_group(self, index, **kwargs):
         del kwargs
         return self.groups[index]
+
+
+class MultiLabelSplitDataset(MSIBaseDataset):
+    """Synthetic multi-label pixels distributed equally across source images."""
+
+    group_size = 20
+    image_count = 3
+    groups = tuple(image_index for image_index in range(3) for _ in range(20))
+    positive_labels = tuple(
+        frozenset({index % 3})
+        for index in range(60)
+    )
+
+    def _source_length(self):
+        return len(self.groups)
+
+    def _get_source_item(self, index):
+        return index
+
+    def get_multilabel_split_data(self, indices, group_fields, **kwargs):
+        del kwargs
+        assert group_fields == ["image_key"]
+        return (
+            [self.groups[index] for index in indices],
+            [self.positive_labels[index] for index in indices],
+        )
 
 
 def test_random_split_is_owned_by_dataset_and_reproducible() -> None:
@@ -225,3 +257,125 @@ def test_raw_dataset_maps_public_indices_before_raw_loading() -> None:
     )
 
     assert dataset.get_raw_item(0)["source_index"] == dataset[0]
+
+
+def test_proportional_multilabel_subset_preserves_image_and_positive_ratios() -> None:
+    """Selection retains every positive label while honoring image quotas."""
+    groups = ["large"] * 20 + ["small"] * 10
+    labels = [frozenset({0}) for _ in range(20)] + [
+        frozenset({1}) if index < 5 else frozenset({0})
+        for index in range(10)
+    ]
+
+    selected = select_proportional_multilabel_indices(
+        groups,
+        labels,
+        fraction=0.4,
+        seed=11,
+        minimum_positive_count=1,
+    )
+
+    assert len(selected) == 12
+    assert sum(groups[index] == "large" for index in selected) == 8
+    assert sum(groups[index] == "small" for index in selected) == 4
+    assert {label for index in selected for label in labels[index]} == {0, 1}
+
+
+def test_proportional_multilabel_subset_is_registered_in_subsetter() -> None:
+    """The public subset method forwards grouping parameters and sparse labels."""
+    groups = ["image-a"] * 8 + ["image-b"] * 4
+    labels = [frozenset({index % 2}) for index in range(12)]
+
+    def multilabel_provider(indices, group_fields):
+        assert group_fields == ["image_key"]
+        return (
+            [groups[index] for index in indices],
+            [labels[index] for index in indices],
+        )
+
+    selected = DatasetSubsetter.select_indices(
+        source_length=len(groups),
+        group_provider=lambda indices, **kwargs: ["unused" for _ in indices],
+        multilabel_provider=multilabel_provider,
+        config={
+            "fraction": 0.5,
+            "seed": 5,
+            "method": "proportional_multilabel",
+            "parameters": {
+                "group_fields": ["image_key"],
+                "minimum_positive_count": 1,
+            },
+        },
+    )
+
+    assert len(selected) == 6
+    assert sum(groups[index] == "image-a" for index in selected) == 4
+    assert sum(groups[index] == "image-b" for index in selected) == 2
+    assert {label for index in selected for label in labels[index]} == {0, 1}
+
+
+def test_proportional_multilabel_split_preserves_each_image_and_class() -> None:
+    """Every positive class is available in train, validation, and test."""
+    dataset = MultiLabelSplitDataset()
+    partitions = DatasetSplitter.split(
+        dataset,
+        {
+            "strategy": "proportional_multilabel",
+            "seed": 17,
+            "fractions": {"train": 0.8, "validation": 0.1, "test": 0.1},
+            "parameters": {
+                "group_fields": ["image_key"],
+                "minimum_positive_per_split": 1,
+            },
+        },
+    )
+
+    split_indices = {
+        name: [] if partition is None else list(partition.indices)
+        for name, partition in partitions.items()
+    }
+    for values in split_indices.values():
+        assert len(values) > 0
+        assert {
+            label for index in values for label in dataset.positive_labels[index]
+        } == {0, 1, 2}
+    assert [
+        sum(label in dataset.positive_labels[index] for index in split_indices["train"])
+        for label in range(3)
+    ] == [16, 16, 16]
+    assert [
+        sum(label in dataset.positive_labels[index] for index in split_indices["validation"])
+        for label in range(3)
+    ] == [2, 2, 2]
+    assert [
+        sum(label in dataset.positive_labels[index] for index in split_indices["test"])
+        for label in range(3)
+    ] == [2, 2, 2]
+    for image_index in range(dataset.image_count):
+        assert (
+            sum(dataset.groups[index] == image_index for index in split_indices["train"])
+            == 16
+        )
+        assert (
+            sum(
+                dataset.groups[index] == image_index
+                for index in split_indices["validation"]
+            )
+            == 2
+        )
+        assert (
+            sum(dataset.groups[index] == image_index for index in split_indices["test"])
+            == 2
+        )
+
+
+def test_proportional_multilabel_split_rejects_uncoverable_class() -> None:
+    """A class with insufficient source support cannot silently disappear."""
+    with pytest.raises(ValidationError, match="cannot cover every split"):
+        split_proportional_multilabel_indices(
+            groups=["image"] * 10,
+            positive_labels=[frozenset({0})] * 2 + [frozenset()] * 8,
+            fractions={"train": 0.8, "validation": 0.1, "test": 0.1},
+            seed=0,
+            minimum_positive_per_split=1,
+        )
