@@ -54,11 +54,12 @@ def select_proportional_multilabel_indices(
         target_size,
     )
     label_positions = _label_positions(positive_labels)
-    desired_counts = {
-        label: min(
-            len(indices),
-            max(minimum_positive_count, math.ceil(len(indices) * fraction)),
-        )
+    # Exact per-class sampling targets cannot in general coexist with exact
+    # per-image quotas: labels can be concentrated in the same small image.
+    # Enforce the scientifically required coverage here, then let the
+    # quota-preserving random completion retain class prevalence in expectation.
+    required_counts = {
+        label: min(len(indices), minimum_positive_count)
         for label, indices in label_positions.items()
     }
     generator = random.Random(seed)
@@ -66,7 +67,7 @@ def select_proportional_multilabel_indices(
         groups=groups,
         positive_labels=positive_labels,
         label_positions=label_positions,
-        desired_counts=desired_counts,
+        desired_counts=required_counts,
         capacities=capacities,
         generator=generator,
     )
