@@ -5,6 +5,11 @@ materialized-task runtime. A campaign stages one workspace copy on an Entropy
 execution node, runs the generated tasks, and copies output artifacts back to
 the source workspace.
 
+For Entropy predictive campaigns, use these scripts rather than the generic
+`execution.backend: slurm` runtime backend. The coordinator below is the
+quota-aware submission path: it submits at most six array elements at a time
+and runs at most three concurrently.
+
 ## Inputs and campaign snapshot
 
 `predictive_stage.sbatch` accepts a campaign identifier, an experiment YAML,
@@ -60,7 +65,7 @@ nohup bash "${SCRIPTS}/predictive_orchestrate.sh" "${CAMPAIGN_ID}" \
 This compatibility form selects:
 
 ```text
-YAML:      assets/experiments/08_26/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
+YAML:      assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
 workspace: data/kidney_workspace
 run root:  ~/entropy-runs/kidney-architecture-predictive/
 ```
@@ -99,10 +104,10 @@ to remove the node-local copy, and then starts the next one:
 ```bash
 nohup bash "${SCRIPTS}/predictive_run_sequence.sh" \
   data/kidney_workspace \
-  nnpu-controls-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_objective_controls.yaml \
-  nnpu-priors-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_prior_sensitivity.yaml \
-  nnpu-long-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_long_training.yaml \
-  nnpu-masked30-YYYYMMDD assets/experiments/08_26/23_08_26_architecture_predictive/nnpu_followup/nnpu_masked30.yaml \
+  nnpu-controls-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_objective_controls.yaml \
+  nnpu-priors-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_prior_sensitivity.yaml \
+  nnpu-long-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_long_training.yaml \
+  nnpu-masked30-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_masked30.yaml \
   > "$HOME/entropy-runs/nnpu-followup-YYYYMMDD-sequence.log" 2>&1 &
 ```
 

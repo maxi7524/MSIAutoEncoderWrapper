@@ -13,7 +13,7 @@ set -euo pipefail
 if (( $# == 1 )); then
     # Legacy invocation preserved for the established kidney predictive workflow.
     CAMPAIGN_ID=$1
-    EXPERIMENT_CONFIG_INPUT=assets/experiments/08_26/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
+    EXPERIMENT_CONFIG_INPUT=assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
     WORKSPACE_INPUT=data/kidney_workspace
     RUN_DIRECTORY_INPUT="${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}"
 elif (( $# == 3 || $# == 4 )); then
