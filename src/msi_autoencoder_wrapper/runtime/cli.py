@@ -553,12 +553,18 @@ def _run_slurm_backend(config: dict, plan: ExperimentPlan, directory: Path, task
     try:
         staged_plan = staged / "plan"
         script = write_sbatch_script(staged_plan, len(task_paths), plan.execution.get("slurm", {}))
-        result = subprocess.run(
-            build_sbatch_command(script, parsable=True),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                build_sbatch_command(script, parsable=True),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(
+                "Slurm array submission failed: "
+                f"stdout={error.stdout!r}; stderr={error.stderr!r}"
+            ) from error
         job_id = result.stdout.strip().split(";", 1)[0]
         if not job_id.isdigit():
             raise RuntimeError(f"Cannot parse sbatch job identifier: {result.stdout!r}")
