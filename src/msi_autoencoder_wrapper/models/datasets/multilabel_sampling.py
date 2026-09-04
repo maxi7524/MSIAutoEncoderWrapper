@@ -150,37 +150,9 @@ def split_proportional_multilabel_indices(
     class_counts = {name: Counter() for name in _SPLIT_NAMES}
     remaining = {group: dict(capacities) for group, capacities in group_capacities.items()}
 
-    # Reserve support for rare classes before common or unlabelled pixels occupy
-    # an image's validation/test capacity.
-    for label, indices in sorted(label_positions.items(), key=lambda item: len(item[1])):
-        for split_name in active_splits:
-            for _ in range(minimum_positive_per_split):
-                candidate = _best_coverage_candidate(
-                    indices=indices,
-                    positive_labels=positive_labels,
-                    groups=groups,
-                    assigned=assigned,
-                    split_name=split_name,
-                    remaining=remaining,
-                    class_counts=class_counts,
-                    generator=generator,
-                )
-                if candidate is None:
-                    raise_validation_error(
-                        "MultilabelSplit",
-                        f"Class {label} cannot be allocated to every split under image quotas.",
-                    )
-                _assign(
-                    candidate,
-                    split_name,
-                    groups,
-                    positive_labels,
-                    assignments,
-                    assigned,
-                    remaining,
-                    class_counts,
-                )
-
+    # Allocate every pixel under exact per-image quotas before enforcing
+    # coverage. This keeps class prevalence close to the requested fractions
+    # and avoids prematurely consuming a multi-label pixel for one class.
     target_counts = {
         split_name: {
             label: len(indices) * fractions[split_name]
@@ -224,6 +196,18 @@ def split_proportional_multilabel_indices(
             class_counts,
         )
 
+    # Repair missing support through within-image swaps. A swap preserves every
+    # image quota exactly while moving a required positive to its missing split.
+    _repair_split_coverage(
+        assignments=assignments,
+        groups=groups,
+        positive_labels=positive_labels,
+        label_positions=label_positions,
+        active_splits=active_splits,
+        class_counts=class_counts,
+        minimum_positive_per_split=minimum_positive_per_split,
+        generator=generator,
+    )
     _validate_split_coverage(class_counts, label_positions, active_splits, minimum_positive_per_split)
     for values in assignments.values():
         values.sort()
@@ -322,34 +306,6 @@ def _select_required_positives(
     return selected
 
 
-def _best_coverage_candidate(
-    *,
-    indices: Sequence[int],
-    positive_labels: Sequence[frozenset[int]],
-    groups: Sequence[Hashable],
-    assigned: set[int],
-    split_name: str,
-    remaining: Mapping[Hashable, Mapping[str, int]],
-    class_counts: Mapping[str, Counter[int]],
-    generator: random.Random,
-) -> int | None:
-    """Choose an unassigned class-positive pixel with available image capacity."""
-    candidates = [
-        index
-        for index in indices
-        if index not in assigned and remaining[groups[index]][split_name] > 0
-    ]
-    if not candidates:
-        return None
-    generator.shuffle(candidates)
-    return max(
-        candidates,
-        key=lambda index: sum(
-            class_counts[split_name][label] == 0 for label in positive_labels[index]
-        ),
-    )
-
-
 def _assignment_score(
     labels: frozenset[int],
     split_name: str,
@@ -382,6 +338,182 @@ def _assign(
     assigned.add(index)
     remaining[groups[index]][split_name] -= 1
     class_counts[split_name].update(positive_labels[index])
+
+
+def _repair_split_coverage(
+    *,
+    assignments: Mapping[str, list[int]],
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    label_positions: Mapping[int, Sequence[int]],
+    active_splits: Sequence[str],
+    class_counts: Mapping[str, Counter[int]],
+    minimum_positive_per_split: int,
+    generator: random.Random,
+) -> None:
+    """Repair sparse coverage using quota-preserving swaps within each image."""
+    split_by_index = {
+        index: split_name
+        for split_name, indices in assignments.items()
+        for index in indices
+    }
+    indices_by_split_and_group = {
+        split_name: _group_indices(indices_groups)
+        for split_name, indices_groups in (
+            (
+                split_name,
+                [groups[index] for index in indices],
+            )
+            for split_name, indices in assignments.items()
+        )
+    }
+    # Convert local positions from _group_indices back to public sample indices.
+    for split_name, grouped_positions in indices_by_split_and_group.items():
+        split_indices = assignments[split_name]
+        indices_by_split_and_group[split_name] = {
+            group: [split_indices[position] for position in positions]
+            for group, positions in grouped_positions.items()
+        }
+
+    protected_labels: set[int] = set()
+    for label, indices in sorted(label_positions.items(), key=lambda item: len(item[1])):
+        for split_name in active_splits:
+            while class_counts[split_name][label] < minimum_positive_per_split:
+                swap = _find_coverage_swap(
+                    label=label,
+                    split_name=split_name,
+                    label_indices=indices,
+                    split_by_index=split_by_index,
+                    indices_by_split_and_group=indices_by_split_and_group,
+                    groups=groups,
+                    positive_labels=positive_labels,
+                    class_counts=class_counts,
+                    protected_labels=protected_labels | {label},
+                    minimum_positive_per_split=minimum_positive_per_split,
+                    generator=generator,
+                )
+                if swap is None:
+                    raise_validation_error(
+                        "MultilabelSplit",
+                        f"Class {label} cannot be allocated to every split under image quotas.",
+                    )
+                source_index, target_index = swap
+                source_split = split_by_index[source_index]
+                _swap_split_assignments(
+                    source_index=source_index,
+                    target_index=target_index,
+                    source_split=source_split,
+                    target_split=split_name,
+                    assignments=assignments,
+                    split_by_index=split_by_index,
+                    indices_by_split_and_group=indices_by_split_and_group,
+                    groups=groups,
+                    positive_labels=positive_labels,
+                    class_counts=class_counts,
+                )
+        protected_labels.add(label)
+
+
+def _find_coverage_swap(
+    *,
+    label: int,
+    split_name: str,
+    label_indices: Sequence[int],
+    split_by_index: Mapping[int, str],
+    indices_by_split_and_group: Mapping[str, Mapping[Hashable, Sequence[int]]],
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    class_counts: Mapping[str, Counter[int]],
+    protected_labels: set[int],
+    minimum_positive_per_split: int,
+    generator: random.Random,
+) -> tuple[int, int] | None:
+    """Find one coverage-preserving swap for a missing label and split."""
+    sources = [index for index in label_indices if split_by_index[index] != split_name]
+    generator.shuffle(sources)
+    best: tuple[int, int] | None = None
+    best_score = -1
+    for source_index in sources:
+        source_split = split_by_index[source_index]
+        targets = list(indices_by_split_and_group[split_name][groups[source_index]])
+        generator.shuffle(targets)
+        for target_index in targets:
+            if not _swap_preserves_coverage(
+                source_index=source_index,
+                target_index=target_index,
+                source_split=source_split,
+                target_split=split_name,
+                positive_labels=positive_labels,
+                class_counts=class_counts,
+                protected_labels=protected_labels,
+                minimum_positive_per_split=minimum_positive_per_split,
+            ):
+                continue
+            score = sum(
+                class_counts[split_name][candidate_label] < minimum_positive_per_split
+                for candidate_label in positive_labels[source_index]
+            ) - len(positive_labels[target_index])
+            if score > best_score:
+                best = (source_index, target_index)
+                best_score = score
+    return best
+
+
+def _swap_preserves_coverage(
+    *,
+    source_index: int,
+    target_index: int,
+    source_split: str,
+    target_split: str,
+    positive_labels: Sequence[frozenset[int]],
+    class_counts: Mapping[str, Counter[int]],
+    protected_labels: set[int],
+    minimum_positive_per_split: int,
+) -> bool:
+    """Return whether a swap preserves already-established class coverage."""
+    source_labels = positive_labels[source_index]
+    target_labels = positive_labels[target_index]
+    for label in protected_labels:
+        source_delta = int(label in target_labels) - int(label in source_labels)
+        target_delta = int(label in source_labels) - int(label in target_labels)
+        if class_counts[source_split][label] + source_delta < minimum_positive_per_split:
+            return False
+        if class_counts[target_split][label] + target_delta < minimum_positive_per_split:
+            return False
+    return True
+
+
+def _swap_split_assignments(
+    *,
+    source_index: int,
+    target_index: int,
+    source_split: str,
+    target_split: str,
+    assignments: Mapping[str, list[int]],
+    split_by_index: dict[int, str],
+    indices_by_split_and_group: Mapping[str, Mapping[Hashable, list[int]]],
+    groups: Sequence[Hashable],
+    positive_labels: Sequence[frozenset[int]],
+    class_counts: Mapping[str, Counter[int]],
+) -> None:
+    """Swap two same-image indices and update all split bookkeeping."""
+    assignments[source_split].remove(source_index)
+    assignments[source_split].append(target_index)
+    assignments[target_split].remove(target_index)
+    assignments[target_split].append(source_index)
+    split_by_index[source_index] = target_split
+    split_by_index[target_index] = source_split
+
+    group = groups[source_index]
+    indices_by_split_and_group[source_split][group].remove(source_index)
+    indices_by_split_and_group[source_split][group].append(target_index)
+    indices_by_split_and_group[target_split][group].remove(target_index)
+    indices_by_split_and_group[target_split][group].append(source_index)
+
+    class_counts[source_split].subtract(positive_labels[source_index])
+    class_counts[source_split].update(positive_labels[target_index])
+    class_counts[target_split].subtract(positive_labels[target_index])
+    class_counts[target_split].update(positive_labels[source_index])
 
 
 def _validate_selected_coverage(
