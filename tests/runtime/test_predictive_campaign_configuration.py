@@ -19,7 +19,8 @@ def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:
         repository
         / "assets"
         / "experiments"
-        / "08_26"
+        / "autoencoder_architecture"
+        / "experiment_runs_configs"
         / "23_08_26_architecture_predictive"
         / "architecture_predictive_experiment.yaml"
     )
