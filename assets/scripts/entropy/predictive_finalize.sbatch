@@ -25,12 +25,24 @@ if [[ ! -d "${SOURCE_WORKSPACE:-}" || ! -d "${LOCAL_WORKSPACE:-}" ]]; then
     exit 1
 fi
 
-mkdir -p "${SOURCE_WORKSPACE}/models" "${SOURCE_WORKSPACE}/configs"
+# Persist only model directories produced by this campaign.
+## LOCAL_WORKSPACE begins as a copy of SOURCE_WORKSPACE, so synchronizing its
+## complete models/ or configs/ tree would overwrite files that predate this run.
 if [[ -d "${LOCAL_WORKSPACE}/models" ]]; then
-    rsync -a "${LOCAL_WORKSPACE}/models/" "${SOURCE_WORKSPACE}/models/"
-fi
-if [[ -d "${LOCAL_WORKSPACE}/configs" ]]; then
-    rsync -a "${LOCAL_WORKSPACE}/configs/" "${SOURCE_WORKSPACE}/configs/"
+    while IFS= read -r -d '' model_directory; do
+        context_name=$(basename "$(dirname "${model_directory}")")
+        model_name=$(basename "${model_directory}")
+        destination_directory=${SOURCE_WORKSPACE}/models/${context_name}/${model_name}
+        if [[ -e "${destination_directory}" ]]; then
+            echo "Refusing to overwrite existing model directory: ${destination_directory}" >&2
+            exit 1
+        fi
+        mkdir -p "$(dirname "${destination_directory}")"
+        rsync -a "${model_directory}/" "${destination_directory}/"
+    done < <(
+        find "${LOCAL_WORKSPACE}/models" -mindepth 2 -maxdepth 2 -type d \
+            -name "${CAMPAIGN_ID}__*" -print0
+    )
 fi
 
 # NODE_LOCAL_DIRECTORY is written by staging and is scoped to one validated campaign ID.
