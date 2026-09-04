@@ -55,14 +55,15 @@ task:
                 unobserved_label_policy: unlabelled
                 add_annotation_presence_target: false
           # Pixels remain proportional to source-image size. The sparse-label
-          # reservation guarantees that every retained molecule remains present.
+          # reservation leaves at least one positive pixel for each of the
+          # three train/validation/test partitions.
           subset:
             fraction: 0.1
             seed: 42
             method: proportional_multilabel
             parameters:
               group_fields: dataset_id
-              minimum_positive_count: 1
+              minimum_positive_count: 3
           # Pixels from every source image are distributed across all three
           # partitions. Each positive molecule must occur in every partition.
           split:

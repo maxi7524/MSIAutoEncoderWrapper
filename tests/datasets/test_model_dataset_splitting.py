@@ -281,6 +281,27 @@ def test_proportional_multilabel_subset_preserves_image_and_positive_ratios() ->
     assert {label for index in selected for label in labels[index]} == {0, 1}
 
 
+def test_proportional_multilabel_subset_treats_class_prevalence_as_a_soft_target() -> None:
+    """Image quotas remain feasible when two labels share a small image."""
+    groups = ["concentrated"] * 6 + ["other"] * 4
+    labels = [frozenset({0})] * 3 + [frozenset({1})] * 3 + [frozenset()] * 4
+
+    selected = select_proportional_multilabel_indices(
+        groups,
+        labels,
+        fraction=0.5,
+        seed=19,
+        minimum_positive_count=1,
+    )
+
+    # At this fraction, each label's rounded independent target would be two,
+    # but their four required positions cannot fit into the image quota of
+    # three. Coverage is hard; prevalence is optimized by the random fill.
+    assert len(selected) == 5
+    assert sum(groups[index] == "concentrated" for index in selected) == 3
+    assert {label for index in selected for label in labels[index]} == {0, 1}
+
+
 def test_proportional_multilabel_subset_is_registered_in_subsetter() -> None:
     """The public subset method forwards grouping parameters and sparse labels."""
     groups = ["image-a"] * 8 + ["image-b"] * 4
