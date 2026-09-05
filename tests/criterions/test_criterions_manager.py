@@ -295,6 +295,76 @@ def test_spectral_contractive_loss_detaches_power_iteration_directions() -> None
     assert loss.item() == pytest.approx(expected.item(), rel=1.0e-5)
 
 
+def test_fisher_rao_spectral_loss_approximates_tangent_simplex_gram() -> None:
+    """Three power steps approximate Fisher--Rao tangent spectral sensitivity."""
+    weight = torch.tensor([[2.0, -1.0, 0.5], [-0.5, 1.0, 1.5]])
+    model = _LinearAutoencoder(weight)
+    spectra = torch.tensor([[0.2, 0.3, 0.5]]).repeat(4, 1)
+    criterion = MSIContractiveLoss(
+        penalty_metric="spectral",
+        input_geometry="fisher_rao",
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(4), spectra), {})
+
+    torch.manual_seed(17)
+    loss = criterion(model(batch[1]), batch)
+    simplex_covariance = torch.diag(spectra[0]) - torch.outer(spectra[0], spectra[0])
+    expected = torch.linalg.eigvalsh(weight @ simplex_covariance @ weight.T)[-1]
+
+    # Three fixed power iterations are deliberately used in training to bound
+    # Jacobian cost; this linear fixture has a 0.6% residual approximation error.
+    assert loss.item() == pytest.approx(expected.item(), rel=1.0e-2)
+
+
+def test_fisher_rao_spectral_loss_removes_radial_tic_direction() -> None:
+    """An encoder sensitive only to total ion current has zero tangent penalty."""
+    model = _LinearAutoencoder(torch.tensor([[1.0, 1.0, 1.0]]))
+    spectra = torch.tensor([[0.2, 0.3, 0.5]]).repeat(3, 1)
+    criterion = MSIContractiveLoss(
+        penalty_metric="spectral",
+        input_geometry="fisher_rao",
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(3), spectra), {})
+
+    loss = criterion(model(batch[1]), batch)
+
+    assert loss.item() == pytest.approx(0.0, abs=1.0e-10)
+
+
+def test_spectral_plus_hinged_adds_excess_sensitivity_penalty() -> None:
+    """Combined spectral and hinge terms use one shared spectral statistic."""
+    model = _LinearAutoencoder(torch.diag(torch.tensor([2.0, 0.25])))
+    spectra = torch.tensor([[0.4, 0.6]]).repeat(4, 1)
+    criterion = MSIContractiveLoss(
+        penalty_metric="spectral_plus_hinged",
+        hinge_threshold=1.0,
+        hinge_alpha=0.5,
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(4), spectra), {})
+
+    torch.manual_seed(23)
+    loss = criterion(model(batch[1]), batch)
+
+    assert loss.item() == pytest.approx(4.5, rel=1.0e-4)
+
+
+def test_fisher_rao_spectral_loss_rejects_non_tic_inputs() -> None:
+    """Fisher--Rao geometry is defined only on the normalized TIC simplex."""
+    model = _LinearAutoencoder(torch.eye(2))
+    criterion = MSIContractiveLoss(
+        penalty_metric="spectral",
+        input_geometry="fisher_rao",
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(2), torch.ones(2, 2)), {})
+
+    with pytest.raises(IncompatibleInterfaceError, match="TIC equal to one"):
+        criterion(model(batch[1]), batch)
+
+
 def test_contractive_loss_rejects_batch_normalized_encoder() -> None:
     """Per-spectrum Jacobian regularization requires batch-separable encoders."""
     model = _LinearAutoencoder(torch.eye(2))

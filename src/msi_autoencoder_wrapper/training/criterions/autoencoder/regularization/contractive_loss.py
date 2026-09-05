@@ -21,8 +21,11 @@ from .canonicalized_latent import CanonicalizedLatentMixin
 SUPPORTED_CONTRACTIVE_METHODS = frozenset(
     {"exact_autograd_jacobian", "approximate_hutchinson_vjp"}
 )
-SUPPORTED_PENALTY_METRICS = frozenset({"frobenius", "spectral", "hinged"})
+SUPPORTED_PENALTY_METRICS = frozenset(
+    {"frobenius", "spectral", "hinged", "spectral_plus_hinged"}
+)
 SUPPORTED_PENALIZED_SPACES = frozenset({"z", "u"})
+SUPPORTED_INPUT_GEOMETRIES = frozenset({"euclidean", "fisher_rao"})
 _SPECTRAL_POWER_ITERATION_STEPS = 3
 
 
@@ -45,14 +48,21 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
     :type probe_distribution: str
     :param latent_source: Model output key, or ``auto`` for ``latent_space``.
     :type latent_source: str
-    :param penalty_metric: ``frobenius``, ``spectral``, or a Frobenius ``hinged``
-        penalty.
+    :param penalty_metric: ``frobenius``, ``spectral``, legacy Frobenius
+        ``hinged``, or ``spectral_plus_hinged``.
     :type penalty_metric: str
     :param hinge_threshold: Threshold ``tau`` for ``hinged`` penalties.
     :type hinge_threshold: float | None
     :param penalized_space: Raw model latents (``z``) or LayerNorm-canonicalized
         latents (``u``).
     :type penalized_space: str
+    :param input_geometry: Input-space geometry for spectral penalties.
+        ``fisher_rao`` operates on TIC-normalized spectra constrained to the
+        simplex tangent space.
+    :type input_geometry: str
+    :param hinge_alpha: Relative coefficient of the excess-sensitivity term in
+        ``spectral_plus_hinged``.
+    :type hinge_alpha: float
     """
 
     requires_input_grad = True
@@ -66,6 +76,8 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
         penalty_metric: str = "frobenius",
         hinge_threshold: float | None = None,
         penalized_space: str = "z",
+        input_geometry: str = "euclidean",
+        hinge_alpha: float = 1.0,
     ) -> None:
         super().__init__()
         if calculation_method not in SUPPORTED_CONTRACTIVE_METHODS:
@@ -89,7 +101,20 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
                 "ContractiveLoss",
                 f"penalized_space must be one of {sorted(SUPPORTED_PENALIZED_SPACES)}.",
             )
-        if penalty_metric == "hinged":
+        if input_geometry not in SUPPORTED_INPUT_GEOMETRIES:
+            raise_validation_error(
+                "ContractiveLoss",
+                f"input_geometry must be one of {sorted(SUPPORTED_INPUT_GEOMETRIES)}.",
+            )
+        if input_geometry == "fisher_rao" and penalty_metric not in {
+            "spectral",
+            "spectral_plus_hinged",
+        }:
+            raise_validation_error(
+                "ContractiveLoss",
+                "input_geometry='fisher_rao' requires a spectral penalty metric.",
+            )
+        if penalty_metric in {"hinged", "spectral_plus_hinged"}:
             if (
                 isinstance(hinge_threshold, bool)
                 or not isinstance(hinge_threshold, (float, int))
@@ -98,12 +123,21 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
             ):
                 raise_validation_error(
                     "ContractiveLoss",
-                    "hinge_threshold must be a finite non-negative number for penalty_metric='hinged'.",
+                    "hinge_threshold must be a finite non-negative number for hinged penalties.",
                 )
         elif hinge_threshold is not None:
             raise_validation_error(
                 "ContractiveLoss",
-                "hinge_threshold is only valid for penalty_metric='hinged'.",
+                "hinge_threshold is only valid for hinged penalties.",
+            )
+        if (
+            isinstance(hinge_alpha, bool)
+            or not isinstance(hinge_alpha, (float, int))
+            or not math.isfinite(float(hinge_alpha))
+            or float(hinge_alpha) < 0
+        ):
+            raise_validation_error(
+                "ContractiveLoss", "hinge_alpha must be a finite non-negative number."
             )
         self.calculation_method = calculation_method
         self.num_probes = num_probes
@@ -111,6 +145,8 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
         self.penalty_metric = penalty_metric
         self.hinge_threshold = None if hinge_threshold is None else float(hinge_threshold)
         self.penalized_space = penalized_space
+        self.input_geometry = input_geometry
+        self.hinge_alpha = float(hinge_alpha)
         self._requires_canonicalized_latent = penalized_space == "u"
         self._model_reference: weakref.ReferenceType[torch.nn.Module] | None = None
         self._config = {
@@ -121,6 +157,8 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
             "penalty_metric": penalty_metric,
             "hinge_threshold": hinge_threshold,
             "penalized_space": penalized_space,
+            "input_geometry": input_geometry,
+            "hinge_alpha": hinge_alpha,
         }
 
     def on_phase_start(
@@ -131,7 +169,7 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
     ) -> None:
         """Capture dependencies required by canonical and spectral penalties."""
         super().on_phase_start(model, dataset, transient_cache)
-        if self.penalty_metric == "spectral":
+        if self.penalty_metric in {"spectral", "spectral_plus_hinged"}:
             self._model_reference = weakref.ref(model)
 
     def on_batch_start(
@@ -172,8 +210,15 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
             if self.penalized_space == "u"
             else latent
         )  # (B, D)
-        if self.penalty_metric == "spectral":
-            return self._spectral_squared_norm(inputs, penalized_latent).mean()
+        if self.penalty_metric in {"spectral", "spectral_plus_hinged"}:
+            spectral_squared = self._spectral_squared_norm(inputs, penalized_latent)  # (B,)
+            if self.penalty_metric == "spectral_plus_hinged":
+                assert self.hinge_threshold is not None
+                spectral = spectral_squared.clamp_min(0.0).sqrt()  # (B,)
+                spectral_squared = spectral_squared + self.hinge_alpha * torch.relu(
+                    spectral - self.hinge_threshold
+                ).square()  # (B,)
+            return spectral_squared.mean()
 
         squared_norm = self._frobenius_squared_norm(inputs, penalized_latent)
         if self.penalty_metric == "hinged":
@@ -244,14 +289,21 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
                 "Spectral penalties require on_phase_start before evaluation.",
             )
 
-        # Power iteration over J^T J, separately normalized for each spectrum.
+        # Power iteration over A^T A, separately normalized for each spectrum.
+        # For Fisher--Rao on the TIC simplex, A = J diag(sqrt(x)) P_x.
+        if self.input_geometry == "fisher_rao":
+            self._validate_tic_simplex_inputs(inputs)
         input_direction = self._normalize_per_sample(torch.randn_like(inputs))  # (B, M)
         output_function = self._spectral_output_function(model, inputs.shape[0])
         for _ in range(_SPECTRAL_POWER_ITERATION_STEPS):
+            transformed_direction = self._geometry_forward_direction(
+                input_direction,
+                inputs,
+            )  # (B, M)
             _, jvp = torch.func.jvp(
                 output_function,
                 (inputs,),
-                (input_direction,),
+                (transformed_direction,),
             )  # (B, D)
             latent_direction = self._normalize_per_sample(jvp).detach()  # (B, D)
             vjp = torch.autograd.grad(
@@ -260,14 +312,82 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
                 create_graph=True,
                 retain_graph=True,
             )[0]  # (B, M)
-            input_direction = self._normalize_per_sample(vjp).detach()  # (B, M)
+            input_direction = self._normalize_per_sample(
+                self._geometry_adjoint_direction(vjp, inputs)
+            ).detach()  # (B, M)
 
+        transformed_direction = self._geometry_forward_direction(
+            input_direction,
+            inputs,
+        )  # (B, M)
         _, final_jvp = torch.func.jvp(
             output_function,
             (inputs,),
-            (input_direction,),
+            (transformed_direction,),
         )  # (B, D)
         return final_jvp.square().sum(dim=1)  # (B,)
+
+    def _geometry_forward_direction(
+        self,
+        direction: torch.Tensor,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map a geometry-coordinate direction to the encoder input tangent.
+
+        :param direction: Unit power-iteration directions with shape ``(B, M)``.
+        :type direction: torch.Tensor
+        :param inputs: TIC-normalized model spectra with shape ``(B, M)``.
+        :type inputs: torch.Tensor
+        :return: Euclidean encoder perturbations with shape ``(B, M)``.
+        :rtype: torch.Tensor
+        """
+        if self.input_geometry == "euclidean":
+            return direction
+        square_root = inputs.clamp_min(0.0).sqrt()  # (B, M)
+        tangent_direction = direction - square_root * (square_root * direction).sum(
+            dim=1,
+            keepdim=True,
+        )  # (B, M)
+        return square_root * tangent_direction  # (B, M)
+
+    def _geometry_adjoint_direction(
+        self,
+        vjp: torch.Tensor,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map an encoder VJP to geometry coordinates for power iteration.
+
+        :param vjp: Euclidean input-space VJPs with shape ``(B, M)``.
+        :type vjp: torch.Tensor
+        :param inputs: TIC-normalized model spectra with shape ``(B, M)``.
+        :type inputs: torch.Tensor
+        :return: Geometry-coordinate adjoints with shape ``(B, M)``.
+        :rtype: torch.Tensor
+        """
+        if self.input_geometry == "euclidean":
+            return vjp
+        square_root = inputs.clamp_min(0.0).sqrt()  # (B, M)
+        weighted_vjp = square_root * vjp  # (B, M)
+        return weighted_vjp - square_root * (square_root * weighted_vjp).sum(
+            dim=1,
+            keepdim=True,
+        )  # (B, M)
+
+    @staticmethod
+    def _validate_tic_simplex_inputs(inputs: torch.Tensor) -> None:
+        """Require finite non-negative spectra normalized to the TIC simplex."""
+        if not torch.isfinite(inputs).all() or torch.any(inputs < 0):
+            raise_incompatible_interface_error(
+                "ContractiveLoss",
+                "Fisher--Rao geometry requires finite non-negative TIC-normalized spectra.",
+            )
+        tic = inputs.sum(dim=1)  # (B,)
+        tolerance = 1.0e-4
+        if not torch.allclose(tic, torch.ones_like(tic), rtol=tolerance, atol=tolerance):
+            raise_incompatible_interface_error(
+                "ContractiveLoss",
+                "Fisher--Rao geometry requires spectra with TIC equal to one.",
+            )
 
     def _spectral_output_function(
         self,
