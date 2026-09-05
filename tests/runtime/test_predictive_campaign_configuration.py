@@ -120,6 +120,42 @@ def test_contractive_metric_weight_campaign_expands_all_metric_weight_pairs() ->
     }
 
 
+def test_bce_baseline_uses_the_same_split_as_the_contractive_campaign() -> None:
+    """The BCE baseline differs only by omitting contractive regularization."""
+    repository = Path(__file__).resolve().parents[2]
+    experiments = (
+        repository
+        / "assets"
+        / "experiments"
+        / "autoencoder_architecture"
+        / "experiment_runs_configs"
+        / "05_09_26_contractive_expaned"
+    )
+    contractive = load_experiment_config(
+        experiments / "contractive_metric_weight_experiment.yaml"
+    )
+    baseline = load_experiment_config(experiments / "bce_baseline_experiment.yaml")
+
+    contractive_dataset = contractive["task"]["parameters"]["factory_parameters"][
+        "dataset"
+    ]["parameters"]
+    baseline_dataset = baseline["task"]["parameters"]["factory_parameters"][
+        "dataset"
+    ]["parameters"]
+    assert baseline_dataset["subset"] == contractive_dataset["subset"]
+    assert baseline_dataset["split"] == contractive_dataset["split"]
+    assert baseline["seeds"] == contractive["seeds"]
+
+    plan = build_plan(baseline)
+    assert len(plan.tasks) == 5
+    for task in plan.tasks:
+        criterions = task.parameters["training"]["phases"][0]["criterions"]
+        assert "regularization" not in criterions
+        assert criterions["heads"]["molecule_primary"]["balanced_bce"][
+            "target"
+        ] == "ClassBalancedMultiLabelBCELoss"
+
+
 def test_predictive_components_resolve_target_width_and_nested_descriptors() -> None:
     """Planning resolves head dimensions and serializes named heads recursively."""
 

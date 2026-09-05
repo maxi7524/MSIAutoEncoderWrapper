@@ -23,8 +23,10 @@ fi
 if [[ -d "${RUN_DIRECTORY_INPUT}" ]]; then
     REQUESTED_RUN_DIRECTORY=$(cd "${RUN_DIRECTORY_INPUT}" && pwd)
 elif [[ "${RUN_DIRECTORY_INPUT}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
-    # Legacy invocation preserves `predictive_orchestrate.sh <campaign-id>`.
-    REQUESTED_RUN_DIRECTORY=${HOME}/entropy-runs/kidney-architecture-predictive/${RUN_DIRECTORY_INPUT}
+    # Compatibility invocation for the default kidney workspace.
+    SCRIPT_DIRECTORY=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    REPOSITORY_ROOT_DEFAULT=$(cd "${SCRIPT_DIRECTORY}/../../.." && pwd)
+    REQUESTED_RUN_DIRECTORY=${REPOSITORY_ROOT_DEFAULT}/data/kidney_workspace/configs/entropy-runs/${RUN_DIRECTORY_INPUT}
 else
     echo "Run directory is missing: ${RUN_DIRECTORY_INPUT}" >&2
     exit 1
@@ -146,7 +148,7 @@ while (( next_task < task_count )); do
     job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
         --time="${TASK_WALLTIME}" \
         --array="${next_task}-${last_task}%${PARALLELISM}" \
-        "${REPOSITORY_ROOT}/assets/scripts/entropy/predictive_task_array.sbatch")
+        "${REPOSITORY_ROOT}/assets/scripts/entropy/05_task_array.sbatch")
     job_id=${job_id%%;*}
     if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
         echo "Could not parse the task-array job ID: ${job_id}" >&2
@@ -163,7 +165,7 @@ while (( next_task < task_count )); do
 done
 
 job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
-    "${REPOSITORY_ROOT}/assets/scripts/entropy/predictive_finalize.sbatch")
+    "${REPOSITORY_ROOT}/assets/scripts/entropy/06_finalize_campaign.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
     echo "Could not parse the finalizer job ID: ${job_id}" >&2
