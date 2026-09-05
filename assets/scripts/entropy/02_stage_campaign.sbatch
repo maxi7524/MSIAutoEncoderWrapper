@@ -11,16 +11,16 @@
 set -euo pipefail
 
 if (( $# == 1 )); then
-    # Legacy invocation preserved for the established kidney predictive workflow.
+    # Compatibility invocation for the established kidney experiment.
     CAMPAIGN_ID=$1
     EXPERIMENT_CONFIG_INPUT=assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
     WORKSPACE_INPUT=data/kidney_workspace
-    RUN_DIRECTORY_INPUT="${HOME}/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}"
+    RUN_DIRECTORY_INPUT="${WORKSPACE_INPUT}/configs/entropy-runs/${CAMPAIGN_ID}"
 elif (( $# == 3 || $# == 4 )); then
     CAMPAIGN_ID=$1
     EXPERIMENT_CONFIG_INPUT=$2
     WORKSPACE_INPUT=$3
-    RUN_DIRECTORY_INPUT=${4:-"${HOME}/entropy-runs/${CAMPAIGN_ID}"}
+    RUN_DIRECTORY_INPUT=${4:-"${WORKSPACE_INPUT%/}/configs/entropy-runs/${CAMPAIGN_ID}"}
 else
     echo "Usage: sbatch $0 <campaign-id> [<experiment-yaml> <workspace-dir> [run-directory]]" >&2
     exit 2
@@ -63,7 +63,7 @@ LOCAL_WORKSPACE=${NODE_LOCAL_DIRECTORY}/workspace
 CAMPAIGN_FILE=${RUN_DIRECTORY}/entropy-campaign.env
 
 if [[ ! -x "${PYTHON}" ]]; then
-    echo "Missing ${PYTHON}. Run assets/scripts/entropy/setup_environment.sh first." >&2
+    echo "Missing ${PYTHON}. Run assets/scripts/entropy/01_setup_environment.sh first." >&2
     exit 1
 fi
 if [[ ! -f "${SOURCE_CONFIG}" ]]; then
@@ -188,4 +188,4 @@ if (( task_count < 1 )); then
 fi
 printf '%s\n' "${task_count}" >"${RUN_DIRECTORY}/task-count"
 echo "Staging completed for ${CAMPAIGN_FILE}; ${task_count} tasks are ready."
-echo "Run predictive_orchestrate.sh ${RUN_DIRECTORY} from the login node."
+echo "Run 03_orchestrate_campaign.sh ${RUN_DIRECTORY} from the login node."

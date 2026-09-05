@@ -1,164 +1,178 @@
-# Entropy Slurm campaigns
+# Entropy campaign workflow
 
-This directory contains the Slurm workflow for YAML experiments using the
-materialized-task runtime. A campaign stages one workspace copy on an Entropy
-execution node, runs the generated tasks, and copies output artifacts back to
-the source workspace.
+These scripts run any materialized YAML experiment on Entropy without copying a
+workspace once per task. They use the same relative workspace layout locally
+and remotely. A campaign stores its durable execution artifacts under:
 
-For Entropy predictive campaigns, use these scripts rather than the generic
-`execution.backend: slurm` runtime backend. The coordinator below is the
-quota-aware submission path: it submits at most six array elements at a time
-and runs at most three concurrently.
+```text
+data/<workspace>/
+├── configs/entropy-runs/<campaign-id>/  # plan, task statuses, logs, runtime YAML
+└── models/<context>/<campaign-id>__task_<index>/
+```
 
-## Inputs and campaign snapshot
+The default remote host is `entropy`. It is an SSH alias defined by the user in
+`~/.ssh/config`, not a hard-coded hostname or account name.
 
-`predictive_stage.sbatch` accepts a campaign identifier, an experiment YAML,
-a workspace directory, and optionally a run directory. Relative paths are
-resolved from the repository root. Staging writes the resolved paths to
-`<run-directory>/entropy-campaign.env`; the coordinator, task array, and
-finalizer all use this snapshot.
+## User-facing scripts
 
-The YAML must contain
-`task.parameters.factory_parameters.project_path`, because staging replaces it
-with the node-local workspace path before materializing tasks.
+Run scripts `01` through `06` on the Entropy login node. Run script `07` on the
+local computer after a completed campaign.
 
-Do not edit the source YAML or `entropy-campaign.env` after staging. Generate a
-new campaign whenever model, dataset, loss, or training parameters change.
+| Script | Role |
+| --- | --- |
+| `01_setup_environment.sh` | Create or update the repository virtual environment. |
+| `02_stage_campaign.sbatch` | Copy one workspace to node-local NVMe and materialize task descriptors. |
+| `03_orchestrate_campaign.sh` | Submit bounded task arrays, verify status files, then finalize. |
+| `04_run_campaign_sequence.sh` | Stage and execute several campaigns sequentially, reusing node-local capacity. |
+| `05_task_array.sbatch` | Internal worker: execute one task-array element. |
+| `06_finalize_campaign.sbatch` | Internal worker: copy only campaign-scoped models back to the workspace. |
+| `07_download_campaign.sh` | Download one completed campaign's models and execution artifacts. |
 
-## Scripts
+## Lifecycle
 
-- `setup_environment.sh` creates or updates the repository `.venv`.
-- `predictive_stage.sbatch` copies the workspace and materializes task YAMLs.
-- `predictive_orchestrate.sh` submits bounded arrays, validates status files,
-  and submits finalization.
-- `predictive_task_array.sbatch` executes one materialized task.
-- `predictive_finalize.sbatch` copies only model directories created by that
-  campaign back to the source workspace and removes node-local staging.
+```text
+workspace on /home
+      │
+      ├── 02: one rsync copy
+      ▼
+/tmp/$USER/msi-wrapper/<campaign>/workspace
+      │
+      ├── 03: arrays of at most 6 submitted tasks, at most 3 concurrent
+      ▼
+task logs + plan/status in workspace/configs/entropy-runs/<campaign>
+      │
+      ├── 06: copy only <campaign>__task_* model directories
+      ▼
+workspace/models/<context>/<campaign>__task_<index>
+```
 
-## Commands
+`/tmp` is node-local NVMe storage, not RAM and not GPU memory. Every task in a
+campaign reads the same staged workspace. The task arrays do not make another
+workspace copy.
 
-Run the commands on the Entropy login node from the repository root:
+## Single campaign
+
+On the Entropy login node, from the repository root:
 
 ```bash
-ssh entropy
 cd ~/repositories/MSIAutoEncoderWrapper
 git pull --ff-only
 
 SCRIPTS=assets/scripts/entropy
-bash "${SCRIPTS}/setup_environment.sh"
-```
+bash "${SCRIPTS}/01_setup_environment.sh"
 
-### Existing kidney predictive workflow
+WORKSPACE=data/kidney_workspace
+EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/05_09_26_contractive_expaned/bce_baseline_experiment.yaml
+CAMPAIGN_ID=bce-baseline-$(date +%Y%m%d)-01
+RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
 
-The previous one-argument commands remain supported:
-
-```bash
-CAMPAIGN_ID=predictive-YYYYMMDD-01
-
-sbatch "${SCRIPTS}/predictive_stage.sbatch" "${CAMPAIGN_ID}"
-
-RUN_DIRECTORY="$HOME/entropy-runs/kidney-architecture-predictive/${CAMPAIGN_ID}"
-nohup bash "${SCRIPTS}/predictive_orchestrate.sh" "${CAMPAIGN_ID}" \
-  > "${RUN_DIRECTORY}/orchestrator.log" 2>&1 &
-```
-
-This compatibility form selects:
-
-```text
-YAML:      assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml
-workspace: data/kidney_workspace
-run root:  ~/entropy-runs/kidney-architecture-predictive/
-```
-
-### Another YAML or dataset workspace
-
-Use the general staging form. Replace all four values with one coherent
-experiment definition:
-
-```bash
-CAMPAIGN_ID=<unique-campaign-id>
-EXPERIMENT_YAML=assets/experiments/<experiment>.yaml
-WORKSPACE=data/<workspace>
-RUN_DIRECTORY="$HOME/entropy-runs/${CAMPAIGN_ID}"
-
-sbatch "${SCRIPTS}/predictive_stage.sbatch" \
+sbatch "${SCRIPTS}/02_stage_campaign.sbatch" \
   "${CAMPAIGN_ID}" \
   "${EXPERIMENT_YAML}" \
-  "${WORKSPACE}" \
-  "${RUN_DIRECTORY}"
+  "${WORKSPACE}"
+```
 
-nohup bash "${SCRIPTS}/predictive_orchestrate.sh" "${RUN_DIRECTORY}" \
+Wait for staging to finish before starting the coordinator:
+
+```bash
+ls "${RUN_DIRECTORY}/task-count"
+cat "${RUN_DIRECTORY}/task-count"
+
+nohup bash "${SCRIPTS}/03_orchestrate_campaign.sh" "${RUN_DIRECTORY}" \
   > "${RUN_DIRECTORY}/orchestrator.log" 2>&1 &
 ```
 
-The source workspace must contain every relative data path used by the YAML.
-For example, if the YAML refers to `datasets/liver/liver.imzML`, that file must
-exist under `data/<workspace>/datasets/liver/`.
+The three required inputs are:
 
-### Sequential night run for several YAMLs
+1. `CAMPAIGN_ID` — a new, unique label for this execution.
+2. `EXPERIMENT_YAML` — the configuration defining the dataset, model and task grid.
+3. `WORKSPACE` — one relative workspace path, for example `data/kidney_workspace`.
 
-One local workspace uses about 29 GB on `asusgpu6`, so campaigns must run one
-after another. The sequence launcher stages one campaign, waits for its finalizer
-to remove the node-local copy, and then starts the next one:
+The run directory is derived automatically from `WORKSPACE`. Do not reuse a
+campaign ID: staging rejects an existing run directory and model destinations.
+
+## Several campaigns overnight
+
+The sequence launcher runs one campaign at a time. This matters because a
+workspace copy can occupy roughly 29 GB of the selected node's local `/tmp`.
 
 ```bash
-nohup bash "${SCRIPTS}/predictive_run_sequence.sh" \
-  data/kidney_workspace \
-  nnpu-controls-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_objective_controls.yaml \
-  nnpu-priors-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_prior_sensitivity.yaml \
-  nnpu-long-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_long_training.yaml \
-  nnpu-masked30-YYYYMMDD assets/experiments/autoencoder_architecture/experiment_runs_configs/23_08_26_architecture_predictive/nnpu_followup/nnpu_masked30.yaml \
-  > "$HOME/entropy-runs/nnpu-followup-YYYYMMDD-sequence.log" 2>&1 &
+WORKSPACE=data/kidney_workspace
+RUN_ROOT="${WORKSPACE}/configs/entropy-runs"
+mkdir -p "${RUN_ROOT}"
+
+nohup bash "${SCRIPTS}/04_run_campaign_sequence.sh" \
+  "${WORKSPACE}" \
+  bce-baseline-YYYYMMDD-01 assets/experiments/<experiment>/bce_baseline_experiment.yaml \
+  contractive-YYYYMMDD-01 assets/experiments/<experiment>/contractive_metric_weight_experiment.yaml \
+  > "${RUN_ROOT}/sequence-YYYYMMDD.log" 2>&1 &
 ```
 
-Use a date or another unique suffix once. Do not rerun this command with the
-same campaign IDs, because staging intentionally rejects existing run directories.
-
-## Execution
-
-Staging copies the selected workspace once to
-`/tmp/${USER}/msi-wrapper/<campaign-id>/workspace` on the configured node.
-This is node-local NVMe storage, not RAM or GPU memory. All array elements read
-the same workspace copy.
-
-The coordinator submits at most six elements in a batch and limits the array to
-three concurrent elements. It waits for a batch, verifies task status manifests,
-then submits the next batch. Each materialized task receives a model name based
-on `<campaign-id>__<task-id>`. After all tasks complete, finalization copies
-only those new model directories to the source workspace, refuses an existing
-destination, and removes the campaign directory from `/tmp`.
-
-The optional YAML setting `execution.entropy.task_walltime` controls the Slurm
-walltime of task-array elements. It defaults to `01:00:00`; the long nnPU
-campaign uses `02:30:00` because it performs 60 epochs plus train/test AP after
-every epoch. Slurm charges elapsed time, not the unused remainder of this limit.
-
-## Monitoring and restart
+## Monitoring and validation
 
 ```bash
 squeue -u "$USER"
 tail -n 50 "${RUN_DIRECTORY}/orchestrator.log"
 tail -n 50 "${RUN_DIRECTORY}/logs/task_<array-job-id>_<task-index>.log"
+
+completed=$(grep -lE '^[[:space:]]*status: completed$' \
+  "${RUN_DIRECTORY}"/plan/status/task_*.yaml | wc -l)
+failed=$(grep -lE '^[[:space:]]*status: failed$' \
+  "${RUN_DIRECTORY}"/plan/status/task_*.yaml | wc -l)
+printf 'completed=%s failed=%s\n' "$completed" "$failed"
 ```
 
-After an interrupted coordinator, use the same identifier or run directory:
+For a completed campaign, `completed` equals `task-count`, `failed=0`, and the
+finalizer job ID recorded in `${RUN_DIRECTORY}/finalizer-job-id` has Slurm state
+`COMPLETED` with exit code `0:0`.
+
+To resume after the coordinator process stops, do not create a new campaign:
 
 ```bash
-nohup bash "${SCRIPTS}/predictive_orchestrate.sh" --restart "${RUN_DIRECTORY}" \
+nohup bash "${SCRIPTS}/03_orchestrate_campaign.sh" --restart "${RUN_DIRECTORY}" \
   > "${RUN_DIRECTORY}/orchestrator-restart.log" 2>&1 &
 ```
 
-`--restart` cancels arrays recorded for that campaign, keeps completed task
-status files, and resumes from the first incomplete task.
+## Download to the local repository
 
-## Slurm settings
-
-The three `.sbatch` files contain the partition, QoS, node, GPU, CPU, and wall
-time directives. Update all three consistently when changing Entropy allocation
-or hardware. `TASK_LIMIT=6` and `PARALLELISM=3` in
-`predictive_orchestrate.sh` must not exceed the selected QoS limits.
+On the local computer, from the same repository checkout:
 
 ```bash
-sacctmgr show qos <qos-name> \
-  format=Name,MaxSubmitJobsPU,MaxJobsPU,MaxTRESPerUser,MaxWall
+WORKSPACE=data/kidney_workspace
+CAMPAIGN_ID=bce-baseline-YYYYMMDD-01
+
+bash assets/scripts/entropy/07_download_campaign.sh \
+  "${WORKSPACE}" \
+  "${CAMPAIGN_ID}"
 ```
+
+Optional arguments are the SSH alias and the remote repository path relative to
+the remote home directory:
+
+```bash
+bash assets/scripts/entropy/07_download_campaign.sh \
+  data/kidney_workspace \
+  bce-baseline-YYYYMMDD-01 \
+  entropy \
+  repositories/MSIAutoEncoderWrapper
+```
+
+The script downloads only `models/**/<campaign-id>__task_*` and the matching
+`configs/entropy-runs/<campaign-id>` directory. It does not copy datasets or
+models from previous campaigns.
+
+## Values that may need changing
+
+| What changes | Where |
+| --- | --- |
+| Dataset, split, model, losses, repetitions | Experiment YAML. |
+| Workspace and campaign label | The three input variables in the launch command. |
+| Remote SSH alias or remote repository location | Optional arguments to `07_download_campaign.sh`. |
+| Partition, QoS, node, GPU, CPUs, staging walltime | `02_stage_campaign.sbatch`. |
+| Task GPU/CPU allocation and default task walltime | `05_task_array.sbatch`; per-experiment walltime can be set as `execution.entropy.task_walltime` in the YAML. |
+| Finalizer allocation | `06_finalize_campaign.sbatch`. |
+| Account concurrency policy | `TASK_LIMIT` and `PARALLELISM` in `03_orchestrate_campaign.sh`. |
+
+For the currently observed QoS, keep `TASK_LIMIT=6` and `PARALLELISM=3` unless
+`sacctmgr show qos <qos-name> format=Name,MaxSubmitJobsPU,MaxJobsPU,MaxTRESPerUser,MaxWall`
+shows a different limit.

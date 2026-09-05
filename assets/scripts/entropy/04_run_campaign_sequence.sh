@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Stage and execute several predictive campaigns serially on one Entropy node.
+# Stage and execute several campaigns serially on one Entropy node.
 set -euo pipefail
 
 if (( $# < 3 || $# % 2 == 0 )); then
@@ -12,8 +12,8 @@ WORKSPACE_INPUT=$1
 shift
 SCRIPT_DIRECTORY=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPOSITORY_ROOT=$(cd "${SCRIPT_DIRECTORY}/../../.." && pwd)
-STAGE_SCRIPT=${SCRIPT_DIRECTORY}/predictive_stage.sbatch
-ORCHESTRATOR_SCRIPT=${SCRIPT_DIRECTORY}/predictive_orchestrate.sh
+STAGE_SCRIPT=${SCRIPT_DIRECTORY}/02_stage_campaign.sbatch
+ORCHESTRATOR_SCRIPT=${SCRIPT_DIRECTORY}/03_orchestrate_campaign.sh
 
 wait_for_stage() {
     local job_id=$1
@@ -38,7 +38,12 @@ while (( $# > 0 )); do
     CAMPAIGN_ID=$1
     EXPERIMENT_YAML=$2
     shift 2
-    RUN_DIRECTORY=${HOME}/entropy-runs/${CAMPAIGN_ID}
+    if [[ "${WORKSPACE_INPUT}" = /* ]]; then
+        WORKSPACE_DIRECTORY=${WORKSPACE_INPUT%/}
+    else
+        WORKSPACE_DIRECTORY=${REPOSITORY_ROOT}/${WORKSPACE_INPUT%/}
+    fi
+    RUN_DIRECTORY=${WORKSPACE_DIRECTORY}/configs/entropy-runs/${CAMPAIGN_ID}
 
     echo "Staging campaign ${CAMPAIGN_ID} using ${EXPERIMENT_YAML}."
     stage_job_id=$(cd "${REPOSITORY_ROOT}" && sbatch --parsable \
