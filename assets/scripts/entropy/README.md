@@ -52,65 +52,117 @@ workspace copy.
 
 ## Single campaign
 
-### Staging campaign 
-Staging creates all experiments, by creating common instances and preparing run folders. 
+### Resume an existing campaign
+
+Use this command only when staging already completed for the same campaign and
+the coordinator stopped or the login session ended. It preserves completed task
+statuses, cancels only arrays recorded for this campaign, and resumes from the
+first task without `status: completed`. Do not run staging again.
+
+```bash
+# Existing campaign location
+## REMARK: Use the same workspace and campaign ID that were used for staging.
+WORKSPACE=data/kidney_workspace
+CAMPAIGN_ID=<existing-campaign-id>
+RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
+
+# Restart the persistent coordinator
+## Completed task manifests are retained; only unfinished task indices are submitted.
+nohup bash assets/scripts/entropy/03_orchestrate_campaign.sh \
+  --restart "${RUN_DIRECTORY}" \
+  > "${RUN_DIRECTORY}/orchestrator-restart.log" 2>&1 &
+```
+
+### Define inputs nad stage new campaign 
+
+Staging is the preparation step, it does not train models. It copies the
+selected workspace once to node-local `/tmp`, changes the runtime YAML to use
+that copy, expands the experiment grid into task descriptors, and writes the
+durable campaign files under `configs/entropy-runs/<campaign-id>`.
 
 On the Entropy login node, from the repository root:
 
 ```bash
+# Repository and Python environment
+## Run setup after a fresh clone or after Python dependencies change.
 cd ~/repositories/MSIAutoEncoderWrapper
 git pull --ff-only
 
 SCRIPTS=assets/scripts/entropy
 bash "${SCRIPTS}/01_setup_environment.sh"
 
-# REMARK: Here put your workspace path 
+# Campaign inputs
+## REMARK: Here put your workspace path. It must be relative to both repositories.
 WORKSPACE=data/kidney_workspace
-# REMARK: Here put your `yaml` config path 
+## REMARK: Here put your YAML config path. It defines data, model, losses, and repetitions.
 EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/05_09_26_contractive_expaned/bce_baseline_experiment.yaml
-# REMARK: Here put your experiment name 
+## REMARK: Here put your experiment name. It must be new and scopes run files and model names.
 CAMPAIGN_ID=bce-baseline-$(date +%Y%m%d)-01
+## Derived automatically when the optional fourth staging argument is omitted.
 RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
 
+# Submit staging only
+## This creates the node-local copy and plan; it does not begin model training.
 sbatch "${SCRIPTS}/02_stage_campaign.sbatch" \
   "${CAMPAIGN_ID}" \
   "${EXPERIMENT_YAML}" \
   "${WORKSPACE}"
 ```
 
-### Runner coordinator 
-Wait for staging to finish before starting the coordinator. 
+The three variable assignments are the only per-campaign launcher inputs:
+
+1. `WORKSPACE` — the relative workspace path.
+2. `EXPERIMENT_YAML` — the experiment definition.
+3. `CAMPAIGN_ID` — a unique execution identifier.
+
+Do not reuse a campaign ID. Staging rejects an existing run directory and the
+finalizer rejects an existing model destination.
+
+### Start the training coordinator 
+
+Wait for staging to finish before starting the coordinator. `task-count` is
+created only after the workspace copy and plan materialization succeeded.
 
 ```bash
+# Verify that staging succeeded
+## The expected task count is determined by the YAML grid and repetitions.
 ls "${RUN_DIRECTORY}/task-count"
 cat "${RUN_DIRECTORY}/task-count"
 
+# Start training in the background
+## The coordinator submits bounded arrays and writes its decisions to this log.
 nohup bash "${SCRIPTS}/03_orchestrate_campaign.sh" "${RUN_DIRECTORY}" \
   > "${RUN_DIRECTORY}/orchestrator.log" 2>&1 &
 ```
 
-The three required inputs are:
+This command performs the training. It submits the first batch of at most six
+task-array elements with at most three running simultaneously. After the batch
+leaves Slurm, it verifies every task status. Only then does it submit the next
+batch. A failed task stops the coordinator and prevents finalization; use the
+status file and task log to diagnose it before using `--restart`.
 
-1. `CAMPAIGN_ID` — a new, unique label for this execution.
-2. `EXPERIMENT_YAML` — the configuration defining the dataset, model and task grid.
-3. `WORKSPACE` — one relative workspace path, for example `data/kidney_workspace`.
-
-The run directory is derived automatically from `WORKSPACE`. Do not reuse a
-campaign ID: staging rejects an existing run directory and model destinations.
-
-> Remark:
-> If some runs are invalid, there will be not executed. 
-
-## Several campaigns overnight
+## Several campaigns orchestration
 
 The sequence launcher runs one campaign at a time. This matters because a
 workspace copy can occupy roughly 29 GB of the selected node's local `/tmp`.
+For each `campaign-id YAML` pair, `04_run_campaign_sequence.sh` submits `02`,
+waits for staging to succeed, runs `03` until its finalizer completes, and only
+then stages the next pair. Therefore there is one staged workspace at a time;
+within each campaign, `03` still runs up to three GPU tasks concurrently.
+
+The first argument is `WORKSPACE`. Every following two arguments form one
+campaign: first its unique identifier, then its YAML path.
 
 ```bash
+# Shared workspace output root
+## Every campaign below stores plan, statuses, and logs under this directory.
 WORKSPACE=data/kidney_workspace
 RUN_ROOT="${WORKSPACE}/configs/entropy-runs"
 mkdir -p "${RUN_ROOT}"
 
+# Sequential campaign list
+## REMARK: After WORKSPACE, every two arguments are <campaign-id> <experiment-yaml>.
+## The next campaign starts only after the preceding campaign finalizer succeeds.
 nohup bash "${SCRIPTS}/04_run_campaign_sequence.sh" \
   "${WORKSPACE}" \
   bce-baseline-YYYYMMDD-01 assets/experiments/<experiment>/bce_baseline_experiment.yaml \
@@ -120,19 +172,23 @@ nohup bash "${SCRIPTS}/04_run_campaign_sequence.sh" \
 
 ## Monitoring and validation
 
-### Monitoring 
+### Monitor an active campaign 
 
 ```bash
-# Check current setup 
+# Scheduler state
+## Shows queued and running jobs for this account.
 squeue -u "$USER"
+# Campaign-level log
+## Shows submitted batches, validation failures, and finalizer submission.
 tail -n 50 "${RUN_DIRECTORY}/orchestrator.log"
-## REMARK: Here put ids of task and jobs 
+# One training task log
+## REMARK: Replace both placeholders with an array job ID and a task index.
 tail -n 50 "${RUN_DIRECTORY}/logs/task_<array-job-id>_<task-index>.log"
-### Example
-### For `Submitted array 12508: tasks 0-4.` we can put 
+### Example: after `Submitted array 12508: tasks 0-4.` inspect task index 2.
 tail -n 50 "${RUN_DIRECTORY}/logs/task_12508_2.log"
 
-# Check completed status
+# Task-status summary
+## This can be executed while training is active or after it ends.
 completed=$(grep -lE '^[[:space:]]*status: completed$' \
   "${RUN_DIRECTORY}"/plan/status/task_*.yaml | wc -l)
 failed=$(grep -lE '^[[:space:]]*status: failed$' \
@@ -146,7 +202,8 @@ finalizer job ID recorded in `${RUN_DIRECTORY}/finalizer-job-id` has Slurm state
 
 ### Problem handling: Resume after coordinator stopped 
 
-To resume after the coordinator process stops, do not create a new campaign:
+The restart command is shown at the beginning of this section. It is repeated
+here only as a reminder: resume an existing campaign; do not create a new one.
 
 ```bash
 nohup bash "${SCRIPTS}/03_orchestrate_campaign.sh" --restart "${RUN_DIRECTORY}" \
@@ -158,9 +215,14 @@ nohup bash "${SCRIPTS}/03_orchestrate_campaign.sh" --restart "${RUN_DIRECTORY}" 
 On the local computer, from the same repository checkout:
 
 ```bash
+
+# Local campaign selection
+## REMARK: Use the same workspace-relative path and completed campaign ID as on Entropy.
 WORKSPACE=data/kidney_workspace
 CAMPAIGN_ID=bce-baseline-YYYYMMDD-01
 
+# Download models and campaign artifacts
+## The default SSH host is the `entropy` alias from ~/.ssh/config.
 bash assets/scripts/entropy/07_download_campaign.sh \
   "${WORKSPACE}" \
   "${CAMPAIGN_ID}"
