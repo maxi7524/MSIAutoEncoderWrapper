@@ -108,6 +108,25 @@ wait_for_job_completion() {
     sleep 10
 }
 
+# Finalizer verification
+## Query Slurm accounting after a job leaves the scheduler queue.
+assert_job_completed_successfully() {
+    local job_id=$1
+    local state=
+    for _ in $(seq 1 12); do
+        state=$(sacct --noheader --allocations --jobs "${job_id}" --format=State \
+            | awk 'NR == 1 {print $1}')
+        if [[ -n "${state}" ]]; then
+            break
+        fi
+        sleep 5
+    done
+    if [[ "${state}" != COMPLETED ]]; then
+        echo "Job ${job_id} ended with state '${state:-unknown}'." >&2
+        exit 1
+    fi
+}
+
 task_completed() {
     local task_index=$1
     local status_file
@@ -174,4 +193,5 @@ fi
 printf '%s\n' "${job_id}" >"${FINALIZER_JOB_FILE}"
 echo "Submitted finalizer ${job_id}."
 wait_for_job_completion "${job_id}"
+assert_job_completed_successfully "${job_id}"
 echo "Campaign ${CAMPAIGN_ID} completed."
