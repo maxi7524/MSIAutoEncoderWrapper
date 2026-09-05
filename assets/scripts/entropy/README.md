@@ -172,6 +172,27 @@ nohup bash "${SCRIPTS}/04_run_campaign_sequence.sh" \
 
 ## Monitoring and validation
 
+### How to find CAMPAIGN_ID
+All campaign ids cna be found in entropy runs folder
+
+```bash
+# Define workspace
+WORKSPACE=data/kidney_workspace
+RUN_ROOT="${WORKSPACE}/configs/entropy-runs"
+
+find "${RUN_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+
+# Find recent campaign
+CAMPAIGN_ID=$(find "${RUN_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' \
+  | sort -nr \
+  | head -n 1 \
+  | cut -d' ' -f2-)
+
+echo "${CAMPAIGN_ID}"
+
+RUN_DIRECTORY="${RUN_ROOT}/${CAMPAIGN_ID}"
+``` 
+
 ### Monitor an active campaign 
 
 ```bash
