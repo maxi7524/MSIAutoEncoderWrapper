@@ -52,6 +52,9 @@ workspace copy.
 
 ## Single campaign
 
+### Staging campaign 
+Staging creates all experiments, by creating common instances and preparing run folders. 
+
 On the Entropy login node, from the repository root:
 
 ```bash
@@ -61,8 +64,11 @@ git pull --ff-only
 SCRIPTS=assets/scripts/entropy
 bash "${SCRIPTS}/01_setup_environment.sh"
 
+# REMARK: Here put your workspace path 
 WORKSPACE=data/kidney_workspace
+# REMARK: Here put your `yaml` config path 
 EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/05_09_26_contractive_expaned/bce_baseline_experiment.yaml
+# REMARK: Here put your experiment name 
 CAMPAIGN_ID=bce-baseline-$(date +%Y%m%d)-01
 RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
 
@@ -72,7 +78,8 @@ sbatch "${SCRIPTS}/02_stage_campaign.sbatch" \
   "${WORKSPACE}"
 ```
 
-Wait for staging to finish before starting the coordinator:
+### Runner coordinator 
+Wait for staging to finish before starting the coordinator. 
 
 ```bash
 ls "${RUN_DIRECTORY}/task-count"
@@ -90,6 +97,9 @@ The three required inputs are:
 
 The run directory is derived automatically from `WORKSPACE`. Do not reuse a
 campaign ID: staging rejects an existing run directory and model destinations.
+
+> Remark:
+> If some runs are invalid, there will be not executed. 
 
 ## Several campaigns overnight
 
@@ -110,11 +120,19 @@ nohup bash "${SCRIPTS}/04_run_campaign_sequence.sh" \
 
 ## Monitoring and validation
 
+### Monitoring 
+
 ```bash
+# Check current setup 
 squeue -u "$USER"
 tail -n 50 "${RUN_DIRECTORY}/orchestrator.log"
+## REMARK: Here put ids of task and jobs 
 tail -n 50 "${RUN_DIRECTORY}/logs/task_<array-job-id>_<task-index>.log"
+### Example
+### For `Submitted array 12508: tasks 0-4.` we can put 
+tail -n 50 "${RUN_DIRECTORY}/logs/task_12508_2.log"
 
+# Check completed status
 completed=$(grep -lE '^[[:space:]]*status: completed$' \
   "${RUN_DIRECTORY}"/plan/status/task_*.yaml | wc -l)
 failed=$(grep -lE '^[[:space:]]*status: failed$' \
@@ -125,6 +143,8 @@ printf 'completed=%s failed=%s\n' "$completed" "$failed"
 For a completed campaign, `completed` equals `task-count`, `failed=0`, and the
 finalizer job ID recorded in `${RUN_DIRECTORY}/finalizer-job-id` has Slurm state
 `COMPLETED` with exit code `0:0`.
+
+### Problem handling: Resume after coordinator stopped 
 
 To resume after the coordinator process stops, do not create a new campaign:
 
