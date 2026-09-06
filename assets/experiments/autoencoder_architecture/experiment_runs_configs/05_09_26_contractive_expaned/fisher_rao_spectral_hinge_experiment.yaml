@@ -161,9 +161,9 @@ grid:
             target: ContractiveLoss
             weight: 1.0e-5
             params: &fisher_spectral_params
-              calculation_method: approximate_hutchinson_vjp
-              num_probes: 5
-              probe_distribution: rademacher
+              # Frobenius has canonical latent dimension D=10, so exact reverse
+              # derivatives are cheaper and deterministic than 32 Hutchinson probes.
+              calculation_method: exact_autograd_jacobian
               latent_source: auto
               penalty_metric: spectral
               penalized_space: u
@@ -207,7 +207,7 @@ grid:
               <<: *fisher_spectral_params
               penalty_metric: spectral_plus_hinged
               hinge_threshold: 7.0
-              hinge_alpha: 1.0
+              hinge_alpha: 2.0
 
       - reconstruction: *reconstruction
         heads: *molecule_head_loss

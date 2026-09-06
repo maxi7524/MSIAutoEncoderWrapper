@@ -41,9 +41,10 @@ def test_fisher_campaign_expands_supported_canonical_penalties() -> None:
             criterion = MSIContractiveLoss(**params)
             assert criterion.input_geometry == "fisher_rao"
             assert criterion.penalized_space == "u"
+            assert criterion.calculation_method == "exact_autograd_jacobian"
             if criterion.penalty_metric == "spectral_plus_hinged":
                 assert criterion.hinge_threshold == 7.0
-                assert criterion.hinge_alpha == 1.0
+                assert criterion.hinge_alpha == 2.0
             else:
                 assert criterion.hinge_threshold is None
             pairs.add((criterion.penalty_metric, contractive["weight"]))

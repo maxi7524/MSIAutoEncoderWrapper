@@ -112,3 +112,37 @@ def test_resource_estimator_accounts_for_uniformity_pairwise_workspace() -> None
     )
 
     assert workspace == 3 * 8**2 * 4
+
+
+def test_resource_estimator_uses_latent_width_for_exact_contractive_workspace() -> None:
+    """Exact Jacobians scale with latent coordinates, while spectral has seven passes."""
+    exact_phase = {
+        "criterions": {
+            "regularization": {
+                "contractive": {
+                    "target": "ContractiveLoss",
+                    "params": {"calculation_method": "exact_autograd_jacobian"},
+                }
+            }
+        }
+    }
+    spectral_phase = {
+        "criterions": {
+            "regularization": {
+                "contractive": {
+                    "target": "ContractiveLoss",
+                    "params": {"penalty_metric": "spectral", "num_probes": 32},
+                }
+            }
+        }
+    }
+
+    exact = TrainingResourceEstimator._criterion_workspace_bytes(
+        exact_phase, batch_size=8, bins=32, element_size=4, latent_dimension=10
+    )
+    spectral = TrainingResourceEstimator._criterion_workspace_bytes(
+        spectral_phase, batch_size=8, bins=32, element_size=4, latent_dimension=10
+    )
+
+    assert exact == 10 * 8 * 32 * 4
+    assert spectral == 7 * 8 * 32 * 4

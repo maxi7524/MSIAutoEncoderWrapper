@@ -88,6 +88,7 @@ class TrainingResourceEstimator:
             parameter for parameter in model.parameters() if parameter.requires_grad
         )
         activation_bytes = self._probe_activation_bytes(model, sample_tensor)
+        latent_dimension = self._probe_latent_dimension(model, sample_tensor)
         available = self._available_resources()
         limits = self._resolve_limits(resource_limits or {}, available)
         recommended_config = copy.deepcopy(training_config)
@@ -114,6 +115,7 @@ class TrainingResourceEstimator:
                 buffer_bytes=buffer_bytes,
                 trainable_bytes=trainable_bytes,
                 activation_bytes=activation_bytes,
+                latent_dimension=latent_dimension,
                 safety_factor=safety_factor,
             )
             if auto_adjust_batch_size and not self._fits(estimate, limits):
@@ -125,6 +127,7 @@ class TrainingResourceEstimator:
                     buffer_bytes=buffer_bytes,
                     trainable_bytes=trainable_bytes,
                     activation_bytes=activation_bytes,
+                    latent_dimension=latent_dimension,
                     safety_factor=safety_factor,
                     limits=limits,
                 )
@@ -257,6 +260,32 @@ class TrainingResourceEstimator:
             model.train(was_training)
         return activation_bytes
 
+    @staticmethod
+    def _probe_latent_dimension(
+        model: torch.nn.Module,
+        sample_tensor: torch.Tensor,
+    ) -> int | None:
+        """Return the observed latent width used by exact Jacobian criteria.
+
+        :param model: Active autoencoder model.
+        :type model: torch.nn.Module
+        :param sample_tensor: One unbatched spectrum with shape ``(M,)``.
+        :type sample_tensor: torch.Tensor
+        :return: Latent dimension ``D`` or ``None`` when no standard latent is exposed.
+        :rtype: int | None
+        """
+        was_training = model.training
+        device = next(model.parameters(), torch.empty(0)).device
+        try:
+            model.eval()
+            with torch.no_grad():
+                outputs = model(sample_tensor.unsqueeze(0).to(device))
+        finally:
+            model.train(was_training)
+        if not isinstance(outputs, dict) or not isinstance(outputs.get("latent_space"), torch.Tensor):
+            return None
+        return int(outputs["latent_space"].shape[-1])
+
     def _estimate_phase(
         self,
         phase: Dict[str, Any],
@@ -266,6 +295,7 @@ class TrainingResourceEstimator:
         buffer_bytes: int,
         trainable_bytes: int,
         activation_bytes: int,
+        latent_dimension: int | None,
         safety_factor: float,
     ) -> Dict[str, int]:
         """Estimate RAM and VRAM for one phase and batch size."""
@@ -277,6 +307,7 @@ class TrainingResourceEstimator:
             batch_size,
             sample_tensor.numel(),
             sample_tensor.element_size(),
+            latent_dimension,
         )
         device = str(getattr(self._wrapper, "device", "cpu"))
         loader_config = phase.get("dataloader", {})
@@ -337,6 +368,7 @@ class TrainingResourceEstimator:
         batch_size: int,
         bins: int,
         element_size: int,
+        latent_dimension: int | None = None,
     ) -> int:
         """Estimate dominant temporary matrices allocated by known criteria."""
         workspace = 0
@@ -367,9 +399,16 @@ class TrainingResourceEstimator:
                 calculation_method = parameters.get(
                     "calculation_method", "approximate_hutchinson_vjp"
                 )
-                multiplier = bins if calculation_method == "exact_autograd_jacobian" else int(
-                    parameters.get("num_probes", 1)
-                )
+                penalty_metric = parameters.get("penalty_metric", "frobenius")
+                if penalty_metric in {"spectral", "spectral_plus_hinged"}:
+                    # Three power iterations use three VJPs and four JVPs.
+                    multiplier = 7
+                elif calculation_method == "exact_autograd_jacobian":
+                    # Exact Frobenius performs one VJP per latent coordinate,
+                    # not one per input mass bin.
+                    multiplier = latent_dimension if latent_dimension is not None else bins
+                else:
+                    multiplier = int(parameters.get("num_probes", 1))
                 workspace += multiplier * batch_size * bins * element_size
             if target == "UniformityLoss":
                 # Gram products, squared distances, and their autograd state are B x B.
