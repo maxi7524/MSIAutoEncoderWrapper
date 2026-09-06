@@ -1,7 +1,9 @@
-# Fisher--Rao versus Euclidean spectral sensitivity on TIC-normalized spectra.
-# 13 objective configurations x 5 repetitions = 65 training tasks.
-# Hinge thresholds are provisional placeholders. Replace them after baseline
-# calibration from the chosen quantiles of each geometry's spectral sensitivity.
+# Fisher--Rao tangent-simplex sensitivity on TIC-normalized spectra.
+# 3 penalty variants x 5 weights x 5 repetitions = 75 training tasks.
+# All penalties use canonical u, without angular normalization.
+# Frozen spectral hinge threshold: 7.0, rounded from baseline validation Q95
+# = 7.037374 in part_0_metric_comparison (canonical_u, fisher_simplex).
+# The threshold applies to the spectral norm, not its square or Frobenius norm.
 
 schema_version: 1
 
@@ -157,7 +159,6 @@ grid:
         regularization:
           contractive: &fisher_spectral
             target: ContractiveLoss
-            # TODO: Replace after baseline Fisher/Euclidean scale calibration.
             weight: 1.0e-5
             params: &fisher_spectral_params
               calculation_method: approximate_hutchinson_vjp
@@ -168,126 +169,111 @@ grid:
               penalized_space: u
               input_geometry: fisher_rao
 
-      # TODO: Replace threshold placeholders with geometry-specific baseline
-      # quantiles, and replace weight after Fisher spectral scale calibration.
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
-          contractive: &fisher_hinge_tau_005_alpha_05
+          contractive:
             <<: *fisher_spectral
-            params:
-              <<: *fisher_spectral_params
-              penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.05
-              hinge_alpha: 0.5
+            weight: 1.0e-4
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
-          contractive: &fisher_hinge_tau_005_alpha_10
-            <<: *fisher_hinge_tau_005_alpha_05
-            params:
-              <<: *fisher_spectral_params
-              penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.05
-              hinge_alpha: 1.0
+          contractive:
+            <<: *fisher_spectral
+            weight: 1.0e-3
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
-          contractive: &fisher_hinge_tau_010_alpha_05
-            <<: *fisher_hinge_tau_005_alpha_05
-            params:
-              <<: *fisher_spectral_params
-              penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.10
-              hinge_alpha: 0.5
+          contractive:
+            <<: *fisher_spectral
+            weight: 1.0e-2
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
-          contractive: &fisher_hinge_tau_010_alpha_10
-            <<: *fisher_hinge_tau_005_alpha_05
-            params:
-              <<: *fisher_spectral_params
-              penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.10
-              hinge_alpha: 1.0
+          contractive:
+            <<: *fisher_spectral
+            weight: 1.0e-1
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
-          contractive: &fisher_hinge_tau_020_alpha_05
-            <<: *fisher_hinge_tau_005_alpha_05
+          contractive: &fisher_spectral_hinge
+            <<: *fisher_spectral
+            weight: 1.0e-5
             params:
               <<: *fisher_spectral_params
               penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.20
-              hinge_alpha: 0.5
-      - reconstruction: *reconstruction
-        heads: *molecule_head_loss
-        regularization:
-          contractive: &fisher_hinge_tau_020_alpha_10
-            <<: *fisher_hinge_tau_005_alpha_05
-            params:
-              <<: *fisher_spectral_params
-              penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.20
+              hinge_threshold: 7.0
               hinge_alpha: 1.0
 
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
-          contractive: &euclidean_hinge_tau_005_alpha_05
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 1.0e-4
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 1.0e-3
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 1.0e-2
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 1.0e-1
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive: &fisher_frobenius
             <<: *fisher_spectral
-            # TODO: Replace after Euclidean spectral scale calibration.
             weight: 1.0e-5
-            params: &euclidean_hinge_base_params
+            params:
               <<: *fisher_spectral_params
-              input_geometry: euclidean
-              penalty_metric: spectral_plus_hinged
-              hinge_threshold: 0.05
-              hinge_alpha: 0.5
+              penalty_metric: frobenius
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
           contractive:
-            <<: *euclidean_hinge_tau_005_alpha_05
-            params:
-              <<: *euclidean_hinge_base_params
-              hinge_alpha: 1.0
+            <<: *fisher_frobenius
+            weight: 1.0e-4
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
           contractive:
-            <<: *euclidean_hinge_tau_005_alpha_05
-            params:
-              <<: *euclidean_hinge_base_params
-              hinge_threshold: 0.10
-              hinge_alpha: 0.5
+            <<: *fisher_frobenius
+            weight: 1.0e-3
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
           contractive:
-            <<: *euclidean_hinge_tau_005_alpha_05
-            params:
-              <<: *euclidean_hinge_base_params
-              hinge_threshold: 0.10
-              hinge_alpha: 1.0
+            <<: *fisher_frobenius
+            weight: 1.0e-2
+
       - reconstruction: *reconstruction
         heads: *molecule_head_loss
         regularization:
           contractive:
-            <<: *euclidean_hinge_tau_005_alpha_05
-            params:
-              <<: *euclidean_hinge_base_params
-              hinge_threshold: 0.20
-              hinge_alpha: 0.5
-      - reconstruction: *reconstruction
-        heads: *molecule_head_loss
-        regularization:
-          contractive:
-            <<: *euclidean_hinge_tau_005_alpha_05
-            params:
-              <<: *euclidean_hinge_base_params
-              hinge_threshold: 0.20
-              hinge_alpha: 1.0
+            <<: *fisher_frobenius
+            weight: 1.0e-1
 
 execution:
   backend: local

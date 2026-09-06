@@ -10,6 +10,46 @@ from msi_autoencoder_wrapper.runtime.workflows.configured import (
     _attach_predictive_components,
     _portable_component_descriptor,
 )
+from msi_autoencoder_wrapper.training.criterions.autoencoder.regularization.contractive_loss import (
+    MSIContractiveLoss,
+)
+
+
+def test_fisher_campaign_expands_supported_canonical_penalties() -> None:
+    """All fifteen Fisher configurations instantiate and share five paired seeds."""
+    repository = Path(__file__).resolve().parents[2]
+    config = load_experiment_config(
+        repository / "assets/experiments/autoencoder_architecture/experiment_runs_configs"
+        / "05_09_26_contractive_expaned/fisher_rao_spectral_hinge_experiment.yaml"
+    )
+    plan = build_plan(config)
+    assert len(plan.tasks) == 75
+    expected = {
+        (metric, weight)
+        for metric in ("frobenius", "spectral", "spectral_plus_hinged")
+        for weight in (1e-5, 1e-4, 1e-3, 1e-2, 1e-1)
+    }
+    for repetition in range(5):
+        pairs, initialization_seeds = set(), set()
+        tasks = [task for task in plan.tasks if task.repetition == repetition]
+        assert len(tasks) == 15
+        for task in tasks:
+            dataset = task.parameters["factory_parameters"]["dataset"]["parameters"]
+            assert dataset["normalization"] == "tic"
+            contractive = task.parameters["training"]["phases"][0]["criterions"]["regularization"]["contractive"]
+            params = contractive["params"]
+            criterion = MSIContractiveLoss(**params)
+            assert criterion.input_geometry == "fisher_rao"
+            assert criterion.penalized_space == "u"
+            if criterion.penalty_metric == "spectral_plus_hinged":
+                assert criterion.hinge_threshold == 7.0
+                assert criterion.hinge_alpha == 1.0
+            else:
+                assert criterion.hinge_threshold is None
+            pairs.add((criterion.penalty_metric, contractive["weight"]))
+            initialization_seeds.add(task.reproducibility["derived_run_seeds"]["model_initialization"])
+        assert pairs == expected
+        assert len(initialization_seeds) == 1
 
 
 def test_predictive_campaign_expands_paired_joint_objective_ablations() -> None:

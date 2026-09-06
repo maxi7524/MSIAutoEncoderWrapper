@@ -16,7 +16,10 @@ from .....utils.exceptions import (
     raise_validation_error,
 )
 from .canonicalized_latent import CanonicalizedLatentMixin
+from .....utils.logger import get_custom_logger
 
+
+logger = get_custom_logger(__name__)
 
 SUPPORTED_CONTRACTIVE_METHODS = frozenset(
     {"exact_autograd_jacobian", "approximate_hutchinson_vjp"}
@@ -56,7 +59,7 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
     :param penalized_space: Raw model latents (``z``) or LayerNorm-canonicalized
         latents (``u``).
     :type penalized_space: str
-    :param input_geometry: Input-space geometry for spectral penalties.
+    :param input_geometry: Input-space geometry for Frobenius and spectral penalties.
         ``fisher_rao`` operates on TIC-normalized spectra constrained to the
         simplex tangent space.
     :type input_geometry: str
@@ -107,12 +110,13 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
                 f"input_geometry must be one of {sorted(SUPPORTED_INPUT_GEOMETRIES)}.",
             )
         if input_geometry == "fisher_rao" and penalty_metric not in {
+            "frobenius",
             "spectral",
             "spectral_plus_hinged",
         }:
             raise_validation_error(
                 "ContractiveLoss",
-                "input_geometry='fisher_rao' requires a spectral penalty metric.",
+                "input_geometry='fisher_rao' requires frobenius, spectral, or spectral_plus_hinged.",
             )
         if penalty_metric in {"hinged", "spectral_plus_hinged"}:
             if (
@@ -160,6 +164,13 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
             "input_geometry": input_geometry,
             "hinge_alpha": hinge_alpha,
         }
+        logger.debug(
+            "Contractive configuration: statistic=%s input_geometry=%s penalized_space=%s method=%s",
+            penalty_metric,
+            input_geometry,
+            penalized_space,
+            calculation_method,
+        )
 
     def on_phase_start(
         self,
@@ -242,6 +253,10 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
         :rtype: torch.Tensor
         """
         batch_size = inputs.shape[0]
+        if self.input_geometry == "fisher_rao":
+            self._validate_tic_simplex_inputs(inputs)
+
+        # Accumulate the input-geometry dual norm of exact rows or random VJPs.
         if self.calculation_method == "exact_autograd_jacobian":
             squared_norm = torch.zeros(batch_size, device=inputs.device, dtype=inputs.dtype)  # (B,)
             for latent_index in range(latent.shape[1]):
@@ -251,7 +266,9 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
                     create_graph=True,
                     retain_graph=True,
                 )[0]  # (B, M)
-                squared_norm = squared_norm + gradient.square().sum(dim=1)  # (B,)
+                squared_norm = squared_norm + self._geometry_squared_dual_norm(
+                    gradient, inputs
+                )  # (B,)
             return squared_norm
 
         estimate = torch.zeros(batch_size, device=inputs.device, dtype=inputs.dtype)  # (B,)
@@ -263,8 +280,31 @@ class MSIContractiveLoss(CanonicalizedLatentMixin, MSIRegularizationCriterion):
                 create_graph=True,
                 retain_graph=True,
             )[0]  # (B, M)
-            estimate = estimate + vjp.square().sum(dim=1)  # (B,)
+            estimate = estimate + self._geometry_squared_dual_norm(vjp, inputs)  # (B,)
         return estimate / self.num_probes  # (B,)
+
+    def _geometry_squared_dual_norm(
+        self,
+        vjp: torch.Tensor,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reduce input covectors using the selected tangent geometry.
+
+        :param vjp: Jacobian rows or stochastic VJPs, shape ``(B, M)``.
+        :type vjp: torch.Tensor
+        :param inputs: Model inputs; Fisher requires unit-TIC spectra, ``(B, M)``.
+        :type inputs: torch.Tensor
+        :return: Squared dual norms, shape ``(B,)``, retaining the gradient graph.
+        :rtype: torch.Tensor
+        """
+        if self.input_geometry == "euclidean":
+            return vjp.square().sum(dim=1)  # (B,)
+        # REMARK: On the unit simplex, weighted variance equals
+        # g^T [diag(x) - xx^T] g = ||P_x diag(sqrt(x)) g||^2.
+        # This form avoids cancellation and sqrt derivatives at empty bins.
+        weighted_mean = (inputs * vjp).sum(dim=1, keepdim=True)  # (B, 1)
+        centered = vjp - weighted_mean  # (B, M)
+        return (inputs * centered.square()).sum(dim=1)  # (B,)
 
     def _spectral_squared_norm(
         self,

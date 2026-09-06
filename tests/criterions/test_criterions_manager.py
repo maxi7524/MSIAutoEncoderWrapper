@@ -351,11 +351,12 @@ def test_spectral_plus_hinged_adds_excess_sensitivity_penalty() -> None:
     assert loss.item() == pytest.approx(4.5, rel=1.0e-4)
 
 
-def test_fisher_rao_spectral_loss_rejects_non_tic_inputs() -> None:
+@pytest.mark.parametrize("penalty_metric", ["spectral", "frobenius"])
+def test_fisher_rao_loss_rejects_non_tic_inputs(penalty_metric: str) -> None:
     """Fisher--Rao geometry is defined only on the normalized TIC simplex."""
     model = _LinearAutoencoder(torch.eye(2))
     criterion = MSIContractiveLoss(
-        penalty_metric="spectral",
+        penalty_metric=penalty_metric,
         input_geometry="fisher_rao",
     )
     criterion.on_phase_start(model, object(), {})
@@ -363,6 +364,63 @@ def test_fisher_rao_spectral_loss_rejects_non_tic_inputs() -> None:
 
     with pytest.raises(IncompatibleInterfaceError, match="TIC equal to one"):
         criterion(model(batch[1]), batch)
+
+
+@pytest.mark.parametrize(
+    "calculation_method",
+    ["exact_autograd_jacobian", "approximate_hutchinson_vjp"],
+)
+def test_fisher_frobenius_matches_simplex_covariance_and_weight_gradient(
+    calculation_method: str,
+) -> None:
+    """A scalar-output encoder makes every Rademacher estimate exact."""
+    model = _LinearAutoencoder(torch.tensor([[1.0, -2.0, 0.5]])).double()
+    spectra = torch.tensor(
+        [[0.2, 0.3, 0.5], [0.0, 0.25, 0.75], [1.0, 0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    covariance = torch.diag_embed(spectra) - spectra[:, :, None] * spectra[:, None, :]  # (B, M, M)
+    weight = model.encoder.weight.detach()  # (1, M)
+    expected = (weight @ covariance @ weight.T).mean()  # ()
+    expected_gradient = 2 * weight @ covariance.mean(dim=0)  # (1, M)
+    criterion = MSIContractiveLoss(
+        calculation_method=calculation_method,
+        num_probes=5,
+        penalty_metric="frobenius",
+        input_geometry="fisher_rao",
+    )
+    criterion.on_phase_start(model, object(), {})
+    batch = criterion.on_batch_start((torch.arange(3), spectra), {})
+    loss = criterion(model(batch[1]), batch)  # ()
+    loss.backward()
+
+    assert loss.shape == torch.Size([])
+    assert loss.dtype == torch.float64
+    torch.testing.assert_close(loss, expected, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(model.encoder.weight.grad, expected_gradient, atol=1e-12, rtol=1e-12)
+    assert torch.isfinite(batch[1].grad).all()
+
+
+@pytest.mark.parametrize(
+    "calculation_method",
+    ["exact_autograd_jacobian", "approximate_hutchinson_vjp"],
+)
+def test_fisher_frobenius_removes_constant_input_covectors(calculation_method: str) -> None:
+    """TIC-only sensitivity vanishes, including at a simplex vertex."""
+    model = _LinearAutoencoder(torch.ones(2, 3)).double()
+    spectra = torch.tensor([[0.25, 0.25, 0.5], [1.0, 0.0, 0.0]], dtype=torch.float64)
+    criterion = MSIContractiveLoss(
+        calculation_method=calculation_method,
+        penalty_metric="frobenius",
+        input_geometry="fisher_rao",
+        num_probes=5,
+    )
+    batch = criterion.on_batch_start((torch.arange(2), spectra), {})
+    loss = criterion(model(batch[1]), batch)
+    loss.backward()
+    torch.testing.assert_close(loss, torch.zeros_like(loss), atol=1e-12, rtol=0)
+    torch.testing.assert_close(model.encoder.weight.grad, torch.zeros_like(model.encoder.weight), atol=1e-12, rtol=0)
+    assert torch.isfinite(batch[1].grad).all()
 
 
 def test_contractive_loss_rejects_batch_normalized_encoder() -> None:
@@ -448,6 +506,44 @@ def test_canonicalized_contractive_penalty_is_invariant_to_layer_norm_gamma() ->
 
     assert u_gamma_three == pytest.approx(u_gamma_one, rel=1.0e-5)
     assert z_gamma_three == pytest.approx(9.0 * z_gamma_one, rel=1.0e-5)
+
+
+def test_canonical_fisher_frobenius_matches_explicit_jacobian() -> None:
+    """Canonical-u Fisher Frobenius includes all latent coordinates and gradients."""
+    torch.manual_seed(11)
+    model = _CanonicalizedAutoencoder().double()
+    layer_norm = model.encoder.bottleneck_layer[-1]
+    with torch.no_grad():
+        layer_norm.weight.copy_(torch.tensor([0.5, 2.0, -1.0]))
+        layer_norm.bias.copy_(torch.tensor([0.2, -0.1, 0.4]))
+    criterion = MSIContractiveLoss(
+        calculation_method="exact_autograd_jacobian",
+        penalty_metric="frobenius",
+        penalized_space="u",
+        input_geometry="fisher_rao",
+    )
+    criterion.on_phase_start(model, object(), {})
+    spectra = torch.tensor([[0.2, 0.3, 0.5], [0.0, 0.25, 0.75]], dtype=torch.float64)
+    batch = criterion.on_batch_start((torch.arange(2), spectra), {})
+    outputs = model(batch[1])
+    u = (outputs["latent_space"] - layer_norm.bias) / layer_norm.weight  # (B, D)
+    jacobian = torch.stack([
+        torch.autograd.grad(u[:, index].sum(), batch[1], retain_graph=True)[0]
+        for index in range(u.shape[1])
+    ], dim=1)  # (B, D, M)
+    covariance = torch.diag_embed(spectra) - spectra[:, :, None] * spectra[:, None, :]  # (B, M, M)
+    gram = jacobian @ covariance @ jacobian.transpose(-1, -2)  # (B, D, D)
+    expected = gram.diagonal(dim1=-2, dim2=-1).sum(dim=-1).mean()  # ()
+    loss = criterion(outputs, batch)
+    loss.backward()
+    torch.testing.assert_close(loss.detach(), expected.detach(), atol=1e-10, rtol=1e-10)
+    linear_gradient = model.encoder.bottleneck_layer[0].weight.grad
+    assert linear_gradient is not None and torch.isfinite(linear_gradient).all()
+    # Canonicalization removes the affine LayerNorm parameters from the penalty.
+    for parameter in (layer_norm.weight, layer_norm.bias):
+        if parameter.grad is not None:
+            torch.testing.assert_close(parameter.grad, torch.zeros_like(parameter), atol=1e-10, rtol=0)
+    assert torch.isfinite(batch[1].grad).all()
 
 
 def test_uniformity_loss_prefers_spread_canonicalized_latents() -> None:
