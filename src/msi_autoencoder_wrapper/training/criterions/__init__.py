@@ -18,7 +18,10 @@ from .autoencoder.head.cross_entropy_loss import MSIMaskedCrossEntropyLoss
 from .autoencoder.head.class_balanced_multilabel_bce_loss import (
     MSIClassBalancedMultiLabelBCELoss,
 )
-from .autoencoder.head.multilabel_bce_loss import MSIMultiLabelBCELoss
+from .autoencoder.head.multilabel_bce_loss import (
+    MSIMultiLabelBCELoss,
+    MSIPositiveWeightedMultiLabelBCELoss,
+)
 from .autoencoder.head.nnpu_multilabel_loss import MSINNPUMultiLabelLoss
 from .autoencoder.head.evidence_losses import SignalMaskedBCELoss, ThreeStateCrossEntropyLoss
 from .autoencoder.head.variational_pu_loss import VariationalPULoss
@@ -43,6 +46,7 @@ __all__ = [
     "MSIMassersteinLoss",
     "MSIMSELoss",
     "MSIMultiLabelBCELoss",
+    "MSIPositiveWeightedMultiLabelBCELoss",
     "MSINNPUMultiLabelLoss",
     "MSIReconstructionCriterion",
     "MSIRegularizationCriterion",

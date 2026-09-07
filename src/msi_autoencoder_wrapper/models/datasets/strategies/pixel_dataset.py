@@ -586,9 +586,10 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
                 if columns:
                     target[list(columns)] = 1.0
             targets["chemical_class"] = target
-            # REMARK: Zero means unlabelled, not a verified absent chemical class.
-            available = bool(target_masks["molecule"].any())
-            target_masks["chemical_class"] = torch.full_like(target, available, dtype=torch.bool)
+            # REMARK: A missing MSI annotation is not evidence that a chemical
+            # class is absent. Only classes certain for an annotated component
+            # are supervised; every other chemical-class entry stays masked.
+            target_masks["chemical_class"] = target.bool()
         if "element_counts" in self.target_specs:
             # Composition is supervised only for single-component synthetic spectra.
             targets["element_counts"] = torch.zeros(len(mappings["element_counts"]), dtype=torch.float32)

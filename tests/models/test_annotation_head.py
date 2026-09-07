@@ -11,6 +11,7 @@ from msi_autoencoder_wrapper.models.architectures.types.autoencoders.heads.linea
 )
 from msi_autoencoder_wrapper.training.criterions.autoencoder.head.multilabel_bce_loss import (
     MSIMultiLabelBCELoss,
+    MSIPositiveWeightedMultiLabelBCELoss,
 )
 from msi_autoencoder_wrapper.training.criterions.autoencoder.head.class_balanced_multilabel_bce_loss import (
     MSIClassBalancedMultiLabelBCELoss,
@@ -75,6 +76,53 @@ def test_class_balanced_bce_uses_train_frequency_and_per_class_masks() -> None:
 
     assert torch.allclose(criterion.positive_weights, torch.tensor([3.0, 1.0]))
     assert loss.item() == pytest.approx(torch.log(torch.tensor(2.0)).item())
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_unmasked_positive_weighted_bce_supports_global_and_per_class_ratios() -> None:
+    """The two unmasked modes use the same square-root P/N rule as PN-BCE."""
+    targets = torch.tensor(
+        [[1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [0.0, 0.0]]
+    )  # (N=4, C=2)
+    negative = torch.tensor([3.0, 2.0])  # (C,)
+    global_criterion = MSIPositiveWeightedMultiLabelBCELoss(
+        head_id="molecular",
+        target_field="molecule",
+        positive_weight_mode="global_sqrt_negative_to_positive",
+        minimum_positive_count=1,
+    )
+    per_class_criterion = MSIPositiveWeightedMultiLabelBCELoss(
+        head_id="molecular",
+        target_field="molecule",
+        positive_weight_mode="per_class_sqrt_negative_to_positive",
+        minimum_positive_count=1,
+    )
+    global_criterion.positive_weights = global_criterion._weights_from_counts(
+        targets.sum(dim=0), negative
+    )  # (C,)
+    per_class_criterion.positive_weights = per_class_criterion._weights_from_counts(
+        targets.sum(dim=0), negative
+    )  # (C,)
+    expected_global = torch.sqrt(torch.tensor(5.0 / 3.0))
+    torch.testing.assert_close(
+        global_criterion.positive_weights,
+        expected_global.expand(2),
+    )
+    torch.testing.assert_close(
+        per_class_criterion.positive_weights,
+        torch.tensor([3.0**0.5, 1.0]),
+    )
+
+    logits = torch.zeros(4, 2, requires_grad=True)  # (B=4, C=2)
+    batch = (
+        torch.arange(4),
+        torch.ones(4, 3),
+        {"molecule": targets},
+        {"molecule": torch.zeros_like(targets, dtype=torch.bool)},
+    )
+    loss = per_class_criterion({"head_molecular": logits}, batch)  # ()
+    loss.backward()
+    assert torch.isfinite(loss)
     assert torch.isfinite(logits.grad).all()
 
 

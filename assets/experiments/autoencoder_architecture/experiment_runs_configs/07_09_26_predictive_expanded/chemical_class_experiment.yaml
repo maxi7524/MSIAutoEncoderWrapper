@@ -1,8 +1,9 @@
 # Paired dataset selection, split, and five repetition seeds match the 05_09_26 BCE baseline.
-# Head comparisons include label-invariant contrastive learning. No contractive penalty is enabled.
-# Weights and evidence thresholds are provisional experiment settings, not selected hyperparameters.
-# Separate chemical-class ablation; both variants retain identical heads for paired initialization.
-# Chemical targets represent union presence of certain classes, not summed molecular or atom counts.
+# Deferred auxiliary-head template: run only after selecting the main presence loss.
+# Chemical classes use masked BCE on certain positives, never VPU or constructed negatives.
+# The auxiliary head has the same fixed loss weight 0.2 as the main head.
+# The chemical-class ablation keeps all non-chemical heads identical within each contrastive pair.
+# Chemical targets represent presence of certain classes, not summed molecular or atom counts.
 # ClassyFire/ChemOnt exports are also supported through a normalized versioned JSON snapshot.
 # TODO: Replace the provisional balanced BCE ion objective with the selected head objective.
 
@@ -169,7 +170,7 @@ grid:
         masserstein:
           target: MassersteinLoss
           weight: 1.0
-      heads:
+      heads: &ion_bce_heads
         molecule_primary:
           balanced_bce:
             target: ClassBalancedMultiLabelBCELoss
@@ -179,7 +180,12 @@ grid:
               max_positive_weight: 20.0
               reduction: balanced_class_mean
               unknown_label_policy: assume_negative
-      contrastive: &id001
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads: *ion_bce_heads
+      contrastive: &label_invariant_contrastive
         peak_permutation:
           target: InfoNCELoss
           weight: 0.1
@@ -197,7 +203,7 @@ grid:
         masserstein:
           target: MassersteinLoss
           weight: 1.0
-      heads:
+      heads: &chemical_class_heads
         molecule_primary:
           balanced_bce:
             target: ClassBalancedMultiLabelBCELoss
@@ -208,15 +214,15 @@ grid:
               reduction: balanced_class_mean
               unknown_label_policy: assume_negative
         chemical_class:
-          vpu:
-            target: VariationalPULoss
+          masked_bce:
+            target: MultiLabelBCELoss
             weight: 0.2
-            params:
-              negative_weight: 0.0
-              consistency_weight: 1.0
-              mixup_alpha: 0.3
-              max_mixup_classes: 64
-      contrastive: *id001
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads: *chemical_class_heads
+      contrastive: *label_invariant_contrastive
 execution:
   backend: local
   max_parallel_runs: 1

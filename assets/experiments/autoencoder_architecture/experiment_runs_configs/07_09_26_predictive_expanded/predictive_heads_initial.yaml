@@ -1,0 +1,354 @@
+# Initial comparison of molecular predictive heads: 12 grid cells x 5 paired seeds = 60 tasks.
+# The historical BCE baseline remains in 05_09_26_contractive_expaned with the identical dataset split.
+# InfoNCE and contractive objectives are deliberately absent from this campaign.
+
+schema_version: 1
+experiment:
+  name: kidney-predictive-heads-initial
+task:
+  entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
+  preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
+  test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
+  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
+  parameters:
+    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
+    factory_parameters:
+      project_path: data/kidney_workspace
+      project_path_anchor: repository
+      image_path: datasets/kidney/kidney.imzML
+      device: null
+      reader:
+        strategy: PyImzMLReader
+        parameters: {}
+      annotations:
+        strategy: auto
+        parameters: {}
+      binning:
+        strategy: LinearBinning
+        parameters:
+          bin_step: 0.55
+          x_min: 200.0
+          x_max: 900.0
+          aggregation: sum
+      inverse_binning:
+        strategy: PassthroughInverseBinner
+      dataset:
+        strategy: PixelDataset
+        parameters:
+          source: image
+          normalization: tic
+          target_specs:
+            molecule:
+              type: multi_label
+          annotation_settings:
+            mapping:
+              x_mapping: binner
+            selection:
+              annotated_fraction: 1.0
+              unannotated_fraction: 0.0
+              max_unannotated_to_annotated_ratio: 0.0
+              seed: 42
+            targets:
+              molecule:
+                empty_spectrum_policy: exclude
+                unobserved_label_policy: unlabelled
+                add_annotation_presence_target: false
+          subset:
+            fraction: 0.1
+            seed: 42
+            method: proportional_multilabel
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_count: 3
+          split:
+            strategy: proportional_multilabel
+            fractions:
+              train: 0.8
+              validation: 0.1
+              test: 0.1
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_per_split: 1
+      variant:
+        grid: architectures
+      predictive:
+        projector:
+          strategy: LinearProjector
+          parameters:
+            latent_dim: 10
+            projection_dim: 64
+        # Both output shapes are constructed in every task so that the objective
+        # grid can select a binary or P/N/U criterion without changing the encoder.
+        heads:
+          molecule_binary:
+            target_field: molecule
+            strategy: LinearClassificationHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+          molecule_pnu:
+            target_field: molecule
+            strategy: ThreeStateHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+    model_name: null
+    training:
+      patience: 10
+      continuation:
+        enabled: true
+        resume: true
+        checkpoint_every_epochs: 1
+      checkpoint:
+        enabled: true
+        restore_best: true
+      phases:
+      - phase_name: joint_predictive
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer:
+          type: AdamW
+          params:
+            lr: 0.001
+            weight_decay: 0.0001
+        criterions:
+          grid: objectives
+runs:
+  repetitions: 5
+seeds:
+  common_seeds:
+    split: 42
+    dataloader: 43
+  run_seeds:
+    model_initialization: 1000
+    training: 2000
+grid:
+  # TODO: Replace this provisional architecture after the base-model selection.
+  architectures:
+    values:
+    - name: conv1d-ae-32-16-8-latent-10
+      preset: CNNAutoencoder
+      parameters:
+        latent_dim: 10
+        channels: [1, 32, 16, 8]
+        kernels: [5, 7, 3]
+        strides: [3, 3, 3]
+        output_normalization:
+          type: tic
+          parameters:
+            epsilon: 1.0e-12
+
+  # Twelve head-loss conditions. Every head objective has the fixed weight 0.2.
+  objectives:
+    values:
+    # BCE with every absent annotation treated as a negative, no evidence mask.
+    # These use the same square-root P/N weighting definitions as PN-BCE.
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          bce_global_positive_penalty:
+            target: PositiveWeightedMultiLabelBCELoss
+            weight: 0.2
+            params:
+              positive_weight_mode: global_sqrt_negative_to_positive
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          bce_per_class_positive_penalty:
+            target: PositiveWeightedMultiLabelBCELoss
+            weight: 0.2
+            params:
+              positive_weight_mode: per_class_sqrt_negative_to_positive
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+
+    # PN-BCE: U is masked; only annotated P and evidence-derived N contribute.
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pn_bce_unweighted:
+            target: SignalMaskedBCELoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+              positive_weight_mode: none
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pn_bce_unweighted:
+            target: SignalMaskedBCELoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+              positive_weight_mode: none
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pn_bce_global_positive_penalty:
+            target: SignalMaskedBCELoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+              positive_weight_mode: global_sqrt_negative_to_positive
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pn_bce_global_positive_penalty:
+            target: SignalMaskedBCELoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+              positive_weight_mode: global_sqrt_negative_to_positive
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pn_bce_per_class_positive_penalty:
+            target: SignalMaskedBCELoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+              positive_weight_mode: per_class_sqrt_negative_to_positive
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pn_bce_per_class_positive_penalty:
+            target: SignalMaskedBCELoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+              positive_weight_mode: per_class_sqrt_negative_to_positive
+              max_positive_weight: 10.0
+              minimum_positive_count: 10
+
+    # P/N/U classifier: plain cross-entropy, deliberately without state weights.
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_pnu:
+          pnu_ce:
+            target: ThreeStateCrossEntropyLoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_pnu:
+          pnu_ce:
+            target: ThreeStateCrossEntropyLoss
+            weight: 0.2
+            params:
+              evidence:
+                # Selected from the 5% annotated-contradiction tolerance analysis.
+                absolute_threshold: 0.0
+                relative_threshold: 0.0119
+                bin_radius: 1
+
+    # Prior-free VPU: no operational-negative penalty and no spectral MixUp.
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          vpu:
+            target: VariationalPULoss
+            weight: 0.2
+            params:
+              negative_weight: 0.0
+              consistency_weight: 0.0
+
+    # Prior-free symmetric P/U ranking with fixed Monte Carlo sampling.
+    - reconstruction:
+        masserstein:
+          target: MassersteinLoss
+          weight: 1.0
+      heads:
+        molecule_binary:
+          pu_ranking:
+            target: SymmetricPURankingLoss
+            weight: 0.2
+            params:
+              temperature: 1.0
+              pairs_per_sample: 32
+execution:
+  backend: local
+  max_parallel_runs: 1
+  entropy:
+    task_walltime: 01:00:00
+reports: []
+reporting:
+  continue_on_error: true

@@ -4,8 +4,9 @@
 # Unmeasured ranges are zero-filled. No acquisition channels, hidden intervals, or imputation targets.
 # Compare no pretraining, single/mixed spectra, MSE/Masserstein, supervised ion BCE on/off, and atom counts on/off.
 # Atom counts are supervised only for one annotated component without background; mixtures remain masked.
-# Contrastive learning is enabled in real adaptation. Synthetic ion labels are fully known by construction.
-# TODO: Replace the provisional real-phase BCE objective with the selected predictive head and loss.
+# Synthetic ion labels are fully known by construction.
+# Contrastive is intentionally absent here: select the real-data head and its contrastive setting first.
+# TODO: Replace the provisional real-phase BCE objective with that selected head and contrastive condition.
 # TODO: Set final pretraining duration, sampling counts, and objective weights after the initial comparisons.
 
 schema_version: 1
@@ -191,20 +192,6 @@ grid:
                   max_positive_weight: 20.0
                   reduction: balanced_class_mean
                   unknown_label_policy: assume_negative
-          contrastive:
-            peak_permutation:
-              target: InfoNCELoss
-              weight: 0.1
-              params:
-                peak_selection_method: permutation_label_invariant
-                temperature: 0.07
-                peak_sample_size: 1000
-                peak_catalog_limit: 4096
-                permutation_bank_size: 7000
-                permuted_peaks_per_view: 3
-                permutation_selection_attempts: 64
-                annotation_bin_radius: 0
-                preserve_input_normalization: true
     - - phase_name: synthetic_single_mse_ions_0_classes_0_atoms_0
         epochs: 15
         batch_size: 64
