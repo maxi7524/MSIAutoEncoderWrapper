@@ -13,6 +13,9 @@ from ...core.wrapper import MSIAutoEncoderWrapper
 from ...models.architectures.architectures_manager import ArchitecturesManager
 from ...models.datasets.dataset_manager import DatasetManager
 from ...models.model_loader import ModelLoader
+from ...utils.logger import get_custom_logger
+
+logger = get_custom_logger(__name__)
 
 
 # Process-local shared resources
@@ -141,6 +144,7 @@ def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoder
     split_manifest = _read_yaml(Path(resolved["split_manifest"]))
     dataset = parameters["dataset"]
     dataset_parameters = deepcopy(dataset["parameters"])
+    _resolve_chemistry_path(dataset_parameters, project_path)
     dataset_parameters["split"] = {
         "strategy": "predefined",
         "seed": int(split_manifest["seed"]),
@@ -188,15 +192,38 @@ def resolve_single_image_campaign(
     split_paths: dict[int, Path] = {}
     split_dataset: Any = None
     resolved_parameters: list[dict[str, Any]] = []
+    reference_selections: dict[Any, Any] = {}
 
     for task in tasks:
         parameters = deepcopy(task["parameters"])
         factory_parameters = parameters["factory_parameters"]
+        # Freeze the real population on a reference axis for paired range comparisons
+        reference_binning = factory_parameters.get("split_reference_binning")
+        if reference_binning is not None:
+            reference_key = (_freeze(reference_binning), _freeze(factory_parameters["dataset"]),
+                             int(task["reproducibility"]["common_seeds"]["split"]))
+            if reference_key not in reference_selections:
+                reference_parameters = deepcopy(factory_parameters)
+                reference_parameters["binning"] = deepcopy(reference_binning)
+                _, reference_dataset = _build_planning_pipeline(
+                    reference_parameters, split_seed=reference_key[-1],
+                )
+                reference_selections[reference_key] = reference_dataset
+                logger.info("Resolved the reference-axis population for split seed %s.", reference_key[-1])
+            reference_dataset = reference_selections[reference_key]
+            manifest = reference_dataset.create_partitions().manifest
+            source_indices = sorted(i for ids in manifest.assignments.values() for i in ids)
+            logger.debug("Reusing %s source samples across spectral axes.", len(source_indices))
+            factory_parameters["dataset"]["parameters"]["subset"] = {
+                "method": "source_indices", "indices": source_indices,
+            }
+            if split_dataset is None:
+                split_dataset = reference_dataset
         binning = factory_parameters["binning"]
         variant = factory_parameters["variant"]
         predictive = factory_parameters.get("predictive", {})
         binning_key = _freeze(binning)
-        model_key = (binning_key, _freeze(variant), _freeze(predictive))
+        model_key = (binning_key, _freeze(variant), _freeze(predictive), _freeze(factory_parameters["dataset"]))
 
         if model_key not in model_paths:
             wrapper, dataset = _build_planning_pipeline(
@@ -332,6 +359,7 @@ def _build_planning_pipeline(
     ## Dataset construction has no model and initializes no neural-network weights
     dataset_definition = parameters.get("dataset", {})
     dataset_parameters = deepcopy(dataset_definition.get("parameters", {}))
+    _resolve_chemistry_path(dataset_parameters, project_path)
     dataset_parameters["split"]["seed"] = split_seed
     dataset = wrapper.models_manager.load_dataset_config(
         {
@@ -340,6 +368,14 @@ def _build_planning_pipeline(
         }
     )
     return wrapper, dataset
+
+
+def _resolve_chemistry_path(parameters: dict[str, Any], project_path: Path) -> None:
+    """Resolve a dataset chemical snapshot relative to its project workspace."""
+    chemistry = parameters.get("chemistry")
+    if chemistry and chemistry.get("path"):
+        path = Path(chemistry["path"])
+        chemistry["path"] = str(path if path.is_absolute() else project_path / path)
 
 
 def _attach_predictive_components(

@@ -135,12 +135,22 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         epoch_metric_config = self._resolve_epoch_metric_config(training_config)
         phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
         transient_cache = getattr(self._wrapper.models_manager, "_training_transient_cache", {})
+        real_dataset_partitions = dataset_partitions
 
         # Heading 1 (Sequential Phase Processing Framework)
         for current_step, phase_config in enumerate(phases_list):
             if runtime_checkpoint and current_step < int(runtime_checkpoint["phase_index"]):
                 continue
             phase_name = phase_config.get("phase_name", f"phase_{current_step + 1}")
+            # Select phase data while keeping the real train/validation/test split intact
+            synthetic_config = phase_config.get("pretraining")
+            if synthetic_config is not None:
+                from ...data.pretraining import build_synthetic_partitions
+                if not isinstance(synthetic_config, dict):
+                    raise ValueError("phase.pretraining must be a synthetic generator mapping.")
+                dataset_partitions = build_synthetic_partitions(dataset, synthetic_config)
+            else:
+                dataset_partitions = real_dataset_partitions
             epochs = phase_config.get("epochs", 10)
             compute_device = torch.device(
                 phase_config.get(
@@ -292,6 +302,8 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 )
 
             for epoch in range(start_epoch, epochs):
+                if synthetic_config is not None:
+                    dataset_partitions["train"].set_epoch(epoch)
                 model.train()
                 epoch_start_time = time.time()
                 accumulated_metrics: Dict[str, float] = {}
@@ -726,6 +738,12 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             loader_config.setdefault("persistent_workers", True)
         try:
             source_dataset = getattr(dataset, "dataset", dataset)
+            dense_collator = getattr(source_dataset, "collate_fn", None)
+            if callable(dense_collator):
+                loader_config.setdefault("collate_fn", dense_collator)
+                # Workers must observe the epoch selected before each iterator.
+                if hasattr(source_dataset, "set_epoch"):
+                    loader_config["persistent_workers"] = False
             raw_getter = callable(getattr(source_dataset, "get_raw_item", None))
             if raw_getter:
                 if "collate_fn" in loader_config:
@@ -965,9 +983,10 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         mask = np.concatenate(mask_batches, axis=0).astype(bool)
         if mask.ndim == 1:
             mask = np.broadcast_to(mask[:, None], targets.shape)
-        if logits.shape != targets.shape or mask.shape != targets.shape:
+        from ...analysis.autoencoder.heads.metrics import probabilities_from_logits
+        probabilities = probabilities_from_logits(logits, "multi_label")  # (N, C)
+        if probabilities.shape != targets.shape or mask.shape != targets.shape:
             raise_validation_error("Trainer", "Epoch metric tensors must have equal [N, C] shapes.")
-        probabilities = 1.0 / (1.0 + np.exp(-logits))  # (N, C)
         values = []
         for class_index in range(targets.shape[1]):
             available = mask[:, class_index]

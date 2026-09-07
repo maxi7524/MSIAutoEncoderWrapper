@@ -14,7 +14,7 @@ class TargetSchema:
     """Describe one classification target without duplicating it per sample."""
 
     name: str
-    target_type: Literal["single_label", "multi_label"]
+    target_type: Literal["single_label", "multi_label", "regression"]
     class_names: tuple[str, ...]
 
     @property

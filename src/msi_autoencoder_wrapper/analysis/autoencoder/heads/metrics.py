@@ -23,8 +23,15 @@ from ....utils.exceptions import raise_validation_error
 def probabilities_from_logits(logits: np.ndarray, target_type: str) -> np.ndarray:
     """Convert logits using target-compatible activation semantics."""
     values = np.asarray(logits)
+    if target_type not in {"single_label", "multi_label"}:
+        raise_validation_error("HeadAnalysis", "Probabilities require a classification target.")
     if target_type == "multi_label":
-        return 1.0 / (1.0 + np.exp(-values))
+        if values.ndim == 3 and values.shape[-1] == 3:
+            shifted = values - np.max(values, axis=-1, keepdims=True)  # (N, C, 3)
+            exponentials = np.exp(shifted)
+            return (exponentials / exponentials.sum(axis=-1, keepdims=True))[..., 1]  # (N, C)
+        from scipy.special import expit
+        return expit(values)
     shifted = values - np.max(values, axis=1, keepdims=True)
     exponentials = np.exp(shifted)
     return exponentials / np.sum(exponentials, axis=1, keepdims=True)
@@ -75,14 +82,15 @@ def evaluate_head(
     mask: np.ndarray | None = None,
     threshold: float = 0.5,
 ) -> Dict[str, Any]:
-    """Evaluate one single-label or multi-label classification head.
+    """Evaluate a classification head or the auxiliary elemental composition head.
 
     :param logits: Unnormalized head outputs, shape ``(N, C)``.
     :type logits: numpy.ndarray
     :param targets: Integer single-label targets ``(N,)`` or binary multi-label
         targets ``(N, C)``.
     :type targets: numpy.ndarray
-    :param target_type: ``single_label`` or ``multi_label``.
+    :param target_type: ``single_label``, ``multi_label``, or ``regression``.
+        Regression follows ElementCountLoss: softplus outputs predict log1p counts.
     :type target_type: str
     :param mask: Optional target-availability mask. For ``single_label``, one flag
         per sample ``(N,)``. For ``multi_label``, one flag per sample ``(N,)`` *or*
@@ -102,6 +110,18 @@ def evaluate_head(
         )
     logits_array = np.asarray(logits)
     targets_array = np.asarray(targets)
+
+    # Composition is supervised only for single synthetic annotated components
+    if target_type == "regression":
+        if logits_array.shape != targets_array.shape or targets_array.ndim != 2:
+            raise_validation_error("HeadAnalysis", "Composition outputs and targets must have shape (N, E).")
+        available = _multi_label_availability(mask, targets_array.shape)
+        count = int(available.sum())
+        if count == 0:
+            return {"available_entries": 0, "log_count_mae": float("nan"), "log_count_rmse": float("nan")}
+        error = np.logaddexp(0, logits_array[available]) - np.log1p(targets_array[available])  # (K,)
+        return {"available_entries": count, "log_count_mae": float(np.abs(error).mean()),
+                "log_count_rmse": float(np.sqrt(np.square(error).mean()))}
 
     if target_type == "single_label":
         available = (

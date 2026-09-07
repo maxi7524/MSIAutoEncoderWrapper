@@ -98,7 +98,11 @@ class HeadAnalysis:
                     np.ones(len(truth), dtype=bool),
                 ),
                 dtype=bool,
-            ).reshape(-1)
+            )
+            if available.ndim == 2:
+                available = available[:, class_index]  # (N,)
+            else:
+                available = available.reshape(-1)  # (N,)
             predicted = probabilities >= threshold
             # Signed correctness confidence
             ## Correct positive and correct negative decisions are green. False

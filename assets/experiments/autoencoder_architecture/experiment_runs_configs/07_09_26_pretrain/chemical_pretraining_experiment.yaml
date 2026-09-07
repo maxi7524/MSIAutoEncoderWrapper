@@ -1,0 +1,983 @@
+# Paired pretraining ablations on the common 200-900 axis and the extended 100-3000 axis.
+# Each task initializes a fresh model; synthetic and real phases within that task share its weights.
+# The reference-axis selection freezes the same real source IDs and train/validation/test split.
+# Unmeasured ranges are zero-filled. No acquisition channels, hidden intervals, or imputation targets.
+# Compare no pretraining, single/mixed spectra, MSE/Masserstein, supervised ion BCE on/off, and atom counts on/off.
+# Atom counts are supervised only for one annotated component without background; mixtures remain masked.
+# Contrastive learning is enabled in real adaptation. Synthetic ion labels are fully known by construction.
+# TODO: Replace the provisional real-phase BCE objective with the selected predictive head and loss.
+# TODO: Set final pretraining duration, sampling counts, and objective weights after the initial comparisons.
+# Chemical-class supervision is additionally crossed on/off for every synthetic setting.
+# Candidate ambiguity masks unavailable chemical labels; the real phase retains the same control objective.
+
+schema_version: 1
+experiment:
+  name: kidney-pretraining-chemical
+task:
+  entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
+  preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
+  test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
+  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
+  parameters:
+    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
+    factory_parameters:
+      project_path: data/kidney_workspace
+      project_path_anchor: repository
+      image_path: datasets/kidney/kidney.imzML
+      device: null
+      reader:
+        strategy: PyImzMLReader
+        parameters: {}
+      annotations:
+        strategy: auto
+        parameters: {}
+      binning:
+        grid: axes
+      inverse_binning:
+        strategy: PassthroughInverseBinner
+      dataset:
+        strategy: PixelDataset
+        parameters:
+          source: image
+          normalization: tic
+          target_specs:
+            molecule:
+              type: multi_label
+            chemical_class:
+              type: multi_label
+            element_counts:
+              type: regression
+          annotation_settings:
+            mapping:
+              x_mapping: binner
+            selection:
+              annotated_fraction: 1.0
+              unannotated_fraction: 0.0
+              max_unannotated_to_annotated_ratio: 0.0
+              seed: 42
+            targets:
+              molecule:
+                empty_spectrum_policy: exclude
+                unobserved_label_policy: unlabelled
+                add_annotation_presence_target: false
+          subset:
+            fraction: 0.1
+            seed: 42
+            method: proportional_multilabel
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_count: 3
+          split:
+            strategy: proportional_multilabel
+            fractions:
+              train: 0.8
+              validation: 0.1
+              test: 0.1
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_per_split: 1
+          # TODO: Create the enrichment snapshot and set its actual path, provider, and version.
+          # Run: python -m msi_dataset_manager.annotations.chemistry --annotations <source.sqlite>
+          #   --output <workspace>/annotations/chemistry.sqlite --lipidmaps-version 2026-09-07
+          chemistry:
+            path: annotations/chemistry.sqlite
+            provider: LIPID_MAPS
+            version: '2026-09-07'
+      variant:
+        grid: architectures
+      predictive:
+        projector:
+          strategy: LinearProjector
+          parameters:
+            latent_dim: 10
+            projection_dim: 64
+        heads:
+          molecule_primary:
+            target_field: molecule
+            strategy: LinearClassificationHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+          chemical_class:
+            target_field: chemical_class
+            strategy: LinearClassificationHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+          element_counts:
+            target_field: element_counts
+            strategy: LinearClassificationHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+      split_reference_binning:
+        strategy: LinearBinning
+        parameters:
+          bin_step: 0.55
+          x_min: 200.0
+          x_max: 900.0
+          aggregation: sum
+    model_name: null
+    training:
+      patience: 10
+      continuation:
+        enabled: true
+        resume: true
+        checkpoint_every_epochs: 1
+      checkpoint:
+        enabled: true
+        restore_best: true
+      phases:
+        grid: schedules
+runs:
+  repetitions: 5
+seeds:
+  common_seeds:
+    split: 42
+    dataloader: 43
+  run_seeds:
+    model_initialization: 1000
+    training: 2000
+grid:
+  # TODO: Replace this baseline architecture after model selection; align all latent_dim values.
+  architectures:
+    values:
+    - name: conv1d-ae-32-16-8-latent-10
+      preset: CNNAutoencoder
+      parameters:
+        latent_dim: 10
+        channels:
+        - 1
+        - 32
+        - 16
+        - 8
+        kernels:
+        - 5
+        - 7
+        - 3
+        strides:
+        - 3
+        - 3
+        - 3
+        output_normalization:
+          type: tic
+          parameters:
+            epsilon: 1.0e-12
+  axes:
+    values:
+    - strategy: LinearBinning
+      parameters:
+        bin_step: 0.55
+        x_min: 200.0
+        x_max: 900.0
+        aggregation: sum
+    - strategy: LinearBinning
+      parameters:
+        bin_step: 0.55
+        x_min: 100.0
+        x_max: 3000.0
+        aggregation: sum
+  schedules:
+    values:
+    - - &id001
+        phase_name: real_adaptation
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer:
+          type: AdamW
+          params:
+            lr: 0.001
+            weight_decay: 0.0001
+        criterions:
+          reconstruction:
+            masserstein:
+              target: MassersteinLoss
+              weight: 1.0
+          heads:
+            molecule_primary:
+              balanced_bce:
+                target: ClassBalancedMultiLabelBCELoss
+                weight: 0.2
+                params:
+                  class_balance_method: train_inverse_prevalence
+                  max_positive_weight: 20.0
+                  reduction: balanced_class_mean
+                  unknown_label_policy: assume_negative
+          contrastive:
+            peak_permutation:
+              target: InfoNCELoss
+              weight: 0.1
+              params:
+                peak_selection_method: permutation_label_invariant
+                temperature: 0.07
+                peak_sample_size: 1000
+                peak_catalog_limit: 4096
+                permutation_bank_size: 7000
+                permuted_peaks_per_view: 3
+                permutation_selection_attempts: 64
+                annotation_bin_radius: 0
+                preserve_input_normalization: true
+    - - phase_name: synthetic_single_mse_ions_0_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: &id002
+          type: AdamW
+          params:
+            lr: 0.001
+            weight_decay: 0.0001
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: &id003
+          - single_random
+          - single_annotated
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: &id004
+            mse:
+              target: MSELoss
+              weight: 1.0
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_0_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_0_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_0_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_1_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_1_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_1_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_single_mse_ions_1_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_0_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: &id005
+            masserstein:
+              target: MassersteinLoss
+              weight: 1.0
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_0_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_0_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_0_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_1_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_1_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_1_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_single_masserstein_ions_1_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id003
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_0_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: &id006
+          - single_random
+          - single_annotated
+          - random
+          - annotated
+          - mixed
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_0_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_0_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_0_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_1_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_1_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_1_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_mixed_mse_ions_1_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_0_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_0_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_0_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_0_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_1_classes_0_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_1_classes_0_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_1_classes_1_atoms_0
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
+    - - phase_name: synthetic_mixed_masserstein_ions_1_classes_1_atoms_1
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          samples: 4096
+          validation_samples: 512
+          seed: 42
+          max_peaks: 16
+          modes: *id006
+          peak_radius: 0
+          normalization: tic
+        criterions:
+          reconstruction: *id005
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            chemical_class:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+            element_counts:
+              composition:
+                target: ElementCountLoss
+                weight: 0.1
+      - *id001
+execution:
+  backend: local
+  max_parallel_runs: 1
+  entropy:
+    task_walltime: 01:00:00
+reports: []
+reporting:
+  continue_on_error: true

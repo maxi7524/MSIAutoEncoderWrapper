@@ -42,6 +42,7 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         normalization_epsilon: float = 1e-12,
         target_specs: Optional[Mapping[str, Mapping[str, Any]]] = None,
         annotation_settings: Optional[Mapping[str, Any]] = None,
+        chemistry: Optional[Mapping[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -63,6 +64,9 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         :param annotation_settings: Mapping, selection, and target policies for
             reader-derived molecular annotations.
         :type annotation_settings: Mapping[str, Any] | None
+        :param chemistry: Optional local chemical snapshot with path, provider,
+            and version. Required by the ``chemical_class`` target.
+        :type chemistry: Mapping[str, Any] | None
         :raises ValidationError: If normalization settings are invalid.
         """
         super().__init__(active_context=active_context, **kwargs)
@@ -86,6 +90,9 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         self.normalization = resolved_normalization
         self.normalization_epsilon = float(normalization_epsilon)
         self.target_specs = self._validate_target_specs(target_specs or {})
+        self.chemistry = dict(chemistry or {})
+        self._chemical_descriptions = None
+        self._chemical_class_columns: dict[int, tuple[int, ...]] = {}
         self._resolved_class_mappings: Optional[Dict[str, Dict[str, int]]] = None
         self._masked_training_positives: dict[int, frozenset[int]] = {}
         self._training_positive_mask_initialized = False
@@ -98,6 +105,7 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             "normalization": resolved_normalization,
             "normalization_epsilon": self.normalization_epsilon,
             "target_specs": self.target_specs,
+            "chemistry": self.chemistry,
             "annotation_settings": self.get_annotation_settings().get_config(),
             "split": self.get_split_config(),
         }
@@ -417,6 +425,21 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         molecule_index = self.get_mapped_annotation_index() if "molecule" in self.target_specs else None
         mappings: Dict[str, Dict[str, int]] = {}
         for field, spec in self.target_specs.items():
+            if field == "chemical_class":
+                descriptions = self.get_chemical_descriptions()
+                mapped_names = {"|".join(identity) for identity in molecule_index.annotation_identities}
+                values = sorted({name for identity, record in descriptions.items()
+                                 if identity in mapped_names for name in record["possible_classes"]})
+                if not values:
+                    raise ValueError("The selected ion catalogue has no chemical class descriptions.")
+                mappings[field] = build_class_mapping(values, spec.get("class_mapping"))
+                continue
+            if field == "element_counts":
+                from msi_dataset_manager.annotations.chemistry import parse_formula
+                elements = sorted({element for formula, _ in molecule_index.annotation_identities
+                                   for element in parse_formula(formula)})
+                mappings[field] = build_class_mapping(elements, spec.get("class_mapping"))
+                continue
             values = (
                 [
                     f"{formula}|{adduct}"
@@ -428,8 +451,32 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
                 else metadata_values(metadata, field)
             )
             mappings[field] = build_class_mapping(values, spec.get("class_mapping"))
+        if "chemical_class" in mappings:
+            descriptions = self.get_chemical_descriptions()
+            classes = mappings["chemical_class"]
+            self._chemical_class_columns = {
+                index: tuple(classes[name] for name in descriptions.get(identity, {}).get("certain_classes", ())
+                             if name in classes)
+                for identity, index in mappings["molecule"].items()
+            }
         self._resolved_class_mappings = mappings
         return mappings
+
+    def get_chemical_descriptions(self) -> dict[str, Any]:
+        """Read the configured frozen chemistry snapshot once, without network access.
+
+        :return: Ion-keyed candidate sets and conservative class assignments.
+        :rtype: dict[str, Any]
+        :raises ValueError: If the chemical class target has no explicit snapshot.
+        """
+        if self._chemical_descriptions is None:
+            from msi_dataset_manager.annotations.chemistry import read_chemistry
+            if not all(self.chemistry.get(key) for key in ("path", "provider", "version")):
+                raise ValueError("Chemical classes require chemistry.path, provider and version.")
+            self._chemical_descriptions = read_chemistry(
+                self.chemistry["path"], provider=self.chemistry["provider"], version=self.chemistry["version"],
+            )
+        return self._chemical_descriptions
 
     def _sample(self, spectrum_id: int, spectrum: torch.Tensor) -> Tuple[Any, ...]:
         """Attach configured targets and per-target availability masks.
@@ -454,12 +501,14 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         mappings = self.get_class_mappings()
         metadata = (
             annotation_reader.get_spectrum_metadata(spectrum_id)
-            if any(field != "molecule" for field in self.target_specs)
+            if any(field not in {"molecule", "chemical_class", "element_counts"} for field in self.target_specs)
             else {}
         )
         targets: Dict[str, torch.Tensor] = {}
         target_masks: Dict[str, torch.Tensor] = {}
         for field, spec in self.target_specs.items():
+            if field in {"chemical_class", "element_counts"}:
+                continue
             mapping = mappings[field]
             if field == "molecule":
                 target = torch.zeros(len(mapping), dtype=torch.float32)
@@ -527,6 +576,23 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
                 )
             targets[field] = torch.tensor(class_index, dtype=torch.long)
             target_masks[field] = torch.tensor(True)
+        # Derived chemistry targets preserve incomplete annotation semantics
+        if "chemical_class" in self.target_specs:
+            mapping = mappings["chemical_class"]
+            target = torch.zeros(len(mapping), dtype=torch.float32)
+            positive_indices = (targets["molecule"] > 0.5).nonzero(as_tuple=True)[0]  # (P,)
+            for index in positive_indices.tolist():
+                columns = self._chemical_class_columns[index]
+                if columns:
+                    target[list(columns)] = 1.0
+            targets["chemical_class"] = target
+            # REMARK: Zero means unlabelled, not a verified absent chemical class.
+            available = bool(target_masks["molecule"].any())
+            target_masks["chemical_class"] = torch.full_like(target, available, dtype=torch.bool)
+        if "element_counts" in self.target_specs:
+            # Composition is supervised only for single-component synthetic spectra.
+            targets["element_counts"] = torch.zeros(len(mappings["element_counts"]), dtype=torch.float32)
+            target_masks["element_counts"] = torch.zeros(len(mappings["element_counts"]), dtype=torch.bool)
         return TargetSample(values=targets, masks=target_masks)
 
     def _configure_training_positive_mask(self, train_partition: Any) -> None:
@@ -620,15 +686,21 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         for field, raw_spec in target_specs.items():
             spec = dict(raw_spec)
             target_type = spec.get("type")
-            if target_type not in {"single_label", "multi_label"}:
+            if target_type not in {"single_label", "multi_label", "regression"}:
                 raise_validation_error(
                     "PixelDataset",
-                    f"Target '{field}' type must be 'single_label' or 'multi_label'.",
+                    f"Target '{field}' type must be 'single_label', 'multi_label', or 'regression'.",
                 )
             if field == "molecule" and target_type != "multi_label":
                 raise_validation_error(
                     "PixelDataset", "Target 'molecule' must be multi_label."
                 )
+            if field in {"chemical_class", "element_counts"}:
+                expected = "regression" if field == "element_counts" else "multi_label"
+                if "molecule" not in target_specs or target_type != expected:
+                    raise ValueError(f"Target '{field}' requires molecule targets and type='{expected}'.")
+            elif target_type == "regression":
+                raise ValueError("Only element_counts currently supports regression targets.")
             mapping = spec.get("class_mapping")
             if mapping is not None:
                 spec["class_mapping"] = {

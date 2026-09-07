@@ -20,6 +20,10 @@ from .autoencoder.head.class_balanced_multilabel_bce_loss import (
 )
 from .autoencoder.head.multilabel_bce_loss import MSIMultiLabelBCELoss
 from .autoencoder.head.nnpu_multilabel_loss import MSINNPUMultiLabelLoss
+from .autoencoder.head.evidence_losses import SignalMaskedBCELoss, ThreeStateCrossEntropyLoss
+from .autoencoder.head.variational_pu_loss import VariationalPULoss
+from .autoencoder.head.symmetric_pu_ranking_loss import SymmetricPURankingLoss
+from .autoencoder.pretraining.element_count_loss import ElementCountLoss
 from .autoencoder.reconstruction.masserstein_loss import MSIMassersteinLoss
 from .autoencoder.reconstruction.mse_loss import MSIMSELoss
 from .autoencoder.reconstruction.sobolev_loss import MSISobolevLoss
@@ -44,4 +48,9 @@ __all__ = [
     "MSIRegularizationCriterion",
     "MSISobolevLoss",
     "MSIUniformityLoss",
+    "SignalMaskedBCELoss",
+    "ThreeStateCrossEntropyLoss",
+    "VariationalPULoss",
+    "SymmetricPURankingLoss",
+    "ElementCountLoss",
 ]

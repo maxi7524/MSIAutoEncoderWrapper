@@ -120,6 +120,15 @@ class AnnotationAwareDatasetMixin:
             self._selection = None
         else:
             visible = self._annotation_visible_source_indices()
+            if self._subset_config.get("method") == "source_indices":
+                indices = tuple(self._subset_config.get("indices", ()))
+                if not indices or any(isinstance(i, bool) or not isinstance(i, int) for i in indices):
+                    raise ValueError("source_indices selection requires nonempty integer source IDs.")
+                if len(set(indices)) != len(indices) or not set(indices).issubset(set(visible.tolist())):
+                    raise ValueError("Explicit source IDs must be unique and annotation-visible.")
+                self._selection = IndexSelection(tuple(sorted(indices)))
+                self._partitions = None
+                return self
 
             def group_provider(public_indices: range, **parameters: Any) -> list[Any]:
                 source_indices = [int(visible[index]) for index in public_indices]

@@ -1,0 +1,216 @@
+# Fisher--Rao spectral-plus-hinge activation threshold: refinement of one decade.
+# 3 weights x 5 repetitions = 15 training tasks.
+#
+# The parent sweep (kidney-fisher-rao-spectral-hinge) showed this penalty is inert at
+# and below 1e-3 and already costly at 1e-2: mean angular displacement at eps=0.1 was
+# 2.80, 2.80 and 2.71 degrees for 1e-5, 1e-4 and 1e-3 against 2.74 for the
+# unregularized baseline, then 2.45 at 1e-2 and 10.49 (sd 9.09, i.e. seed-unstable) at
+# 1e-1. The transition from inert to active therefore lies inside the 1e-3 .. 1e-2
+# decade, and this campaign samples it at 2e-3, 4e-3 and 8e-3.
+#
+# The decade's endpoints are deliberately NOT repeated. `runtime.planning.plan
+# .repetition_seed` hashes only `base_seed:purpose:repetition`, with no grid index, so
+# every cell of every campaign sharing these run seeds receives the same five seed
+# pairs. Re-running 1e-3 or 1e-2 under seeds 1000/2000 would reproduce the parent
+# campaign's models bit for bit. Those two points are read from that campaign instead,
+# which also keeps all five weights paired with the same baseline repetitions.
+#
+# Every other setting is copied unchanged from the parent campaign so the results pool
+# with it and with bce-baseline-20260905-01 on one axis.
+schema_version: 1
+
+experiment:
+  name: kidney-fisher-rao-hinge-activation
+
+task:
+  entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
+  preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
+  test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
+  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
+  parameters:
+    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
+    factory_parameters:
+      project_path: data/kidney_workspace
+      project_path_anchor: repository
+      image_path: datasets/kidney/kidney.imzML
+      device: null
+      reader:
+        strategy: PyImzMLReader
+        parameters: {}
+      annotations:
+        strategy: auto
+        parameters: {}
+      binning:
+        strategy: LinearBinning
+        parameters:
+          bin_step: 0.55
+          x_min: 200.0
+          x_max: 900.0
+          aggregation: sum
+      inverse_binning:
+        strategy: PassthroughInverseBinner
+      dataset:
+        strategy: PixelDataset
+        parameters:
+          source: image
+          normalization: tic
+          target_specs:
+            molecule:
+              type: multi_label
+          annotation_settings:
+            mapping:
+              x_mapping: binner
+            selection:
+              annotated_fraction: 1.0
+              unannotated_fraction: 0.0
+              max_unannotated_to_annotated_ratio: 0.0
+              seed: 42
+            targets:
+              molecule:
+                empty_spectrum_policy: exclude
+                unobserved_label_policy: unlabelled
+                add_annotation_presence_target: false
+          subset:
+            fraction: 0.1
+            seed: 42
+            method: proportional_multilabel
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_count: 3
+          split:
+            strategy: proportional_multilabel
+            fractions:
+              train: 0.8
+              validation: 0.1
+              test: 0.1
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_per_split: 1
+      variant:
+        grid: architectures
+      predictive:
+        projector:
+          strategy: LinearProjector
+          parameters:
+            latent_dim: 10
+            projection_dim: 64
+        heads:
+          molecule_primary:
+            target_field: molecule
+            strategy: LinearClassificationHead
+            parameters:
+              latent_dim: 10
+              output_dim: auto_from_target
+              hidden_dim: 128
+              dropout: 0.1
+    model_name: null
+    training:
+      patience: 10
+      continuation:
+        enabled: true
+        resume: true
+        checkpoint_every_epochs: 1
+      checkpoint:
+        enabled: true
+        restore_best: true
+      phases:
+        - phase_name: joint_predictive
+          epochs: 15
+          batch_size: 64
+          gradient_clip_norm: 5.0
+          optimizer:
+            type: AdamW
+            params:
+              lr: 0.001
+              weight_decay: 0.0001
+          criterions:
+            grid: objectives
+
+runs:
+  repetitions: 5
+
+seeds:
+  common_seeds:
+    split: 42
+    dataloader: 43
+  run_seeds:
+    model_initialization: 1000
+    training: 2000
+
+grid:
+  architectures:
+    values:
+      - name: conv1d-ae-32-16-8-latent-10
+        preset: CNNAutoencoder
+        parameters:
+          latent_dim: 10
+          channels: [1, 32, 16, 8]
+          kernels: [5, 7, 3]
+          strides: [3, 3, 3]
+          output_normalization:
+            type: tic
+            parameters:
+              epsilon: 1.0e-12
+
+  objectives:
+    values:
+      - reconstruction: &reconstruction
+          masserstein:
+            target: MassersteinLoss
+            weight: 1.0
+        heads: &molecule_head_loss
+          molecule_primary:
+            balanced_bce:
+              target: ClassBalancedMultiLabelBCELoss
+              weight: 0.2
+              params:
+                class_balance_method: train_inverse_prevalence
+                max_positive_weight: 20.0
+                reduction: balanced_class_mean
+                unknown_label_policy: assume_negative
+        regularization:
+          contractive: &fisher_spectral_hinge
+            target: ContractiveLoss
+            weight: 2.0e-3
+            params:
+              # Frozen from the parent campaign: the threshold is the baseline
+              # validation Q95 of the spectral norm under canonical u and the Fisher
+              # simplex geometry. It must not be recalibrated here, or the weight
+              # sweep would confound two changes.
+              calculation_method: exact_autograd_jacobian
+              latent_source: auto
+              penalty_metric: spectral_plus_hinged
+              penalized_space: u
+              input_geometry: fisher_rao
+              hinge_threshold: 7.0
+              hinge_alpha: 2.0
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 4.0e-3
+          
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 6.0e-3
+
+      - reconstruction: *reconstruction
+        heads: *molecule_head_loss
+        regularization:
+          contractive:
+            <<: *fisher_spectral_hinge
+            weight: 8.0e-3
+
+execution:
+  backend: local
+  max_parallel_runs: 1
+
+reports: []
+
+reporting:
+  continue_on_error: true
