@@ -44,7 +44,7 @@ def plot_metric_distribution(values: np.ndarray, metric: str, ax: Axes | None = 
     return figure, ax
 
 
-def plot_violin_with_points(values: np.ndarray, position: float, ax: Axes | None = None, width: float = 0.8, color: str | None = None, jitter: float = 0.05, point_size: float = 18.0, label: str | None = None, theme: VisualizationTheme | str | None = None):
+def plot_violin_with_points(values: np.ndarray, position: float, ax: Axes | None = None, width: float = 0.8, color: str | None = None, jitter: float = 0.05, point_size: float = 18.0, label: str | None = None, theme: VisualizationTheme | str | None = None, overlay_values: np.ndarray | None = None):
     """Draw one violin body plus its raw values as jittered scatter, at one x position.
 
     A violin's estimated density shape can visually smooth over the fact that a
@@ -53,6 +53,12 @@ def plot_violin_with_points(values: np.ndarray, position: float, ax: Axes | None
     implying a smoother distribution than the data supports. Repeated calls on the
     same ``ax`` at different ``position``s build up a multi-group plot (same pattern
     as ``plot_metric_distribution``).
+
+    ``overlay_values`` replaces the scatter's data while the violin keeps using the
+    complete ``values``. It exists for groups too large to overlay exhaustively --
+    hundreds of thousands of pixels render as solid ink -- and the caller is then
+    responsible for documenting how the displayed subset was drawn. The density
+    itself is never computed from a subsample.
     """
     resolved = resolve_theme(theme)
     values = np.asarray(values, dtype=float)
@@ -70,8 +76,10 @@ def plot_violin_with_points(values: np.ndarray, position: float, ax: Axes | None
     for key in ("cmeans", "cmins", "cmaxes", "cbars"):
         if key in parts:
             parts[key].set_color(color)
-    jittered_x = position + np.random.default_rng(0).uniform(-jitter, jitter, size=values.size)
-    ax.scatter(jittered_x, values, color=color, s=point_size, alpha=resolved.primary_alpha, edgecolor=resolved.panel_color, linewidth=0.3, zorder=3, label=label)
+    points = values if overlay_values is None else np.asarray(overlay_values, dtype=float)
+    points = points[np.isfinite(points)]
+    jittered_x = position + np.random.default_rng(0).uniform(-jitter, jitter, size=points.size)
+    ax.scatter(jittered_x, points, color=color, s=point_size, alpha=resolved.primary_alpha, edgecolor=resolved.panel_color, linewidth=0.3, zorder=3, label=label)
     return figure, ax
 
 

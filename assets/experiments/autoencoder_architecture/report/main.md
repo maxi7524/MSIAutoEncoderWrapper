@@ -96,6 +96,26 @@ format:
 
 ## Synteza i decyzje
 
+
+### Kolejność decyzji, wyjasnienie
+
+1. zwykłe bce 
+   - tworzymy base line  
+2. contractive
+   - dodaje koszt który zmienia geometrie.
+   - jest niezalezny od głowy, poniewaz to zmienia kształt wejścia, czyli jeżęli dla jeden funkcji wejście jest "łatwiejsze w interpetacji" to dla każdej innej tak będzie, ponieważ zmienia tylko końcowowa interpretacaj w tym wszystkim
+3.  head predykcyjny wraz z funkcjami kosztu wpływającymi na predykcje (contrastive learnring) 
+   - tutaj dajemy rózne heady i pytamy się czy wychwytują związki odpowiednio 
+   - contrastive learnign usi być tutaj uwzględniony, ponieważ tutaj defniujemy podobieństwo względem wyjściwoych klas, więc głwoa predykcyjan bce będzie od tego zaelżna (on każe za to żę pewne obiekty powinny byc podobnymi klasami, ale to podobienstwo tez musi wyhcytywać wtedy bce) 
+4.  head molekularny (związki i klasy)
+   - dodaje koszt który zmienia geometrie 
+   - znowu jest niezależny od głowy (powinień byc przed klasyfikatorami) 
+   - powienin byc przed headem predykcyjnym, ale nie wiem jak siez tymwyoribe 
+5. Pretrening latentu
+   - dodaje pretrening który tworzy poczatkową geometrię która uwzględnia wszystkei piki, i jakieś proste kombinacje wraz z uwzględniem klas zwiażków (konstruuje baze bez konkrentydch reperzentantów pełnych widm) 
+   - znowu to jest niezależne od architektury, to po prostu powinno ułatwić ułozyć elementy w przestrzeni. 
+
+
 ### Rekonstrukcja - pełna reprezetnacja bazy 
 
 #### pomysł 

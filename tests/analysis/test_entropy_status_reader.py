@@ -153,3 +153,60 @@ def test_read_entropy_campaign_sorted_and_ignores_progress_files(tmp_path: Path)
 def test_read_entropy_campaign_missing_status_directory_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         read_entropy_campaign(tmp_path / "missing", tmp_path / "models")
+
+
+def test_read_entropy_campaign_falls_back_to_the_campaign_scoped_store_name(
+    tmp_path: Path,
+) -> None:
+    # Later campaigns copy models back as <campaign_id>__<task_id> rather than under
+    # the manifest's runtime.model_name, so resolving only the manifest name silently
+    # returned no artifacts for every task of those campaigns.
+    campaign_id = "contractive-20260905-01"
+    status_directory = tmp_path / campaign_id / "plan" / "status"
+    model_store_directory = tmp_path / "workspace" / "models" / "kidney"
+    _write_entropy_task(
+        status_directory,
+        model_store_directory,
+        task_id="task_000000",
+        model_name="kidney-contractive__cfg_abc123__grid_0000__rep_00",
+        grid_id="grid_0000",
+        repetition=0,
+    )
+    # Rename the store directory to the campaign-scoped convention, leaving the
+    # manifest's runtime.model_name pointing at a directory that no longer exists.
+    (model_store_directory / "kidney-contractive__cfg_abc123__grid_0000__rep_00").rename(
+        model_store_directory / f"{campaign_id}__task_000000"
+    )
+
+    tasks = read_entropy_campaign(status_directory, model_store_directory)
+
+    assert tasks[0].model_config == {"model": {"name": "conv1d-ae"}}
+    assert tasks[0].history == [{"metrics": {"epoch": 1, "total_loss": 1.0}}]
+
+
+def test_read_entropy_campaign_prefers_the_manifest_name_over_the_fallback(
+    tmp_path: Path,
+) -> None:
+    # Both conventions coexist in one store; the manifest name must keep winning so
+    # campaigns that already resolved correctly are unaffected by the fallback.
+    campaign_id = "mixed-campaign"
+    status_directory = tmp_path / campaign_id / "plan" / "status"
+    model_store_directory = tmp_path / "workspace" / "models" / "kidney"
+    _write_entropy_task(
+        status_directory,
+        model_store_directory,
+        task_id="task_000000",
+        model_name="kidney-mixed__cfg_abc123__grid_0000__rep_00",
+        grid_id="grid_0000",
+        repetition=0,
+    )
+    decoy = model_store_directory / f"{campaign_id}__task_000000" / "config"
+    decoy.mkdir(parents=True)
+    (decoy / "config.json").write_text(
+        json.dumps({"model": {"name": "decoy"}}), encoding="utf-8"
+    )
+    (decoy / "history.json").write_text(json.dumps([]), encoding="utf-8")
+
+    tasks = read_entropy_campaign(status_directory, model_store_directory)
+
+    assert tasks[0].model_config == {"model": {"name": "conv1d-ae"}}
