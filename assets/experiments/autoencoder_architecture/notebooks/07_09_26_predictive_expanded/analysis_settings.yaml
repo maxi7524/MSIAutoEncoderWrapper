@@ -1,0 +1,35 @@
+# Paths are relative to the repository root; absolute paths are also accepted.
+workspace: data/kidney_workspace
+model_store: data/kidney_workspace/models/kidney
+experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_initial.yaml
+cache_directory: data/kidney_workspace/cache/predictive_heads_analysis
+sources:
+  - name: predictive_initial
+    experiment_name: kidney-predictive-heads-initial
+    # Set the downloaded .../plan/status or .../execution/<campaign>/status path
+    # if automatic discovery finds zero or multiple matching campaigns.
+    status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-initial-20260908-01/plan/status
+    required: true
+    role: candidate
+    enabled: true
+  - name: historical_bce
+    experiment_name: kidney-contractive-baseline-bce
+    status_directory: data/kidney_workspace/configs/entropy-runs/bce-baseline-20260905-01/plan/status
+    required: true
+    role: baseline
+    enabled: true
+target_field: molecule
+device: cpu
+batch_size: 256
+pixel_fraction: 1.0
+sample_seed: 42
+geometry_sample_size: 512
+neighbours: 10
+probe_penalty: 0.01
+expected_seeds: 5
+evidence:
+  absolute_threshold: 0.0
+  relative_threshold: 0.0119
+  bin_radius: 1
+# Optional old absolute directory prefix -> local directory prefix overrides.
+path_remap: {}
