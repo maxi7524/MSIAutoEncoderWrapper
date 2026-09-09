@@ -17,7 +17,7 @@ import torch
 from ....data.annotation_evidence import IonCatalogue, SignalEvidencePolicy
 from ....models.model_loader import ModelLoader
 from ....utils.logger import get_custom_logger
-from ..heads.predictive_comparison import ranking_tables
+from ..heads.predictive_comparison import ranking_tables, score_histograms, state_separation
 from ..latent.predictive_geometry import geometry_tables, ridge_probe
 from ..latent.sphere_geometry import canonicalize, encoder_layer_norm_parameters
 from ..reconstruction.metrics import masserstein_distances, reconstruction_metrics
@@ -25,6 +25,57 @@ from .predictive_campaign import fingerprint, relocated_data
 from .sweep_evaluation import MaterializedSplit, materialize_split
 
 logger = get_custom_logger(__name__)
+
+#: Settings that change the stored numbers. Anything outside this set is
+#: presentational (shortlists, expected seed counts, cache location) and must not
+#: invalidate hours of inference when a notebook's reporting choices change.
+INFERENCE_SETTINGS = ("workspace", "model_store", "experiment_config", "sources", "target_field",
+                      "device", "batch_size", "pixel_fraction", "sample_seed", "geometry_sample_size",
+                      "neighbours", "probe_penalty", "case_count", "evidence", "path_remap")
+
+#: Provenance entries that identify the computation itself. ``git_commit`` is
+#: recorded for traceability but deliberately excluded: the analysed source content
+#: is already covered by ``source_sha256``, so committing a notebook must not
+#: invalidate an hours-long inference cache.
+PROVENANCE_IDENTITY = ("settings", "source_sha256", "experiment_sha256", "versions",
+                       "input_sha256", "class_names", "catalogue_bins")
+
+#: Source subtrees and modules that determine how a saved split is decoded into
+#: spectra, targets and availability masks. The decoded-tensor cache is keyed on
+#: these instead of the whole package, so editing an analysis or plotting module
+#: does not force a full re-decode of every partition.
+DECODING_SOURCES = ("data", "readers", "binners", "normalization", "models/datasets",
+                    "analysis/autoencoder/experiments/sweep_evaluation.py")
+
+
+def provenance_identity(record: dict) -> dict:
+    """Reduce a provenance record to the entries that must match for cache reuse.
+
+    :param record: Output of :func:`provenance`, optionally with input digests added.
+    :type record: dict
+    :return: Comparable subset; traceability-only entries are dropped.
+    :rtype: dict
+    """
+    return {key: record[key] for key in PROVENANCE_IDENTITY if key in record}
+
+
+def _source_digest(source_root: Path, prefixes: tuple[str, ...] | None = None) -> str:
+    """Hash the content of every selected Python source file, path included.
+
+    :param source_root: Package root whose modules are hashed.
+    :param prefixes: Optional relative directory or file prefixes; ``None`` hashes all.
+    :return: SHA-256 digest over ordered (relative path, bytes) pairs.
+    :rtype: str
+    """
+    digest = hashlib.sha256()
+    for path in sorted(source_root.rglob("*.py")):
+        relative = path.relative_to(source_root).as_posix()
+        if prefixes is not None and not any(relative == prefix or relative.startswith(prefix.rstrip("/") + "/")
+                                            for prefix in prefixes):
+            continue
+        digest.update(relative.encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def _array_hash(*arrays: np.ndarray) -> str:
@@ -46,13 +97,13 @@ def provenance(settings: dict) -> dict:
     """
     root = Path(settings["repository_root"])
     source_root = root / "src" / "msi_autoencoder_wrapper"
-    # Include reused metrics, model and data implementations, including local edits.
-    digest = hashlib.sha256()
-    for path in sorted(source_root.rglob("*.py")):
-        digest.update(str(path.relative_to(source_root)).encode())
-        digest.update(path.read_bytes())
+    # REMARK: The full digest covers every reused metric, model and data
+    # implementation, local edits included, so an analysis change invalidates the
+    # stored numbers. The narrower decoding digest keys only the decoded tensors.
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=False)
-    return {"settings": settings, "source_sha256": digest.hexdigest(),
+    return {"settings": {key: settings[key] for key in INFERENCE_SETTINGS if key in settings},
+            "source_sha256": _source_digest(source_root),
+            "decoding_sha256": _source_digest(source_root, DECODING_SOURCES),
             "git_commit": commit.stdout.strip(),
             "experiment_sha256": hashlib.sha256(Path(settings["experiment_config"]).read_bytes()).hexdigest(),
             "versions": {name: importlib.metadata.version(name) for name in ("numpy", "pandas", "scipy", "scikit-learn", "torch")}}
@@ -84,8 +135,9 @@ def prepare_splits(models: pd.DataFrame, settings: dict) -> tuple[dict, IonCatal
     catalogue = IonCatalogue.from_dataset(wrapper.active_dataset, settings["target_field"])
     axis = np.asarray(wrapper.active_context.binner.GetXAxis())  # (M,)
     # REMARK: The existing decoder cache omits assignments from its key. Namespace
-    # it by the full saved data contract AND source-file identity to prevent reuse
-    # across same-sized but different partitions or replaced input files.
+    # it by the full saved data contract AND the identity of the source files and
+    # input files that actually determine decoding, to prevent reuse across
+    # same-sized but different partitions or replaced input files.
     file_identity = []
     for component in local_config["data"]["context"]["components"].values():
         for key, value in component.get("parameters", {}).items():
@@ -101,7 +153,7 @@ def prepare_splits(models: pd.DataFrame, settings: dict) -> tuple[dict, IonCatal
                             file_identity.append((str(binary), info.st_size, info.st_mtime_ns))
     implementation = provenance(settings)
     cache = Path(settings["cache_directory"]) / "decoded" / fingerprint(
-        [models.iloc[0].data_contract, file_identity, implementation["source_sha256"], implementation["versions"]]
+        [models.iloc[0].data_contract, file_identity, implementation["decoding_sha256"], implementation["versions"]]
     )
     splits = {}
     for name in ("train", "validation", "test"):
@@ -145,7 +197,8 @@ def infer_model(model: Any, spectra: torch.Tensor, head: str, *, batch_size: int
     return {name: np.concatenate(chunks, axis=0) for name, chunks in result.items()}  # (N, ...)
 
 
-def reconstruction_tables(split: MaterializedSplit, outputs: np.ndarray, axis: np.ndarray, *, options: dict, batch_size: int) -> dict[str, pd.DataFrame]:
+def reconstruction_tables(split: MaterializedSplit, outputs: np.ndarray, axis: np.ndarray, *, options: dict,
+                          batch_size: int, device: str | torch.device = "cpu") -> dict[str, pd.DataFrame]:
     """Reuse training-compatible reconstruction costs and preserve pixel distributions.
 
     :param split: Materialized model inputs and sample identities.
@@ -153,12 +206,14 @@ def reconstruction_tables(split: MaterializedSplit, outputs: np.ndarray, axis: n
     :param axis: Physical bin coordinates, ``(M,)``.
     :param options: Saved Masserstein parameters from this model's objective.
     :param batch_size: Cost computation batch size.
+    :param device: Device the Masserstein transport cost is evaluated on.
     :return: Pixel costs, feature errors and run summaries.
     :rtype: dict[str, pandas.DataFrame]
     """
     x = split.spectra.numpy()  # (N, M)
     values = reconstruction_metrics(x, outputs)
-    values["masserstein"] = masserstein_distances(x, outputs, axis, batch_size=batch_size, criterion_options=options)
+    values["masserstein"] = masserstein_distances(x, outputs, axis, batch_size=batch_size,
+                                                  device=device, criterion_options=options)
     pixel_keys = ("mse", "mae", "cosine_similarity", "spectral_angle", "tic_error", "masserstein")
     pixels = pd.DataFrame({"row_position": np.arange(len(x)), "split_position": split.indices,
                            "annotation_count": (split.targets * split.mask).sum(axis=1),
@@ -212,7 +267,7 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
     run_metadata["input_sha256"] = input_digests
     run_metadata["class_names"] = list(catalogue.class_names)
     run_metadata["catalogue_bins"] = catalogue.bins
-    run_key = fingerprint(run_metadata)
+    run_key = fingerprint(provenance_identity(run_metadata))
     run_dir = root / "evaluations" / run_key
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "metadata.json").write_text(json.dumps(run_metadata, indent=2))
@@ -259,18 +314,26 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
         for name, split in splits.items():
             logger.info("Evaluating %s: %s (%s pixels).", row["model_id"], name, split.sampled)
             output = infer_model(model, split.spectra, row["head"], batch_size=settings["batch_size"])
-            tables = ranking_tables(output["logits"], split.targets, state_arrays[name], train_counts, catalogue.class_names)
+            device = settings["device"]
+            tables = ranking_tables(output["logits"], split.targets, state_arrays[name], train_counts,
+                                    catalogue.class_names, device=device)
+            ### How each head orders operational negatives against unlabelled entries
+            tables["state_separation"] = state_separation(output["logits"], state_arrays[name], train_counts,
+                                                          catalogue.class_names, device=device)
+            tables["score_histograms"] = score_histograms(output["logits"], state_arrays[name], train_counts, device=device)
             if name == "train":
                 train_latent = output["latent"]
             else:
                 if train_latent is None or not np.asarray(train.mask).all():
                     raise ValueError("The annotation probe needs train-first splits and fully available training labels.")
                 probe_scores = ridge_probe(train_latent, train.targets, output["latent"], penalty=settings["probe_penalty"])  # (N, C)
-                probe = ranking_tables(probe_scores, split.targets, state_arrays[name], train_counts, catalogue.class_names)
+                probe = ranking_tables(probe_scores, split.targets, state_arrays[name], train_counts,
+                                       catalogue.class_names, device=device)
                 tables["probe_prediction"] = probe["prediction"]
                 tables["probe_per_class"] = probe["per_class"]
             tables.update(reconstruction_tables(split, output["reconstruction"], axis,
-                                               options=masserstein.get("params", {}), batch_size=settings["batch_size"]))
+                                                options=masserstein.get("params", {}),
+                                                batch_size=settings["batch_size"], device=device))
             # Persist shared representative spectra: fixed positions, not selected by
             # whichever model wins. Worst cases remain available in the pixel table.
             sample = geometry_indices[name]
@@ -281,8 +344,8 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
                         tables.setdefault(key, pd.DataFrame())
                         tables[key] = pd.concat([tables[key], frame.assign(space=space)], ignore_index=True)
             # All model-specific worst examples are explicitly labelled as selected.
-            worst = np.argsort(tables["reconstruction_pixels"].masserstein.to_numpy())[-3:]
-            cases = np.unique(np.concatenate([sample[:3], worst]))  # (K_cases,)
+            worst = np.argsort(tables["reconstruction_pixels"].masserstein.to_numpy())[-settings["case_count"]:]
+            cases = np.unique(np.concatenate([sample[:settings["case_count"]], worst]))  # (K_cases,)
             case_rows = pd.DataFrame({"row_position": np.repeat(cases, len(axis)),
                                       "mz": np.tile(axis, len(cases)),
                                       "input": split.spectra.numpy()[cases].reshape(-1),
@@ -320,8 +383,8 @@ def load_table(settings: dict, table: str) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError("Run part_1_campaign_audit and part_2_shared_inference first.")
     manifest = json.loads(path.read_text())
-    stored = json.loads((Path(manifest["run_directory"]) / "metadata.json").read_text())
-    current = provenance(settings)
+    stored = provenance_identity(json.loads((Path(manifest["run_directory"]) / "metadata.json").read_text()))
+    current = provenance_identity(provenance(settings))
     if any(stored.get(key) != value for key, value in current.items()):
         raise ValueError("Settings, source code or package versions changed; rerun shared inference.")
     inventory = pd.read_csv(Path(manifest["run_directory"]) / "inventory.csv").set_index("model_id")

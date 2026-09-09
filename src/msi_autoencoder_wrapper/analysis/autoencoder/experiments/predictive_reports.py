@@ -77,6 +77,124 @@ def paired_comparisons(units: pd.DataFrame, groups: list[str]) -> tuple[pd.DataF
     return pd.DataFrame(differences), pd.DataFrame(summaries)
 
 
+def condition_order(inventory: pd.DataFrame) -> list[str]:
+    """Return one stable left-to-right condition order for every figure and table.
+
+    Figures are read against each other, so the horizontal position of a condition
+    must not depend on which subset a particular notebook happens to plot. Baseline
+    roles come first as the reference, then loss families alphabetically, then the
+    weighting variants inside a family.
+
+    :param inventory: Audited model inventory carrying role, family and label.
+    :type inventory: pandas.DataFrame
+    :return: Condition labels in the shared display order.
+    :rtype: list[str]
+    """
+    ordered = inventory.drop_duplicates("label").copy()
+    ordered["_baseline"] = (ordered.role != "baseline").astype(int)
+    return ordered.sort_values(["_baseline", "family", "weight_mode", "label"]).label.tolist()
+
+
+def condition_summary(units: pd.DataFrame, groups: list[str], *, value: str = "value") -> pd.DataFrame:
+    """Summarize experimental units per condition without discarding the units.
+
+    :param units: Deduplicated output of :func:`experimental_units`.
+    :param groups: Measurement keys retained alongside the condition identity.
+    :param value: Numeric column summarized.
+    :return: Mean, standard deviation, extremes and seed count per condition.
+    :rtype: pandas.DataFrame
+    """
+    keys = ["source", "role", "condition", "label", *groups]
+    return units.groupby(keys, dropna=False)[value].agg(
+        mean="mean", std="std", minimum="min", maximum="max", seeds="count").reset_index()
+
+
+def resolve_shortlist(settings: dict, order: list[str], *, decision: pd.DataFrame | None = None,
+                      size: int = 4) -> list[str]:
+    """Resolve which conditions the detailed per-class analyses compare.
+
+    Figures that overlay every condition become unreadable long before nine of them,
+    and the detailed stage exists to characterize a decision that the selection stage
+    has already made. Three sources are consulted in order: the explicit list in the
+    analysis settings, then the validation ranking of a supplied decision table, then
+    the shared campaign order. The explicit list wins because the shortlist is a
+    scientific choice, and it is presentational, so editing it never invalidates the
+    stored inference.
+
+    :param settings: Resolved analysis settings; ``shortlist`` may name conditions.
+    :type settings: dict
+    :param order: All audited condition labels, normally :func:`condition_order`.
+    :type order: list[str]
+    :param decision: Optional output of :func:`decision_table` supplying the fallback
+        validation ranking.
+    :type decision: pandas.DataFrame | None
+    :param size: Number of conditions kept by either fallback.
+    :type size: int
+    :return: Condition labels, all of which exist in the campaign.
+    :rtype: list[str]
+    :raises ValueError: If a configured label matches no audited condition.
+    """
+    configured = list(settings.get("shortlist") or [])
+    if configured:
+        missing = [label for label in configured if label not in set(order)]
+        if missing:
+            raise ValueError(f"Configured shortlist labels are not present in the campaign: {missing}")
+        return configured
+    if decision is not None and decision.eligible.any():
+        ranked = decision[decision.eligible].sort_values("validation_rank").label.tolist()
+        logger.info("No configured shortlist; using the %s best validation-ranked conditions.", size)
+        return ranked[:size]
+    logger.warning("No configured shortlist and no decision table; using the first %s campaign conditions.", size)
+    return list(order)[:size]
+
+
+def baseline_contrasts(contrasts: pd.DataFrame, inventory: pd.DataFrame, *,
+                       reference_role: str = "baseline") -> pd.DataFrame:
+    """Keep only comparisons against the reference condition and orient every sign.
+
+    :func:`paired_comparisons` enumerates unordered condition pairs, so half of the
+    comparisons against a baseline come out with the baseline on the left and half
+    with it on the right. Reading such a table requires checking the sign convention
+    of every row separately, which is exactly the kind of silent error a figure
+    hides. This restricts the table to baseline comparisons and rewrites each row so
+    the value is always *candidate minus reference*.
+
+    :param contrasts: Paired comparison summaries.
+    :type contrasts: pandas.DataFrame
+    :param inventory: Audited inventory carrying the ``role`` of each source.
+    :type inventory: pandas.DataFrame
+    :param reference_role: Inventory role treated as the reference.
+    :type reference_role: str
+    :return: One row per candidate condition and measurement, with ``label`` naming
+        the candidate, ``reference`` the baseline, and the difference and interval
+        bounds oriented as candidate minus reference.
+    :rtype: pandas.DataFrame
+    """
+    if contrasts.empty:
+        return contrasts.copy()
+    references = set(inventory.loc[inventory.role == reference_role, "source"])
+    rows = []
+    for row in contrasts.to_dict("records"):
+        left_is_reference = row["left_source"] in references
+        right_is_reference = row["right_source"] in references
+        if left_is_reference == right_is_reference:
+            continue
+        ## Flip the sign, the interval bounds and the pair counts together
+        flip = left_is_reference
+        record = dict(row)
+        record["label"] = row["right"] if flip else row["left"]
+        record["reference"] = row["left"] if flip else row["right"]
+        if flip:
+            record["mean_difference"] = -row["mean_difference"]
+            record["median_difference"] = -row.get("median_difference", np.nan)
+            record["ci_low"], record["ci_high"] = -row["ci_high"], -row["ci_low"]
+            record["positive_pairs"] = row["pairs"] - row.get("positive_pairs", 0)
+        rows.append(record)
+    result = pd.DataFrame(rows)
+    logger.info("Oriented %s baseline contrasts as candidate minus reference.", len(result))
+    return result
+
+
 def masking_contrasts(contrasts: pd.DataFrame, inventory: pd.DataFrame) -> pd.DataFrame:
     """Extract the matched weighted-BCE versus PN-BCE comparisons.
 
@@ -139,6 +257,14 @@ def decision_table(prediction: pd.DataFrame, reconstruction: pd.DataFrame, inven
         table["comparable_contracts"] = False
     else:
         table["comparable_contracts"] = True
+    ## Pooled counterpart of the macro selection quantity, for the same conditions
+    micro = prediction[(prediction.scope == "train_supported") & (prediction.metric == "micro_average_precision")]
+    if not micro.empty:
+        micro_units = experimental_units(micro, inventory, ["split", "population"])
+        micro_summary = micro_units.groupby([*keys, "split", "population"]).value.mean().reset_index()
+        micro_summary["measure"] = "micro_" + micro_summary["split"] + "_" + micro_summary["population"]
+        table = table.merge(micro_summary.pivot(index=keys, columns="measure", values="value").reset_index(),
+                            on=keys, how="left", validate="one_to_one")
     table["eligible"] = table.complete_seeds & table.comparable_contracts & table[required].notna().all(axis=1)
     table["validation_rank"] = table.validation_annotation_retrieval.where(table.eligible).rank(ascending=False, method="min")
     table["validation_pareto"] = False

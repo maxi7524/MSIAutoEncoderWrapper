@@ -46,7 +46,8 @@ def miniature_campaign(tmp_path):
     settings = campaign.load_settings(NOTEBOOKS / "analysis_settings.yaml")
     settings.update(workspace=str(tmp_path), model_store=str(tmp_path / "models" / "kidney"),
                     cache_directory=str(tmp_path / "cache"), geometry_sample_size=4, batch_size=3,
-                    expected_seeds=1)
+                    expected_seeds=1, case_count=2,
+                    shortlist=["pnu (ThreeStateCrossEntropyLoss)", "binary (ClassBalancedMultiLabelBCELoss)"])
     sources = []
     for source, head, target in [("predictive_initial", "pnu", "ThreeStateCrossEntropyLoss"),
                                   ("historical_bce", "binary", "ClassBalancedMultiLabelBCELoss")]:
@@ -176,7 +177,7 @@ def test_full_cache_resume_and_all_notebook_cells(miniature_campaign, monkeypatc
                   "relative_threshold": [.005, .005], "bin_radius": [1, 1],
                   "negative_fraction_of_unannotated": [.3, .4]}).to_csv(evidence / "class_regimes.csv", index=False)
     pd.DataFrame({"class_name": ["A", "B"], "evidence_auc": [.8, .4]}).to_csv(evidence / "class_separation.csv", index=False)
-    for path in sorted(NOTEBOOKS.glob("part_[1-8]_*.ipynb")):
+    for path in sorted(NOTEBOOKS.glob("part_[1-9]_*.ipynb")):
         notebook = nbformat.read(path, as_version=4)
         nbformat.validate(notebook)
         namespace = {"__name__": "__main__"}
@@ -191,13 +192,29 @@ def test_full_cache_resume_and_all_notebook_cells(miniature_campaign, monkeypatc
                     namespace["notebook_directory"] = tmp_path
                 plt.close("all")
         assert list(namespace["RESULTS"].glob("*.csv")), path.name
+        if path.name.startswith("part_3_"):
+            # Pooled aggregation must reach the reported table, not only the macro means.
+            reported = namespace["units"]
+            assert {"average_precision", "micro_average_precision", "micro_roc_auc"} <= set(reported.metric)
+            assert set(namespace["ranking_curves"].curve) == {"precision_recall", "roc"}
+        if path.name.startswith("part_4_"):
+            separation = namespace["validation_separation"]
+            assert {"positive_vs_uncertain_auc", "negative_vs_uncertain_auc"} <= set(separation.columns)
+            histograms = namespace["validation_histograms"]
+            assert set(histograms.state) == {"P", "N", "U"}
+            # Shared bin edges are what makes the stored counts overlayable across models.
+            assert histograms.groupby(["quantity", "model_id"]).left_edge.apply(tuple).nunique() == 2
         if path.name.startswith("part_8_"):
             assert set(namespace["strata"].class_name) == {"A", "B"}
             assert set(namespace["head_probe"].split) == {"validation", "test"}
             comparison = namespace["head_probe"]
-            assert np.isfinite(comparison.query("population == 'annotation_retrieval'").head_minus_probe).all()
-            np.testing.assert_array_equal(comparison.head_minus_probe.isna(),
+            assert np.isfinite(comparison.query("population == 'annotation_retrieval'")["value"]).all()
+            np.testing.assert_array_equal(comparison["value"].isna(),
                                           comparison.value_head.isna() | comparison.value_probe.isna())
+        if path.name.startswith("part_9_"):
+            agreement = namespace["agreement"]
+            assert set(agreement.left) | set(agreement.right) <= set(namespace["shortlist"])
+            np.testing.assert_allclose(agreement.difference, agreement.value_left - agreement.value_right)
     weights = Path(models.iloc[0].artifact) / "config" / "weights.pt"
     weights.write_bytes(weights.read_bytes() + b"changed")
     with pytest.raises(ValueError, match="Checkpoint bytes changed"):
@@ -217,3 +234,18 @@ def test_empty_chemistry_default_does_not_change_data_contract(miniature_campaig
     config_path.write_text(json.dumps(config))
     changed, _ = campaign.inventory(settings)
     assert changed.data_contract.nunique() == 2
+
+
+def test_history_components_separate_split_prefix_and_comparability():
+    history = pd.DataFrame({
+        "metric": ["masserstein", "validation_masserstein", "molecule_pnu__pnu_ce",
+                   "validation_molecule_pnu__pnu_ce", "total_loss", "epoch"],
+        "value": [.1, .2, .3, .4, .5, 1.],
+    })
+    result = campaign.history_components(history)
+    assert result.history_split.tolist() == ["train", "validation", "train", "validation", "train", "train"]
+    assert result.component.tolist() == ["reconstruction", "reconstruction", "head", "head", "total", "bookkeeping"]
+    assert result.component_name.tolist() == ["masserstein", "masserstein", "pnu_ce", "pnu_ce", "total_loss", "epoch"]
+    # Only the shared reconstruction cost may share a vertical axis across objectives.
+    assert result.comparable.tolist() == [True, True, False, False, False, False]
+    assert campaign.history_components(history.iloc[:0]).empty

@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -15,6 +16,9 @@ from ....utils.logger import get_custom_logger
 from .entropy_status_reader import _resolve_artifact_directory
 
 logger = get_custom_logger(__name__)
+
+#: Logged training scalars that record bookkeeping rather than an objective component.
+BOOKKEEPING_METRICS = ("epoch", "duration", "best_loss")
 
 
 def fingerprint(value: Any) -> str:
@@ -91,10 +95,16 @@ def load_settings(path: Path | str) -> dict:
     for source in settings["sources"]:
         if source.get("status_directory"):
             source["status_directory"] = str((root / source["status_directory"]).resolve())
+    settings.setdefault("case_count", 6)
+    settings.setdefault("shortlist", [])
     if settings["batch_size"] < 1 or settings["geometry_sample_size"] < 3:
         raise ValueError("batch_size >=1 and geometry_sample_size >=3 are required.")
     if not 0 < settings["pixel_fraction"] <= 1:
         raise ValueError("pixel_fraction must be in (0, 1].")
+    if settings["case_count"] < 1 or settings["case_count"] > settings["geometry_sample_size"]:
+        raise ValueError("case_count must be between one and geometry_sample_size.")
+    if not isinstance(settings["shortlist"], list):
+        raise ValueError("shortlist must be a list of condition labels.")
     settings["repository_root"] = str(root)
     return settings
 
@@ -273,6 +283,43 @@ def training_history(models: pd.DataFrame) -> pd.DataFrame:
                                  "split": entry.get("split", ""), "metric": metric, "value": value,
                                  "is_best": metrics.get("is_best", False)})
     return pd.DataFrame(rows)
+
+
+def history_components(history: pd.DataFrame) -> pd.DataFrame:
+    """Separate logged training scalars into objective components and their split.
+
+    The trainer writes one flat scalar name per logged quantity, with the evaluated
+    split encoded as a ``validation_`` prefix and the head losses as
+    ``<head>__<loss name>``. Reading such a name directly in a notebook invites two
+    mistakes: plotting a validation curve as if it were a training curve, and
+    overlaying head losses from different objectives on one axis even though a
+    cross-entropy, a masked binary cross-entropy and a variational PU bound are not
+    on a common scale. This function makes both distinctions explicit.
+
+    Only the reconstruction component is marked comparable across conditions: every
+    run optimizes the same Masserstein cost with the same parameters. The total loss
+    contains the head term and therefore inherits its scale, and each head loss is
+    defined only within its own objective.
+
+    :param history: Long-form output of :func:`training_history`.
+    :type history: pandas.DataFrame
+    :return: The same records with ``component``, ``component_name``,
+        ``history_split`` and ``comparable`` columns added.
+    :rtype: pandas.DataFrame
+    """
+    if history.empty:
+        return history.assign(component=[], component_name=[], history_split=[], comparable=[])
+    result = history.copy()
+    ## The evaluated split is a prefix on the scalar name, not the record's split field
+    validation = result.metric.str.startswith("validation_")
+    stem = result.metric.mask(validation, result.metric.str.removeprefix("validation_"))
+    result["history_split"] = np.where(validation, "validation", "train")
+    result["component"] = np.select(
+        [stem.isin(BOOKKEEPING_METRICS), stem == "total_loss", stem.str.contains("__")],
+        ["bookkeeping", "total", "head"], default="reconstruction")
+    result["component_name"] = np.where(result.component == "head", stem.str.split("__").str[-1], stem)
+    result["comparable"] = result.component == "reconstruction"
+    return result
 
 
 def coverage_table(grid: pd.DataFrame, models: pd.DataFrame, *, source: str = "predictive_initial") -> pd.DataFrame:
