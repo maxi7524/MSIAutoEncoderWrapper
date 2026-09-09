@@ -22,3 +22,9 @@ __pycache__
 
 # notebooks
 *.ipynb diff=jupyternotebook
+
+# analysis precompute artifacts
+# Every notebook writes its numerical tables to a sibling `<notebook>_results/`
+# directory. Those are regenerable from the precompute runner and are large, so they
+# are kept local instead of versioned; see the analysis README for how to rebuild them.
+*_results/
