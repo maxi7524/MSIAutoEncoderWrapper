@@ -89,7 +89,8 @@ def test_pretraining_then_real_adaptation_preserves_model_and_split(contrastive)
     common = {"epochs": 1, "batch_size": 4, "dataloader": {"shuffle": False},
               "optimizer": {"type": "SGD", "params": {"lr": .01}}}
     config = {"seed": 42, "test_mode": True, "checkpoint": {"enabled": False}, "phases": [
-        {**common, "phase_name": "synthetic", "pretraining": {"samples": 8, "validation_samples": 4, "modes": ["single_random"]},
+        {**common, "phase_name": "synthetic", "pretraining": {"samples": 8, "validation_samples": 4,
+         "sampling_plan": [{"strategy": "single_random", "count": 4}, {"strategy": "single_annotated", "count": 4}]},
          "criterions": {"reconstruction": {"mse": {"target": "MSELoss"}}, "heads": {"ion": {"bce": {"target": "MultiLabelBCELoss"}}}}},
         {**common, "phase_name": "real", "criterions": {"reconstruction": {"mse": {"target": "MSELoss"}},
          "heads": {"ion": {"vpu": {"target": "VariationalPULoss", "params": {"consistency_weight": .1, "negative_weight": 1., "evidence": {"bin_radius": 0}}}}}}},

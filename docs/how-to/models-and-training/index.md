@@ -10,6 +10,7 @@ phases, and persistent artifacts.
 - [Configure autoencoders](autoencoder-models.md) — assemble encoder, decoder, projector, and classification heads.
 - [Configure cohort models](cohort-models.md) — train or use models over multi-image contexts.
 - [Train a model](training.md) — define phases, losses, optimizers, devices, loaders, and checkpoints.
+- [Run synthetic spectral pretraining](synthetic-pretraining.md) — configure generated-spectrum phases before real-data adaptation.
 - [Persist and restore models](model-persistence.md) — save, load, bind, and export complete model artifacts.
 
 ```{toctree}
@@ -20,5 +21,6 @@ model-configuration
 autoencoder-models
 cohort-models
 training
+synthetic-pretraining
 model-persistence
 ```

@@ -6,7 +6,12 @@ import torch
 
 from msi_autoencoder_wrapper.data import TargetSchema
 from msi_autoencoder_wrapper.data.annotation_evidence import IonCatalogue
-from msi_autoencoder_wrapper.data.pretraining import SyntheticSpectrumConfig, SyntheticSpectrumDataset
+from msi_autoencoder_wrapper.data.pretraining import (
+    SyntheticPeakSource,
+    SyntheticSpectrumConfig,
+    SyntheticSpectrumDataset,
+    SyntheticSamplingManager,
+)
 from msi_autoencoder_wrapper.training.criterions.autoencoder.pretraining.element_count_loss import ElementCountLoss
 
 
@@ -18,8 +23,9 @@ def synthetic_factory():
         "element_counts": TargetSchema("element_counts", "regression", ("C", "H")),
     }
     def build(modes, **kwargs):
+        options = {"samples": 50, "modes": modes, **kwargs}
         return SyntheticSpectrumDataset(catalogue, torch.linspace(100, 3000, 10), schemas,
-                                        SyntheticSpectrumConfig(samples=50, modes=modes, **kwargs))
+                                        SyntheticSpectrumConfig(**options))
     return build
 
 
@@ -83,3 +89,50 @@ def test_composition_loss_ignores_real_or_mixed_targets(synthetic_factory):
     loss = ElementCountLoss("composition", "element_counts")({"head_composition": logits}, batch)
     loss.backward()
     assert loss == 0 and not bool(logits.grad.any())
+
+
+def test_sampling_plan_has_exact_counts_and_can_mask_supervision(synthetic_factory):
+    dataset = synthetic_factory(
+        (),
+        samples=5,
+        sampling_plan=(
+            {"strategy": "single_annotated", "count": 2},
+            {"strategy": "single_random", "count": 3, "label_targets": False},
+        ),
+    )
+    samples = [dataset[index] for index in range(len(dataset))]
+    assert all(bool(sample[3]["molecule"].all()) for sample in samples[:2])
+    assert all(sample[2]["molecule"].sum() == 1 for sample in samples[:2])
+    assert all(not bool(sample[3]["molecule"].any()) for sample in samples[2:])
+
+
+class CandidateLikePeakSource(SyntheticPeakSource):
+    """Stand-in for a future candidate catalogue mapped onto the model axis."""
+
+    feature_count = 10
+    class_names = ("C2H4|+H", "C3H6|+H")
+    bins = ((1,), (8,))
+
+
+def test_dataset_accepts_a_non_annotation_peak_source():
+    schemas = {
+        "molecule": TargetSchema("molecule", "multi_label", CandidateLikePeakSource.class_names),
+    }
+    dataset = SyntheticSpectrumDataset(
+        None,
+        torch.linspace(100, 3000, 10),
+        schemas,
+        SyntheticSpectrumConfig(samples=1, sampling_plan=({"strategy": "single_annotated", "count": 1},)),
+        peak_source=CandidateLikePeakSource(),
+    )
+    _, spectrum, values, masks = dataset[0]
+    assert spectrum.shape == (10,)
+    assert values["molecule"].sum() == 1
+    assert bool(masks["molecule"].all())
+
+
+def test_sampling_strategies_are_discoverable_with_constructor_configuration():
+    available = SyntheticSamplingManager.get_available_strategies()
+    assert "annotated" in available
+    assert available["annotated"]["parameters"] == {"min_peaks": 1, "max_peaks": None}
+    assert "labelled mixture" in available["annotated"]["docstring"]
