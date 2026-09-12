@@ -41,6 +41,7 @@ complete command reference.
 - [Review and save selections](filtering-and-selection.md) — accept, exclude, and export a reproducible selection.
 - [Download datasets](downloading-datasets.md) — materialize selected imzML/ibd pairs and annotation CSVs.
 - [Retrieve annotations](retrieving-annotations.md) — normalize provider molecular results and spatial links.
+- [Use local metabolite databases](metabolite-databases.md) — cache LIPID MAPS, HMDB, and ChEBI exports and build filtered candidate catalogs.
 - [Compose a cohort dataset](composing-a-cohort.md) — import local annotations, merge canonical local datasets into a cohort, and build molecule occurrence masks.
 - [Inspect the catalog](inspecting-the-catalog.md) — query the working and composed SQLite catalogs.
 - [Use the msi-datasets CLI](command-line-workflow.md) — every subcommand, its inputs, and its outputs.
@@ -52,6 +53,7 @@ discovering-datasets
 filtering-and-selection
 downloading-datasets
 retrieving-annotations
+metabolite-databases
 composing-a-cohort
 inspecting-the-catalog
 command-line-workflow

@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 
 from ...annotations.merge import AnnotationMergeInput, MergedAnnotationWriter
 from ...layout import DatasetWorkspaceLayout
+from ...metadata import read_dataset_metadata, write_cohort_metadata
 from ...utils.exceptions import raise_validation_error
 from ...utils.logger import get_custom_logger
 from ...validators import validate_imzml_pair
@@ -65,6 +66,10 @@ def create_composition_manifest(
                 "annotations_present": annotation_source.has_annotation_export(
                     directory,
                     dataset_id,
+                ),
+                "dataset_metadata": _read_local_dataset_metadata(
+                    workspace_path=workspace_path,
+                    dataset_id=dataset_id,
                 ),
             }
         )
@@ -134,7 +139,17 @@ def compose_cohort(
         source=source,
         dataset_ids=dataset_ids,
     ))
-    available_entries = list(manifest["available_inputs"])
+    available_entries = [
+        {
+            **dict(entry),
+            "dataset_metadata": dict(entry.get("dataset_metadata", {}))
+            or _read_local_dataset_metadata(
+                workspace_path=workspace_path,
+                dataset_id=str(entry["dataset_id"]),
+            ),
+        }
+        for entry in manifest["available_inputs"]
+    ]
     available_ids = [str(value) for value in manifest["dataset_ids"]]
     missing_ids = [str(value) for value in manifest["missing_dataset_ids"]]
     requested_ids = [str(value) for value in manifest["requested_dataset_ids"]]
@@ -192,7 +207,9 @@ def compose_cohort(
                 ),
                 imzml_path=imzml_path,
                 annotation_export=annotation_export,
-                metadata={},
+                metadata=_composition_dataset_metadata(
+                    entry.get("dataset_metadata", {}),
+                ),
             )
         )
         annotation_progress.update(1)
@@ -256,6 +273,19 @@ def compose_cohort(
     )
     # Final composition artifact
     _write_json_atomic(layout.composition_path(cohort_id), normalized)
+    write_cohort_metadata(
+        workspace_path=workspace_path,
+        cohort_id=cohort_id,
+        datasets=[
+            dict(entry.get("dataset_metadata", {}))
+            or {
+                "source": source,
+                "dataset_id": str(entry["dataset_id"]),
+                "name": str(entry["dataset_id"]),
+            }
+            for entry in available_entries
+        ],
+    )
     composition_progress.update(1)
     composition_progress.set_postfix(stage="complete")
     composition_progress.refresh()
@@ -272,3 +302,30 @@ def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _read_local_dataset_metadata(
+    *,
+    workspace_path: Path | str,
+    dataset_id: str,
+) -> dict[str, Any]:
+    """Read optional normalized source metadata for manual or downloaded data."""
+    try:
+        return read_dataset_metadata(
+            workspace_path=workspace_path,
+            dataset_id=dataset_id,
+        )
+    except ValueError:
+        return {}
+
+
+def _composition_dataset_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose canonical source metadata directly in the merged SQLite record."""
+    if not metadata:
+        return {}
+    return {
+        **dict(metadata.get("metadata", {})),
+        "provider_metadata": dict(metadata.get("provider_metadata", {})),
+        "metadata_schema_version": metadata.get("schema_version"),
+        "metadata_written_at": metadata.get("written_at"),
+    }

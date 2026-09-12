@@ -39,3 +39,23 @@ class DatasetWorkspaceLayout:
     def composition_path(self, cohort_id: str) -> Path:
         """Return the normalized composition configuration path."""
         return self.dataset_dir(cohort_id) / "composition.json"
+
+    def dataset_metadata_path(self, dataset_id: str) -> Path:
+        """Return the normalized source-dataset metadata artifact path."""
+        return self.dataset_dir(dataset_id) / "dataset_metadata.json"
+
+    def cohort_metadata_path(self, cohort_id: str) -> Path:
+        """Return the normalized metadata artifact for one composed cohort."""
+        return self.dataset_dir(cohort_id) / "cohort_metadata.json"
+
+    def database_annotations_dir(self, dataset_id: str) -> Path:
+        """Return the sidecar directory for external candidate annotations."""
+        return self.dataset_dir(dataset_id) / "database_annotations"
+
+    def candidate_catalog_path(self, dataset_id: str) -> Path:
+        """Return the normalized external-candidate SQLite catalog path."""
+        return self.database_annotations_dir(dataset_id) / "candidates.sqlite"
+
+    def candidate_catalog_manifest_path(self, dataset_id: str) -> Path:
+        """Return the provenance manifest for one candidate catalog."""
+        return self.database_annotations_dir(dataset_id) / "manifest.json"

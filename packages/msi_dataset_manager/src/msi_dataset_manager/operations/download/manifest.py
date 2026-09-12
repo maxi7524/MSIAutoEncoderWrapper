@@ -74,6 +74,7 @@ def create_download_manifest(
             {
                 "dataset_id": dataset_id,
                 "name": str(record.get("name", dataset_id)),
+                "metadata": dict(record.get("metadata", {})),
                 "directory": str(directory),
                 "directory_relative_to_invocation": relative_display(directory),
                 "data_present": data_present,

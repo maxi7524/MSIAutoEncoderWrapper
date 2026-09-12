@@ -40,6 +40,7 @@ class ActiveContextProxy(LatentContextMixin):
         # Operational runtime object caches
         self._cached_reader: Optional[Any] = None
         self._cached_annotation_reader: Optional[Any] = None
+        self._cached_candidate_catalog: Optional[Any] = None
         self._cached_binner: Optional[Any] = None
         self._cached_inverse_binner: Optional[Any] = None
         self._cached_model_functionality: Optional[Any] = None
@@ -98,6 +99,7 @@ class ActiveContextProxy(LatentContextMixin):
             img_bucket = manager.config_ledger[current_target]
             self._cached_reader = img_bucket.get("reader")
             self._cached_annotation_reader = img_bucket.get("annotation_reader")
+            self._cached_candidate_catalog = img_bucket.get("candidate_catalog")
             self._cached_binner = img_bucket.get("binner")
             self._cached_inverse_binner = img_bucket.get("inverse_binner")
             self._cached_model_functionality = img_bucket.get("model_functionality")
@@ -135,6 +137,13 @@ class ActiveContextProxy(LatentContextMixin):
         if self._cached_reader is None:
             self._resolve_active_pipeline()
         return self._cached_annotation_reader
+
+    @property
+    def candidate_catalog(self) -> Optional[Any]:
+        """Return the optional external candidate catalogue for this image."""
+        if self._cached_reader is None:
+            self._resolve_active_pipeline()
+        return self._cached_candidate_catalog
 
     @property
     def binner(self) -> MSIBaseBinner:
@@ -310,6 +319,7 @@ class ActiveContextProxy(LatentContextMixin):
         self._instantiated_image_key = None
         self._cached_reader = None
         self._cached_annotation_reader = None
+        self._cached_candidate_catalog = None
         self._cached_binner = None
         self._cached_inverse_binner = None
         self._cached_model_functionality = None

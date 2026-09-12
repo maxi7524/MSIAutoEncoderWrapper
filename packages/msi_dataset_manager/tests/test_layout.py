@@ -16,3 +16,9 @@ def test_layout_shares_sources_and_creates_sqlite_only_for_composition(tmp_path)
     assert layout.composition_path("kidney") == (
         tmp_path / "datasets" / "kidney" / "composition.json"
     )
+    assert layout.dataset_metadata_path("image-a") == (
+        tmp_path / "datasets" / "image-a" / "dataset_metadata.json"
+    )
+    assert layout.candidate_catalog_path("kidney") == (
+        tmp_path / "datasets" / "kidney" / "database_annotations" / "candidates.sqlite"
+    )

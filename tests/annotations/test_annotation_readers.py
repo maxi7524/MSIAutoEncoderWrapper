@@ -12,6 +12,11 @@ from msi_dataset_manager.annotations.merge import (
     AnnotationMergeInput,
     MergedAnnotationWriter,
 )
+from msi_dataset_manager.annotations.candidates import (
+    CandidateCatalogWriter,
+    CandidateCompound,
+    make_candidate_ions,
+)
 from msi_dataset_manager.imzml import PyImzMLReader
 from msi_dataset_manager.sources.base import SourceAnnotationExport
 from msi_dataset_manager.sources.strategies.metaspace.csv import write_annotation_csv_pair
@@ -152,3 +157,33 @@ def test_wrapper_does_not_load_old_csv_names(
     wrapper.workspace.set_active_image(str(image_path))
 
     assert wrapper.active_context.annotation_reader is None
+
+
+def test_wrapper_auto_loads_optional_candidate_catalog(
+    tmp_path: Path,
+    msi_fixture_path: Path,
+) -> None:
+    """A database-annotation sidecar is available without being mandatory."""
+    image_path = _copy_image(tmp_path / "source", msi_fixture_path, "dataset-a")
+    compound = CandidateCompound(
+        provider="fixture",
+        provider_version="1",
+        identifier="compound-a",
+        name="Compound A",
+        formula="C6H12O6",
+    )
+    target = image_path.parent / "database_annotations" / "candidates.sqlite"
+    CandidateCatalogWriter().write(
+        path=target,
+        compounds=[compound],
+        ions=make_candidate_ions(compound, polarity="Positive"),
+        manifest={"schema_version": 1, "dataset_id": "dataset-a"},
+    )
+    wrapper = MSIAutoEncoderWrapper(project_path=str(tmp_path / "workspace"))
+
+    wrapper.context_manager.set_reader(MockMSIReader(image_path), str(image_path))
+    wrapper.workspace.set_active_image(str(image_path))
+
+    catalogue = wrapper.active_context.candidate_catalog
+    assert catalogue is not None
+    assert catalogue.get_candidate_ions(filters={"adduct": "+H"})[0]["formula"] == "C6H12O6"

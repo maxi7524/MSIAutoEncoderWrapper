@@ -42,6 +42,26 @@ class SyntheticSamplingPlanEntry:
             raise ValueError("sampling label_targets must be a boolean or null.")
         object.__setattr__(self, "parameters", dict(self.parameters))
 
+    @property
+    def output_count(self) -> int:
+        """Return generated samples after candidate-permutation expansion.
+
+        ``count`` is the number of base candidate draws. For
+        ``candidate_permuted``, ``parameters.permutations`` specifies the
+        number of independently weighted variants emitted for every draw.
+        Other strategies preserve their historical ``count`` semantics.
+        """
+        if self.strategy != "candidate_permuted":
+            return self.count
+        permutations = self.parameters.get("permutations", 1)
+        if (
+            isinstance(permutations, bool)
+            or not isinstance(permutations, int)
+            or permutations < 1
+        ):
+            raise ValueError("candidate_permuted.permutations must be a positive integer.")
+        return self.count * permutations
+
     @classmethod
     def from_value(cls, value: "SyntheticSamplingPlanEntry | Mapping[str, Any]") -> "SyntheticSamplingPlanEntry":
         """Normalize an API or YAML sampling-plan entry."""
@@ -61,18 +81,20 @@ class SyntheticSamplingPlanEntry:
 
 @dataclass(frozen=True)
 class SyntheticComponent:
-    """One generated peak with an optional target-column identity."""
+    """One generated peak with an optional target-column identity and weight."""
 
     center: int
     label_index: int | None
+    intensity_weight: float = 1.0
 
 
 @dataclass(frozen=True)
 class SyntheticSampleDefinition:
-    """Describe peaks and target availability before spectrum rendering."""
+    """Describe peaks, provenance, and target availability before rendering."""
 
     components: tuple[SyntheticComponent, ...]
     label_targets: bool
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -76,9 +76,10 @@ training = {
 }
 ```
 
-`sampling_plan` takes precedence over the legacy `modes` list. Its `count`
-values must sum to `samples`. Validation retains the same strategy proportions;
-the counts are deterministically scaled to `validation_samples`.
+`sampling_plan` takes precedence over the legacy `modes` list. Its generated
+counts must sum to `samples`. For `candidate_permuted`, the generated count is
+`count * parameters.permutations`. Validation retains the same strategy
+proportions; the counts are deterministically scaled to `validation_samples`.
 
 ## Select objectives and labels
 
@@ -98,14 +99,73 @@ background component. Mixed examples therefore do not contribute to
 ## Use available strategies
 
 The current strategies are `single_random`, `single_annotated`, `random`,
-`annotated`, and `mixed`. `random`, `annotated`, and `mixed` accept
-`min_peaks` and `max_peaks` inside their `parameters` mapping. An omitted
-`max_peaks` uses phase-level `pretraining.max_peaks`.
+`annotated`, `mixed`, `candidate_single`, `candidate_permuted`, and
+`candidate_convolved`. `random`, `annotated`, and `mixed` accept `min_peaks`
+and `max_peaks`. Candidate strategies accept molecule-count, class-selection,
+occupancy, and intensity parameters inside their `parameters` mapping.
 
-The current training-phase builder derives labelled coordinates from the active
-dataset's mapped annotation index and restricts eligible positive ions to the
-real training split. Candidate-molecule sampling is not yet a training
-configuration option.
+## Generate spectra from the candidate catalog
+
+Set `peak_source` to `candidate_catalog` when the active dataset has a loaded
+`candidates.sqlite` catalog:
+
+```python
+"pretraining": {
+    "samples": 4096,
+    "validation_samples": 512,
+    "peak_source": "candidate_catalog",
+    "candidate_filters": {
+        "polarity": "Positive",
+        "mz_min": 100,
+        "mz_max": 1500,
+    },
+    "candidate_classes": ["Fatty Acyls", "Organic compounds"],
+    "candidate_label_targets": False,
+    "sampling_plan": [
+        {
+            "strategy": "candidate_single",
+            "count": 1024,
+        },
+        {
+            "strategy": "candidate_permuted",
+            "count": 512,
+            "parameters": {
+                "permutations": 4,
+                "min_molecules": 2,
+                "max_molecules": 6,
+                "occupancy_alpha": 0.8,
+                "intensity_log_sigma": 0.5,
+            },
+        },
+        {
+            "strategy": "candidate_convolved",
+            "count": 1024,
+            "parameters": {
+                "min_molecules": 2,
+                "max_molecules": 8,
+                "class_balanced": True,
+            },
+        },
+    ],
+}
+```
+
+`candidate_permuted` draws an occupancy vector from a Dirichlet distribution
+and independent component intensities from a log-normal distribution. The
+weighted components are normalized by the phase normalization setting. The
+generation parameters and component provenance are available in
+`SpectrumBatch.metadata["synthetic_generation"]`.
+
+`candidate_convolved` is the weighted sum of candidate peak profiles. It does
+not impose biological co-occurrence constraints. When
+`candidate_label_targets` is `True`, candidate labels are limited to the
+current molecule target vocabulary. Set it to `False` for reconstruction-only
+candidate generation with masked targets.
+
+The default `annotation` peak source derives labelled coordinates from the
+active dataset's mapped annotation index and restricts eligible positive ions
+to the real training split. The `candidate_catalog` source uses the loaded
+external candidate catalog and the active binner instead.
 
 For execution-wide phase, checkpoint, and loader options, see
 [Train a model](training.md). For component flow, see

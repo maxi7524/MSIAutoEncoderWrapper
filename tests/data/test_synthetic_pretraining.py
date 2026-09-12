@@ -4,10 +4,18 @@ import numpy as np
 import pytest
 import torch
 
+from msi_dataset_manager.annotations.candidates import (
+    CandidateCatalogReader,
+    CandidateCatalogWriter,
+    CandidateClass,
+    CandidateCompound,
+    make_candidate_ions,
+)
 from msi_autoencoder_wrapper.data import TargetSchema
 from msi_autoencoder_wrapper.data.annotation_evidence import IonCatalogue
 from msi_autoencoder_wrapper.data.pretraining import (
     SyntheticPeakSource,
+    CandidateCatalogPeakSource,
     SyntheticSpectrumConfig,
     SyntheticSpectrumDataset,
     SyntheticSamplingManager,
@@ -136,3 +144,149 @@ def test_sampling_strategies_are_discoverable_with_constructor_configuration():
     assert "annotated" in available
     assert available["annotated"]["parameters"] == {"min_peaks": 1, "max_peaks": None}
     assert "labelled mixture" in available["annotated"]["docstring"]
+
+
+class CandidateBinner:
+    """Map selected candidate masses onto a fixed ten-bin synthetic axis."""
+
+    def GetXAxis(self):
+        return np.arange(10, dtype=np.float64)
+
+    def map_mass_values_to_bins(self, masses):
+        values = np.asarray(masses, dtype=np.float64)
+        return np.where(values < 100, 1, np.where(values < 500, 8, -1))
+
+
+def _candidate_source(tmp_path):
+    """Create candidates with one provider duplicate and one distinct m/z."""
+    compounds = (
+        CandidateCompound(
+            provider="HMDB",
+            provider_version="5.0",
+            identifier="hmdb-ethylene",
+            name="Ethylene",
+            formula="C2H4",
+            classes=(CandidateClass("HMDB", "HMDB:alkene", "Alkene", 0),),
+        ),
+        CandidateCompound(
+            provider="ChEBI",
+            provider_version="255",
+            identifier="CHEBI:18153",
+            name="Ethylene",
+            formula="C2H4",
+            classes=(CandidateClass("ChEBI", "CHEBI:alkene", "Alkene", 0),),
+        ),
+        CandidateCompound(
+            provider="LIPID_MAPS",
+            provider_version="fixture",
+            identifier="LMFA0001",
+            name="Fixture glucose",
+            formula="C6H12O6",
+            classes=(CandidateClass("LIPID_MAPS", "LIPID_MAPS:sugar", "Sugar", 0),),
+        ),
+        CandidateCompound(
+            provider="fixture",
+            provider_version="1",
+            identifier="outside-axis",
+            name="Outside axis",
+            formula="C100H2",
+        ),
+    )
+    CandidateCatalogWriter().write(
+        path=tmp_path / "candidates.sqlite",
+        compounds=compounds,
+        ions=(
+            ion
+            for compound in compounds
+            for ion in make_candidate_ions(compound, polarity="Positive", adducts=("+H",))
+        ),
+        manifest={"schema_version": 1},
+    )
+    return CandidateCatalogPeakSource(
+        CandidateCatalogReader(tmp_path / "candidates.sqlite"),
+        CandidateBinner(),
+    )
+
+
+def test_candidate_peak_source_preserves_distinct_mz_and_aggregates_duplicates(tmp_path):
+    """Provider duplicates become one provenance-rich label without mass merging."""
+    source = _candidate_source(tmp_path)
+
+    assert source.class_names == ("C2H4|+H", "C6H12O6|+H")
+    assert source.bins == ((1,), (8,))
+    metadata = source.get_label_metadata(0)
+    assert metadata["providers"] == ("ChEBI", "HMDB")
+    assert len(metadata["candidate_ion_keys"]) == 2
+    assert metadata["chemical_classes"] == ("Alkene",)
+
+
+def test_candidate_generator_expands_permutations_and_preserves_batch_metadata(tmp_path):
+    """Candidate weights are normalized after independent occupancy/intensity draws."""
+    source = _candidate_source(tmp_path)
+    schemas = {
+        "molecule": TargetSchema(
+            "molecule",
+            "multi_label",
+            tuple(reversed(source.class_names)),
+        ),
+    }
+    dataset = SyntheticSpectrumDataset(
+        None,
+        torch.arange(10, dtype=torch.float64),
+        schemas,
+        SyntheticSpectrumConfig(
+            samples=6,
+            sampling_plan=(
+                {
+                    "strategy": "candidate_permuted",
+                    "count": 2,
+                    "parameters": {
+                        "permutations": 3,
+                        "min_molecules": 2,
+                        "max_molecules": 2,
+                        "occupancy_alpha": 0.5,
+                        "intensity_log_sigma": 0.4,
+                    },
+                },
+            ),
+        ),
+        peak_source=source,
+    )
+
+    sample = dataset[0]
+    assert sample[2]["molecule"].sum() == 2
+    assert sample.metadata["generator"] == "candidate_permuted"
+    assert sum(component["weight"] for component in sample.metadata["components"]) == pytest.approx(1.0)
+    batch = dataset.collate_fn([dataset[0], dataset[1]])
+    assert len(batch.metadata["synthetic_generation"]) == 2
+    assert all(
+        item["mixing_mode"] == "weighted_sum"
+        for item in batch.metadata["synthetic_generation"]
+    )
+
+
+def test_candidate_convolved_strategy_records_weighted_sum_configuration(tmp_path):
+    """Class-aware candidate mixtures retain their generation configuration."""
+    source = _candidate_source(tmp_path)
+    schemas = {"molecule": TargetSchema("molecule", "multi_label", source.class_names)}
+    dataset = SyntheticSpectrumDataset(
+        None,
+        torch.arange(10, dtype=torch.float64),
+        schemas,
+        SyntheticSpectrumConfig(
+            samples=1,
+            sampling_plan=(
+                {
+                    "strategy": "candidate_convolved",
+                    "count": 1,
+                    "parameters": {"min_molecules": 2, "max_molecules": 2},
+                },
+            ),
+        ),
+        peak_source=source,
+    )
+
+    sample = dataset[0]
+    assert sample[2]["molecule"].sum() == 2
+    assert sample.metadata["generator"] == "candidate_convolved"
+    assert sample.metadata["mixing_mode"] == "convolution_weighted_sum"

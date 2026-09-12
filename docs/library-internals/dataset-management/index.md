@@ -19,6 +19,7 @@ point into `packages/msi_dataset_manager/src/msi_dataset_manager`.
 - [SQLite catalog](sqlite-catalog.md) — canonical tables, transactions, filters, and path identity.
 - [Merge and provenance](merge-and-provenance.md) — deterministic spectrum selection, output geometry, and reversible mappings.
 - [Filesystem layout](filesystem-layout.md) — persistent, staging, cohort-config, and merged/composed artifact locations.
+- [Metabolite candidate catalogs](metabolite-candidate-catalog.md) — provider snapshots, normalized candidate ions, dataset filters, and synthetic-source mapping.
 
 ```{toctree}
 :hidden:
@@ -31,4 +32,5 @@ annotation-normalization
 sqlite-catalog
 merge-and-provenance
 filesystem-layout
+metabolite-candidate-catalog
 ```

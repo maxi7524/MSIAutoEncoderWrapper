@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from msi_dataset_manager.annotations import AnnotationReader
+from msi_dataset_manager.metadata import write_dataset_metadata
 from msi_dataset_manager.operations.composition import compose_cohort
 from msi_dataset_manager.sources.base import SourceAnnotationExport
 from msi_dataset_manager.sources.source_manager import DatasetSourceManager
@@ -46,6 +47,13 @@ def test_composition_writes_the_final_annotation_store(
         "read_annotation_export",
         staticmethod(lambda **_: export),
     )
+    write_dataset_metadata(
+        workspace_path=workspace,
+        source="metaspace",
+        dataset_id="source-a",
+        name="Source A",
+        metadata={"organism": "Mouse", "organism_part": "Liver", "polarity": "Positive"},
+    )
     manifest = {
         "source": "metaspace",
         "requested_dataset_ids": ["source-a"],
@@ -80,3 +88,5 @@ def test_composition_writes_the_final_annotation_store(
     assert reader.get_annotations()[0]["spectrum_ids"] == [0, 1]
     assert reader.get_spectrum_annotations(1)[0]["mz"] == 181.0707
     assert reader.get_spectrum_metadata(1)["source_spectrum_id"] == 2
+    assert reader.get_spectrum_metadata(1)["metadata"]["organism"] == "Mouse"
+    assert (workspace / "datasets" / "cohort" / "cohort_metadata.json").is_file()

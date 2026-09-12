@@ -11,6 +11,7 @@ from tqdm.auto import tqdm
 from ...sources.base import AnnotationDatasetSource, DatasetSource
 from ...sources.profiles import RotatingDatasetSource, read_source_profiles
 from ...sources.source_manager import DatasetSourceManager
+from ...metadata import write_dataset_metadata
 from ...utils.exceptions import DownloadLimitError, raise_validation_error
 from ...utils.logger import get_custom_logger
 from ...validators import validate_imzml_pair
@@ -81,6 +82,11 @@ def download_from_manifest(
         annotation_options=annotation_options,
         annotation_counts=annotation_counts,
     )
+    _write_materialized_dataset_metadata(
+        workspace_path=Path(str(manifest["workspace_datasets_path"])).parent,
+        source=source.source_name,
+        entries=entries,
+    )
     _finalize_download(
         manifest=manifest,
         entries=entries,
@@ -89,6 +95,27 @@ def download_from_manifest(
         file_limit_reached=file_limit_reached,
     )
     return materialized
+
+
+def _write_materialized_dataset_metadata(
+    *,
+    workspace_path: Path,
+    source: str,
+    entries: Sequence[Mapping[str, Any]],
+) -> None:
+    """Persist frozen source metadata beside every complete local dataset."""
+    for entry in entries:
+        dataset_id = str(entry["dataset_id"])
+        directory = Path(str(entry["directory"]))
+        if not has_complete_pair(directory, dataset_id):
+            continue
+        write_dataset_metadata(
+            workspace_path=workspace_path,
+            source=source,
+            dataset_id=dataset_id,
+            name=str(entry.get("name", dataset_id)),
+            metadata=entry.get("metadata"),
+        )
 
 # --------------------------------------------------
 # Section: Main functionality 

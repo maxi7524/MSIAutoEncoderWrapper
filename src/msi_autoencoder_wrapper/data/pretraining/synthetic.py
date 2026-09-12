@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import numpy as np
 import torch
@@ -21,7 +21,7 @@ from .sampling import (
     SyntheticSamplingPlanEntry,
     get_sampling_strategy,
 )
-from .sources import CataloguePeakSource, SyntheticPeakSource
+from .sources import CandidateCatalogPeakSource, CataloguePeakSource, SyntheticPeakSource
 
 logger = get_custom_logger(__name__)
 
@@ -67,8 +67,11 @@ class SyntheticSpectrumConfig:
         normalized_plan = tuple(SyntheticSamplingPlanEntry.from_value(entry) for entry in self.sampling_plan)
         object.__setattr__(self, "sampling_plan", normalized_plan)
         if normalized_plan:
-            if sum(entry.count for entry in normalized_plan) != self.samples:
-                raise ValueError("sampling_plan counts must sum exactly to samples.")
+            if sum(entry.output_count for entry in normalized_plan) != self.samples:
+                raise ValueError(
+                    "sampling_plan output counts, including candidate permutations, "
+                    "must sum exactly to samples."
+                )
             for entry in normalized_plan:
                 get_sampling_strategy(entry.strategy, **entry.parameters)
         elif not self.modes:
@@ -78,6 +81,29 @@ class SyntheticSpectrumConfig:
                 get_sampling_strategy(mode)
         if self.normalization not in {"tic", "max", "l2", "none"}:
             raise ValueError("Unsupported synthetic normalization.")
+
+
+@dataclass(frozen=True)
+class SyntheticSpectrumSample:
+    """Tuple-compatible synthetic example with generator provenance.
+
+    The four-item iteration contract preserves existing dataset consumers.
+    ``metadata`` is consumed by :meth:`SyntheticSpectrumDataset.collate_fn`.
+    """
+
+    sample_id: int
+    spectrum: torch.Tensor
+    values: Mapping[str, torch.Tensor]
+    masks: Mapping[str, torch.Tensor]
+    metadata: Mapping[str, Any]
+
+    def __iter__(self) -> Iterator[Any]:
+        """Yield the historical four-item dataset sample contract."""
+        return iter((self.sample_id, self.spectrum, self.values, self.masks))
+
+    def __getitem__(self, index: int) -> Any:
+        """Provide positional access compatible with the historic tuple sample."""
+        return (self.sample_id, self.spectrum, self.values, self.masks)[index]
 
 
 class SyntheticSpectrumDataset(Dataset):
@@ -115,8 +141,17 @@ class SyntheticSpectrumDataset(Dataset):
         self.space = SpectrumSpace(mass_axis.detach().cpu(), normalization=config.normalization)
         if self.space.feature_count != peak_source.feature_count:
             raise ValueError("Synthetic axis and peak source dimensions disagree.")
-        if self.schemas["molecule"].class_names != peak_source.class_names:
-            raise ValueError("Synthetic targets must preserve the real ion vocabulary order.")
+        target_indices = {
+            name: index
+            for index, name in enumerate(self.schemas["molecule"].class_names)
+        }
+        self.source_to_target = tuple(
+            target_indices.get(name) for name in peak_source.class_names
+        )
+        if config.label_targets and any(index is None for index in self.source_to_target):
+            raise ValueError(
+                "Labelled synthetic sources must be a subset of the molecule target vocabulary."
+            )
         self.eligible_ions = tuple(range(len(peak_source.bins))) if eligible_ions is None else eligible_ions
         if any(i < 0 or i >= len(peak_source.bins) for i in self.eligible_ions):
             raise ValueError("Invalid synthetic ion index.")
@@ -153,12 +188,12 @@ class SyntheticSpectrumDataset(Dataset):
 
     @staticmethod
     def _build_plan_entries(config: SyntheticSpectrumConfig) -> tuple[SyntheticSamplingPlanEntry, ...]:
-        """Expand exact plans or preserve legacy weighted random mode selection."""
+        """Expand exact plans and candidate permutation variants."""
         if config.sampling_plan:
             return tuple(
                 entry
                 for entry in config.sampling_plan
-                for _ in range(entry.count)
+                for _ in range(entry.output_count)
             )
         return tuple(
             SyntheticSamplingPlanEntry(strategy=mode, count=1)
@@ -182,7 +217,11 @@ class SyntheticSpectrumDataset(Dataset):
             self.sampling_context,
             label_targets=self.config.label_targets if entry.label_targets is None else entry.label_targets,
         )
-        ions = [component.label_index for component in definition.components if component.label_index is not None]
+        ions = [
+            component.label_index
+            for component in definition.components
+            if component.label_index is not None
+        ]
         spectrum = np.zeros(self.peak_source.feature_count, dtype=np.float64)  # (M,)
         # Render controlled peak profiles and normalize the resulting mixture
         radius = self.config.peak_radius
@@ -191,7 +230,9 @@ class SyntheticSpectrumDataset(Dataset):
             left, right = max(0, center - radius), min(len(spectrum), center + radius + 1)
             position = np.arange(left, right)  # (W,)
             profile = 1 - np.abs(position - center) / (radius + 1)  # (W,)
-            spectrum[left:right] += rng.uniform(0.1, 1.0) * profile
+            spectrum[left:right] += (
+                component.intensity_weight * rng.uniform(0.1, 1.0) * profile
+            )
         denominator = {"tic": spectrum.sum, "max": spectrum.max,
                        "l2": lambda: np.linalg.norm(spectrum), "none": lambda: 1.0}[self.config.normalization]()
         spectrum /= max(float(denominator), np.finfo(np.float64).tiny)
@@ -199,7 +240,12 @@ class SyntheticSpectrumDataset(Dataset):
         values = {name: torch.zeros(schema.class_count, dtype=torch.float32) for name, schema in self.schemas.items()}
         masks = {name: torch.zeros(schema.class_count, dtype=torch.bool) for name, schema in self.schemas.items()}
         if definition.label_targets:
-            values["molecule"][ions] = 1.0
+            target_ions = [self.source_to_target[ion] for ion in ions]
+            if any(ion is None for ion in target_ions):
+                raise ValueError(
+                    "A labelled synthetic component has no molecule target index."
+                )
+            values["molecule"][[int(ion) for ion in target_ions]] = 1.0
             masks["molecule"].fill_(True)
         if definition.label_targets and "chemical_class" in values:
             class_index = {name: i for i, name in enumerate(self.schemas["chemical_class"].class_names)}
@@ -222,10 +268,17 @@ class SyntheticSpectrumDataset(Dataset):
             counts = parse_formula(self.peak_source.class_names[ions[0]].split("|", 1)[0])
             values["element_counts"] = torch.tensor([counts.get(e, 0) for e in self.schemas["element_counts"].class_names], dtype=torch.float32)
             masks["element_counts"].fill_(True)
-        return index, torch.as_tensor(spectrum, dtype=self.dtype), values, masks
+        return SyntheticSpectrumSample(
+            sample_id=index,
+            spectrum=torch.as_tensor(spectrum, dtype=self.dtype),
+            values=values,
+            masks=masks,
+            metadata=dict(definition.metadata),
+        )
 
     def collate_fn(self, samples) -> SpectrumBatch:
         """Collate dense synthetic examples using the existing model batch contract."""
+        generation_metadata = tuple(dict(sample.metadata) for sample in samples)
         return SpectrumBatch(
             sample_ids=torch.tensor([s[0] for s in samples]),
             spectra=torch.stack([s[1] for s in samples]),  # (B, M)
@@ -234,6 +287,11 @@ class SyntheticSpectrumDataset(Dataset):
                 values={name: torch.stack([s[2][name] for s in samples]) for name in self.schemas},
                 masks={name: torch.stack([s[3][name] for s in samples]) for name in self.schemas},
                 schemas=self.schemas,
+            ),
+            metadata=(
+                {"synthetic_generation": generation_metadata}
+                if any(generation_metadata)
+                else {}
             ),
         )
 
@@ -248,15 +306,42 @@ def build_synthetic_partitions(dataset: Any, parameters: Mapping[str, Any]) -> d
     from ...training.criterions.autoencoder.head.training_targets import collect_training_multilabel_targets
     options = dict(parameters)
     validation_samples = options.pop("validation_samples", 512)
+    peak_source_mode = str(options.pop("peak_source", "annotation"))
+    candidate_filters = options.pop("candidate_filters", None)
+    candidate_classes = options.pop("candidate_classes", None)
+    candidate_label_targets = bool(options.pop("candidate_label_targets", True))
+    if peak_source_mode not in {"annotation", "candidate_catalog"}:
+        raise ValueError("peak_source must be 'annotation' or 'candidate_catalog'.")
+    if peak_source_mode == "candidate_catalog" and not candidate_label_targets:
+        options["label_targets"] = False
     config = SyntheticSpectrumConfig(**options)
     catalogue = IonCatalogue.from_dataset(dataset)
-    targets, mask = collect_training_multilabel_targets(dataset, "molecule")
-    eligible = tuple(((targets > 0.5) & mask).any(dim=0).nonzero(as_tuple=True)[0].tolist())
     axis = torch.as_tensor(dataset.active_context.binner.GetXAxis(), dtype=torch.float64)
     schemas = dataset.get_target_schemas()
     chemistry = dataset.get_chemical_descriptions() if "chemical_class" in schemas else {}
+    if peak_source_mode == "candidate_catalog":
+        candidate_catalog = dataset.active_context.candidate_catalog
+        if candidate_catalog is None:
+            raise ValueError("Candidate synthesis requires an active candidate catalogue.")
+        peak_source = CandidateCatalogPeakSource(
+            candidate_catalog,
+            dataset.active_context.binner,
+            filters=candidate_filters,
+            allowed_labels=(
+                schemas["molecule"].class_names if candidate_label_targets else None
+            ),
+            chemical_classes=candidate_classes,
+        )
+        eligible = tuple(range(len(peak_source.bins)))
+    else:
+        targets, mask = collect_training_multilabel_targets(dataset, "molecule")
+        eligible = tuple(
+            ((targets > 0.5) & mask).any(dim=0).nonzero(as_tuple=True)[0].tolist()
+        )
+        peak_source = None
     common = dict(catalogue=catalogue, mass_axis=axis, schemas=schemas,
-                  eligible_ions=eligible, chemistry=chemistry, dtype=getattr(dataset, "dtype", torch.float32))
+                  eligible_ions=eligible, chemistry=chemistry, peak_source=peak_source,
+                  dtype=getattr(dataset, "dtype", torch.float32))
     validation_options = {**options, "samples": validation_samples, "seed": config.seed + 1}
     if config.sampling_plan:
         validation_options["sampling_plan"] = _scale_sampling_plan(
@@ -278,8 +363,8 @@ def _scale_sampling_plan(
     while making the resulting integer counts sum exactly to ``sample_count``.
     Entries assigned zero examples are omitted from the smaller validation plan.
     """
-    source_count = sum(entry.count for entry in plan)
-    expected = [entry.count * sample_count / source_count for entry in plan]
+    source_count = sum(entry.output_count for entry in plan)
+    expected = [entry.output_count * sample_count / source_count for entry in plan]
     allocated = [int(value) for value in expected]
     remainder = sample_count - sum(allocated)
     for index in sorted(
@@ -288,8 +373,15 @@ def _scale_sampling_plan(
         reverse=True,
     )[:remainder]:
         allocated[index] += 1
-    return tuple(
-        replace(entry, count=count)
-        for entry, count in zip(plan, allocated)
-        if count > 0
-    )
+    scaled = []
+    for entry, count in zip(plan, allocated):
+        if count < 1:
+            continue
+        permutations = entry.parameters.get("permutations", 1)
+        if entry.strategy == "candidate_permuted" and count % permutations == 0:
+            scaled.append(replace(entry, count=count // permutations))
+            continue
+        parameters = dict(entry.parameters)
+        parameters.pop("permutations", None)
+        scaled.append(replace(entry, count=count, parameters=parameters))
+    return tuple(scaled)

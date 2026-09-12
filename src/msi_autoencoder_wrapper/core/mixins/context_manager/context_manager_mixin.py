@@ -13,7 +13,7 @@ from ....utils.validators import resolve_component
 from ....configuration import get_component_config
 from ....readers.base_reader import MSIBaseReader
 from ....readers.readers_manager import ReaderManager
-from msi_dataset_manager.annotations import AnnotationReader
+from msi_dataset_manager.annotations import AnnotationReader, CandidateCatalogReader
 from ....binners.base_binner import MSIBaseBinner
 from ....binners.base_inverse import MSIBaseInverseBinner
 from ....binners.binners_manager import BinnerManager
@@ -139,6 +139,8 @@ class ContextManagerProxy:
         img_name_or_path: Optional[str] = None,
         annotation_catalog_path: Optional[str] = None,
         auto_load_annotations: bool = True,
+        candidate_catalog_path: Optional[str] = None,
+        auto_load_candidate_catalog: bool = True,
         **kwargs: Any,
     ) -> Any:
         """
@@ -177,7 +179,58 @@ class ContextManagerProxy:
                 catalog_path=annotation_catalog_path,
                 image_path=getattr(reader, "file_path", None),
             )
+        if auto_load_candidate_catalog:
+            self._load_registered_candidate_catalog(
+                img_name_or_path=img_name_or_path,
+                catalog_path=candidate_catalog_path,
+                image_path=getattr(reader, "file_path", None),
+            )
         return reader
+
+    def _load_registered_candidate_catalog(
+        self,
+        *,
+        img_name_or_path: Optional[str],
+        catalog_path: Optional[str],
+        image_path: Optional[Path],
+    ) -> Optional[CandidateCatalogReader]:
+        """Attach an optional database-annotation catalogue beside one image."""
+        if image_path is None:
+            return None
+        resolved_image_path = Path(image_path).expanduser().resolve()
+        candidate = (
+            Path(catalog_path).expanduser().resolve()
+            if catalog_path is not None
+            else resolved_image_path.parent / "database_annotations" / "candidates.sqlite"
+        )
+        if not candidate.is_file():
+            if catalog_path is not None:
+                raise_validation_error(
+                    "CandidateCatalog",
+                    f"Explicit candidate catalogue does not exist: '{candidate}'.",
+                )
+            return None
+        return self.set_candidate_catalog(
+            candidate,
+            img_name_or_path=img_name_or_path or str(resolved_image_path),
+        )
+
+    def set_candidate_catalog(
+        self,
+        catalog_path: Path | str | CandidateCatalogReader,
+        img_name_or_path: Optional[str] = None,
+    ) -> CandidateCatalogReader:
+        """Register a candidate catalogue without requiring one for all datasets."""
+        target = (
+            catalog_path
+            if isinstance(catalog_path, CandidateCatalogReader)
+            else CandidateCatalogReader(catalog_path)
+        )
+        return self._set_component(
+            component_type="candidate_catalog",
+            target=target,
+            img_name_or_path=img_name_or_path,
+        )
 
     def _load_registered_annotations(
         self,
@@ -541,6 +594,7 @@ class ContextManagerProxy:
             self.config_ledger[img_name] = {
                 "reader": {"instance_name": "", "instance_params": {}},
                 "annotation_reader": None,
+                "candidate_catalog": None,
                 "binner": {"instance_name": "", "instance_params": {}},
                 "inverse_binner": {"instance_name": "", "instance_params": {}},
                 "normalization": None,
@@ -591,7 +645,7 @@ class ContextManagerProxy:
             "inverse_binner": MSIBaseInverseBinner,
         }
 
-        supported_types = {*registries, "annotation_reader"}
+        supported_types = {*registries, "annotation_reader", "candidate_catalog"}
         if component_type not in supported_types:
             raise_validation_error(
                 context_name="ContextManager",
@@ -648,6 +702,20 @@ class ContextManagerProxy:
                 active_img,
             )
             return resolved_instance
+
+        if component_type == "candidate_catalog":
+            if not isinstance(target, CandidateCatalogReader):
+                raise_validation_error(
+                    "ContextManager",
+                    "candidate_catalog must be a CandidateCatalogReader instance.",
+                )
+            target.active_context = self._wrapper.active_context
+            self._ensure_image_bucket(active_img)
+            self.config_ledger[active_img][component_type] = target
+            logger.info(
+                "Registered candidate catalogue for image '%s'", active_img
+            )
+            return target
 
         # Dependency injection layer
         ## Automatically inject the active filesystem path if compiling a data loader reader
@@ -776,6 +844,7 @@ class ContextManagerProxy:
         for component_name in (
             "reader",
             "annotation_reader",
+            "candidate_catalog",
             "binner",
             "inverse_binner",
         ):
@@ -884,6 +953,17 @@ class ContextManagerProxy:
                     annotation_config,
                     excluded={"active_context"},
                 ),
+            )
+
+        candidate_config = components.get("candidate_catalog")
+        if isinstance(candidate_config, dict):
+            candidate_parameters = self._loadable_parameters(
+                candidate_config,
+                excluded={"active_context"},
+            )
+            restored["candidate_catalog"] = self.set_candidate_catalog(
+                candidate_parameters["path"],
+                img_name_or_path=context_target,
             )
 
         binner_config = components["binner"]

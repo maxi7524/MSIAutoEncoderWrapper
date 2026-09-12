@@ -8,6 +8,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
+from .annotations.candidates import (
+    ChEBICandidateProvider,
+    HMDBCandidateProvider,
+    LIPIDMAPSCandidateProvider,
+    DEFAULT_CANDIDATE_SOURCE_CACHE_DIR,
+    materialize_candidate_sources,
+)
 from .layout import DatasetWorkspaceLayout
 from .utils.exceptions import DatasetManagerError
 from .operations import compose_cohort
@@ -68,6 +75,45 @@ def build_parser() -> argparse.ArgumentParser:
     compose.add_argument("--max-fdr", type=float)
     compose.add_argument("--minimum-dataset-occurrence", type=int, default=1)
     _add_unannotated_sampling_arguments(compose)
+
+    candidate_sources = commands.add_parser(
+        "candidate-sources",
+        help="Materialize versioned external metabolite database exports",
+    )
+    _add_workspace_argument(candidate_sources)
+    candidate_sources.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=DEFAULT_CANDIDATE_SOURCE_CACHE_DIR,
+        help="Raw provider-export cache relative to the invocation directory",
+    )
+    candidate_sources.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Replace already downloaded provider exports",
+    )
+    candidate_sources.add_argument(
+        "--provider",
+        action="append",
+        choices=("lipidmaps", "hmdb", "chebi"),
+        dest="providers",
+        help="Provider to materialize; repeat to select a subset (default: all)",
+    )
+    candidate_sources.add_argument(
+        "--lipidmaps-version",
+        default="retrieved-2026-09-12",
+        help="Version label stored for the LIPID MAPS snapshot",
+    )
+    candidate_sources.add_argument(
+        "--hmdb-version",
+        default="5.0",
+        help="Version label stored for the HMDB snapshot",
+    )
+    candidate_sources.add_argument(
+        "--chebi-version",
+        default="255",
+        help="Version label stored for the ChEBI snapshot",
+    )
     return parser
 
 
@@ -109,6 +155,28 @@ def _main(argv: Sequence[str] | None = None) -> None:
     ## records, and writes the frozen selection.json artifact.
     if arguments.command == "query":
         _run_query(arguments, invocation_directory)
+        return
+
+    ## Candidate source exports are intentionally independent of individual
+    ## datasets; per-dataset SQLite catalogues consume these local snapshots.
+    if arguments.command == "candidate-sources":
+        cache_dir = _resolve_cli_path(arguments.cache_dir, invocation_directory)
+        provider_by_name = {
+            "lipidmaps": LIPIDMAPSCandidateProvider(
+                version=arguments.lipidmaps_version
+            ),
+            "hmdb": HMDBCandidateProvider(version=arguments.hmdb_version),
+            "chebi": ChEBICandidateProvider(version=arguments.chebi_version),
+        }
+        selected_provider_names = arguments.providers or tuple(provider_by_name)
+        snapshots = materialize_candidate_sources(
+            cache_dir=cache_dir,
+            providers=tuple(provider_by_name[name] for name in selected_provider_names),
+            refresh_cache=arguments.refresh_cache,
+        )
+        print(f"Candidate source cache: {cache_dir}")
+        for snapshot in snapshots:
+            print(f"Source snapshot: {snapshot}")
         return
 
     ## Compose consumes canonical local source folders and produces the merged

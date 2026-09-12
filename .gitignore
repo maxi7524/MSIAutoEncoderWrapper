@@ -8,6 +8,7 @@ tmp
 # data
 /data/
 /assets/local/datasets/
+/assets/local/metabolite_databases/
 *.tar.gz
 *.tar
 *.zip
