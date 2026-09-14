@@ -20,7 +20,7 @@ from msi_autoencoder_wrapper.analysis.autoencoder.experiments.sweep_evaluation i
 from msi_autoencoder_wrapper.data.annotation_evidence import IonCatalogue
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-NOTEBOOKS = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/07_09_26_predictive_expanded"
+NOTEBOOKS = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded"
 
 
 class _TinyModel(nn.Module):

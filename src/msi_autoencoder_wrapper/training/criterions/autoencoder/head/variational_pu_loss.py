@@ -30,6 +30,11 @@ class VariationalPULoss(EvidenceHeadCriterion):
     :param target_field: Binary annotation field.
     :param class_indices: Optional selected target columns.
     :param evidence: Signal evidence parameters, used only when negatives are enabled.
+    :param alpha: Weight of the variational marginal term ``log E[p]``.
+        Values above one are a project-specific precision-oriented modification.
+    :type alpha: float
+    :param beta: Weight of the positive term ``-E_P[log p]``.
+    :type beta: float
     :param negative_weight: Additional mean BCE on signal negatives; zero disables it.
     :param simulated_negative_weight: Additional mean BCE on explicitly
         declared ``N_sim`` entries; zero disables it.
@@ -41,11 +46,14 @@ class VariationalPULoss(EvidenceHeadCriterion):
     REMARK: Raw scores are not calibrated posteriors. ``normalize_scores``
     implements the paper's final scaling using maxima measured on training data.
     Signal-negative supervision is an experimental extension, not the original VPU.
+    ``alpha != beta`` is an experimental asymmetric VPU variant; ``alpha=beta=1``
+    reproduces the original variational risk.
     """
 
     def __init__(self, head_id: str, target_field: str, class_indices=None,
                  evidence=None, negative_weight: float = 0.0,
                  simulated_negative_weight: float = 0.0,
+                 alpha: float = 1.0, beta: float = 1.0,
                  consistency_weight: float = 1.0, mixup_alpha: float = 0.3,
                  max_mixup_classes: int = 64) -> None:
         super().__init__(head_id, target_field, class_indices, evidence)
@@ -54,22 +62,29 @@ class VariationalPULoss(EvidenceHeadCriterion):
             for v in (
                 negative_weight,
                 simulated_negative_weight,
+                alpha,
+                beta,
                 consistency_weight,
             )
         ):
             raise ValueError("VPU weights must be finite and nonnegative.")
+        if alpha == 0 and beta == 0:
+            raise ValueError("At least one of alpha or beta must be positive.")
         if not math.isfinite(mixup_alpha) or mixup_alpha <= 0:
             raise ValueError("mixup_alpha must be finite and positive.")
         if isinstance(max_mixup_classes, bool) or not isinstance(max_mixup_classes, int) or max_mixup_classes < 1:
             raise ValueError("max_mixup_classes must be a positive integer.")
         self.negative_weight = negative_weight
         self.simulated_negative_weight = simulated_negative_weight
+        self.alpha = alpha
+        self.beta = beta
         self.consistency_weight = consistency_weight
         self.mixup_alpha = mixup_alpha
         self.max_mixup_classes = max_mixup_classes
         self._model_ref = None
         self._config.update(negative_weight=negative_weight,
                             simulated_negative_weight=simulated_negative_weight,
+                            alpha=alpha, beta=beta,
                             consistency_weight=consistency_weight,
                             mixup_alpha=mixup_alpha, max_mixup_classes=max_mixup_classes)
 
@@ -79,7 +94,9 @@ class VariationalPULoss(EvidenceHeadCriterion):
             super().on_phase_start(model, dataset, transient_cache)
         self._model_ref = weakref.ref(model)
         logger.info(
-            "Starting variational PU: consistency=%s signal_negative_weight=%s simulated_negative_weight=%s.",
+            "Starting variational PU: alpha=%s beta=%s consistency=%s signal_negative_weight=%s simulated_negative_weight=%s.",
+            self.alpha,
+            self.beta,
             self.consistency_weight,
             self.negative_weight,
             self.simulated_negative_weight,
@@ -109,7 +126,10 @@ class VariationalPULoss(EvidenceHeadCriterion):
             positive_mean = (
                 (log_probability * positives[:, active]).sum(dim=0) / positive_count[active]
             )  # (C_active,)
-            loss = (log_mean - positive_mean).mean()  # ()
+            # Project-specific asymmetric VPU
+            ## alpha controls the marginal P/U pressure; beta retains explicit
+            ## support for observed positives.
+            loss = (self.alpha * log_mean - self.beta * positive_mean).mean()  # ()
             if self.consistency_weight > 0:
                 loss = loss + self.consistency_weight * self._mixup_loss(
                     logits, positives, marginal, active, batch_data,

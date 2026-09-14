@@ -9,9 +9,9 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from msi_autoencoder_wrapper.analysis.autoencoder.heads.metrics import probabilities_from_logits
 from msi_autoencoder_wrapper.analysis.autoencoder.heads.predictive_comparison import (
-    agreement_summary, class_agreement, class_extremes, disagreement_by_property,
-    disagreement_extremes, generalization_gaps, pooled_ranking, positive_scores, ranking_tables,
-    score_histograms, state_separation,
+    THRESHOLD_ANCHORED_FAMILIES, agreement_summary, class_agreement, class_extremes,
+    disagreement_by_property, disagreement_extremes, generalization_gaps, pooled_ranking,
+    positive_scores, ranking_tables, score_histograms, state_confusion, state_separation,
 )
 
 
@@ -57,6 +57,163 @@ def test_ties_use_standard_average_precision():
 def test_invalid_scores_rejected(logits):
     with pytest.raises(ValueError):
         positive_scores(logits)
+
+
+def test_selective_head_positive_score_uses_classifier_channel_not_pnu_order():
+    # (N, C, 3) = (classifier, selection, auxiliary); only `classifier` is a
+    # class-membership logit (`SelectivePNLoss`/`SelectiveTaylorVariationalPULoss`
+    # both apply BCE-with-logits to channel 0 directly, see `selective_losses.py`).
+    classifier = np.array([[3.], [1.], [-2.]])
+    selection = np.array([[-50.], [50.], [0.]])  # would dominate under the PNU convention
+    auxiliary = np.array([[7.], [-7.], [0.]])
+    logits = np.stack([classifier, selection, auxiliary], axis=-1)
+    for family in ("SelectivePNLoss", "SelectiveTaylorVariationalPULoss"):
+        scores = positive_scores(logits, family=family)
+        np.testing.assert_array_equal(scores, classifier)
+    # Without the family override, the default PNU-order convention reads a
+    # different (wrong, for this head) channel and must disagree with `classifier`.
+    assert not np.allclose(positive_scores(logits), classifier)
+
+
+def test_evidential_head_positive_score_matches_dirichlet_mean_logit():
+    # (N, C, 2) = (negative_evidence, positive_evidence), raw pre-softplus logits.
+    negative = np.array([[0.], [2.], [-1.]])
+    positive = np.array([[3.], [0.], [-1.]])
+    logits = np.stack([negative, positive], axis=-1)
+    scores = positive_scores(logits, family="EvidentialTaylorVariationalPULoss")
+    concentration = np.logaddexp(0.0, logits) + 1.0
+    expected = np.log(concentration[..., 1]) - np.log(concentration[..., 0])
+    np.testing.assert_allclose(scores, expected, rtol=1e-12, atol=1e-12)
+    # A positive-evidence-only increase must raise the score monotonically.
+    raised = positive_scores(np.stack([negative, positive + 5.0], axis=-1),
+                             family="EvidentialTaylorVariationalPULoss")
+    assert (raised > scores).all()
+
+
+def test_deep_gambler_taylor_hybrid_uses_conditional_positive_logit():
+    # (N, C, 3) = (negative, positive, reserve); the hybrid's own docstring defines
+    # its PU score as `positive - negative`, independent of `reserve`.
+    negative = np.array([[1.], [0.], [-2.]])
+    positive = np.array([[4.], [3.], [1.]])
+    reserve = np.array([[0.], [0.], [0.]])
+    logits = np.stack([negative, positive, reserve], axis=-1)
+    scores = positive_scores(logits, family="DeepGamblerTaylorVariationalPULoss")
+    np.testing.assert_allclose(scores, positive - negative, rtol=1e-12, atol=1e-12)
+    # Changing only `reserve` must not move this family's score at all.
+    logits[..., 2] = 500.0
+    np.testing.assert_allclose(positive_scores(logits, family="DeepGamblerTaylorVariationalPULoss"),
+                               positive - negative, rtol=1e-12, atol=1e-12)
+    # Plain `DeepGamblerPNLoss` keeps the default (reserve-sensitive) convention.
+    assert not np.allclose(positive_scores(logits, family="DeepGamblerPNLoss"), positive - negative)
+
+
+def test_threshold_anchored_families_cover_every_score_thats_a_real_probability():
+    # Regression lock: only a genuinely shift-invariant score (no absolute anchor) or
+    # a genuine three-way decision (handled separately by state_confusion/part_8)
+    # should be excluded — everything else's sigmoid is a model-intrinsic probability
+    # estimate, not merely a rank, and belongs in THRESHOLD_ANCHORED_FAMILIES.
+    expected_eligible = {
+        "ClassBalancedMultiLabelBCELoss", "MultiLabelBCELoss", "PositiveWeightedMultiLabelBCELoss",
+        "BCEPNLoss", "SignalMaskedBCELoss", "SelectivePNLoss", "SelectiveTaylorVariationalPULoss",
+        "VariationalPULoss", "TaylorVariationalPULoss", "EvidentialTaylorVariationalPULoss",
+        "JERMLoss", "DeepGamblerPNLoss", "DeepGamblerTaylorVariationalPULoss",
+    }
+    assert THRESHOLD_ANCHORED_FAMILIES == expected_eligible
+    for excluded in ("SymmetricPURankingLoss", "ThreeStateCrossEntropyLoss", "ObservedPNUSCrossEntropyLoss"):
+        assert excluded not in THRESHOLD_ANCHORED_FAMILIES
+
+
+def test_ranking_tables_threshold_metrics_gated_by_family():
+    generator = np.random.default_rng(3)
+    targets = (generator.random((200, 4)) < .3).astype(int)
+    states = np.where(targets, 1, generator.integers(0, 2, size=targets.shape) * 2)
+    logits = generator.normal(size=targets.shape)
+    eligible_tables = ranking_tables(logits, targets, states, targets.sum(axis=0),
+                                     ("a", "b", "c", "d"), family="ClassBalancedMultiLabelBCELoss")
+    per_class = eligible_tables["per_class"]
+    eligible_rows = per_class[per_class.eligible]
+    assert eligible_rows[["precision", "recall", "f1"]].notna().all().all()
+    aggregate = eligible_tables["prediction"].set_index(["population", "scope", "metric"])
+    key = ("annotation_retrieval", "train_supported")
+    for metric in ("precision", "recall", "f1"):
+        assert np.isfinite(aggregate.loc[(*key, metric), "value"])
+    for metric in ("micro_precision", "micro_recall", "micro_f1", "hamming_loss"):
+        assert np.isfinite(aggregate.loc[(*key, metric), "value"])
+
+    ranking_only_tables = ranking_tables(logits, targets, states, targets.sum(axis=0),
+                                         ("a", "b", "c", "d"), family="SymmetricPURankingLoss")
+    assert ranking_only_tables["per_class"][["precision", "recall", "f1"]].isna().all().all()
+    ranking_only_aggregate = ranking_only_tables["prediction"].set_index(["population", "scope", "metric"])
+    for metric in ("precision", "recall", "f1", "micro_precision", "micro_recall", "micro_f1", "hamming_loss"):
+        assert np.isnan(ranking_only_aggregate.loc[(*key, metric), "value"])
+
+    # No `family` keeps the previous, unchanged default: no threshold metrics.
+    default_tables = ranking_tables(logits, targets, states, targets.sum(axis=0), ("a", "b", "c", "d"))
+    assert default_tables["per_class"][["precision", "recall", "f1"]].isna().all().all()
+
+
+def test_ranking_tables_hamming_loss_matches_manual_computation():
+    # Two classes, both eligible, one threshold-anchored condition. Class 0: scores
+    # exactly straddle 0.5 so predictions are known by construction; class 1 is a
+    # perfect separator, used only to keep both classes eligible.
+    targets = np.array([[1, 1], [0, 1], [1, 0], [0, 0]])
+    states = np.where(targets, 1, 0)
+    # sigmoid(logit) >= 0.5 iff logit >= 0: predicted = [[1,1],[0,1],[1,0],[1,0]]
+    logits = np.array([[5., 5.], [-5., 5.], [5., -5.], [1., -5.]])
+    tables = ranking_tables(logits, targets, states, targets.sum(axis=0), ("a", "b"),
+                            family="ClassBalancedMultiLabelBCELoss")
+    predicted = logits >= 0.0
+    expected_hamming = float(np.mean(predicted != targets.astype(bool)))
+    aggregate = tables["prediction"].set_index(["population", "scope", "metric"])
+    observed = aggregate.loc[("annotation_retrieval", "train_supported", "hamming_loss"), "value"]
+    assert observed == pytest.approx(expected_hamming)
+
+
+def test_state_confusion_cross_tabulates_true_against_predicted_state():
+    # One class, five entries. Rows are engineered so `argmax` is deterministic:
+    # true N -> predicted N (correct), true N -> predicted U (confused with U, the
+    # failure this whole head family exists to avoid), true P -> predicted P
+    # (correct), true U -> predicted U (correct), true U -> predicted N (confused).
+    logits = np.array([
+        [[5., 0., 0.]],
+        [[0., 0., 5.]],
+        [[0., 5., 0.]],
+        [[0., 0., 5.]],
+        [[5., 0., 0.]],
+    ])
+    states = np.array([[0], [0], [1], [2], [2]])  # true: N, N, P, U, U
+    result = state_confusion(logits, states, np.array([1]), ("ion",))
+    confusion = result["state_confusion"]
+    summary = result["state_confusion_summary"]
+
+    n_row = confusion.query("true_state == 'N'").set_index("predicted_state")
+    assert n_row.loc["N", "count"] == 1 and n_row.loc["U", "count"] == 1
+    assert n_row["true_state_total"].iloc[0] == 2
+    u_row = confusion.query("true_state == 'U'").set_index("predicted_state")
+    assert u_row.loc["U", "count"] == 1 and u_row.loc["N", "count"] == 1
+
+    row = summary.iloc[0]
+    assert row.entries == 5
+    assert row.accuracy == pytest.approx(3 / 5)  # N->N, P->P, U->U correct; two confusions
+    assert row.majority_baseline_accuracy == pytest.approx(2 / 5)  # N and U each total 2
+    assert np.isfinite(row.cramers_v)
+
+
+def test_state_confusion_rejects_non_pnu_shapes():
+    with pytest.raises(ValueError):
+        state_confusion(np.zeros((4, 2)), np.zeros((4, 2), dtype=int), np.array([1, 1]), ("a", "b"))
+
+
+def test_state_confusion_leaves_significance_undefined_for_a_single_true_state():
+    # Every entry is truly P: no contingency table exists to test independence,
+    # but accuracy/majority-baseline are still well defined.
+    logits = np.array([[[0., 5., 0.]], [[0., 5., 0.]]])
+    states = np.array([[1], [1]])
+    result = state_confusion(logits, states, np.array([2]), ("ion",))
+    row = result["state_confusion_summary"].iloc[0]
+    assert row.accuracy == pytest.approx(1.0)
+    assert row.majority_baseline_accuracy == pytest.approx(1.0)
+    assert np.isnan(row.chi2_p_value) and np.isnan(row.cramers_v)
 
 
 def test_jerm_posterior_channel_is_ranked_and_propensity_is_ignored():

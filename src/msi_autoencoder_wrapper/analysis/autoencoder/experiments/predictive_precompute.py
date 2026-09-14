@@ -37,7 +37,9 @@ import torch
 from ....data.annotation_evidence import IonCatalogue, SignalEvidencePolicy
 from ....models.model_loader import ModelLoader
 from ....utils.logger import get_custom_logger
-from ..heads.predictive_comparison import ranking_tables, score_histograms, state_separation
+from ..heads.predictive_comparison import (
+    THREE_STATE_FAMILIES, ranking_tables, score_histograms, state_confusion, state_separation,
+)
 from ..latent.predictive_geometry import (
     geometry_tables, intrinsic_dimension_estimate, label_structure_correlation, ridge_probe, structure_summary,
 )
@@ -394,17 +396,39 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
             output = infer_model(model, split.spectra, row["head"], batch_size=settings["batch_size"])
             device = settings["device"]
             tables = ranking_tables(output["logits"], split.targets, state_arrays[name], train_counts,
-                                    catalogue.class_names, device=device)
+                                    catalogue.class_names, device=device, family=row["family"])
             ### How each head orders operational negatives against unlabelled entries
             tables["state_separation"] = state_separation(output["logits"], state_arrays[name], train_counts,
-                                                          catalogue.class_names, device=device)
-            tables["score_histograms"] = score_histograms(output["logits"], state_arrays[name], train_counts, device=device)
+                                                          catalogue.class_names, device=device, family=row["family"])
+            tables["score_histograms"] = score_histograms(output["logits"], state_arrays[name], train_counts,
+                                                           device=device, family=row["family"])
+            ### Does the head's own N/P/U decision actually separate N from U, not
+            ### just rank them (that is `state_separation` above)? Only meaningful
+            ### for the two families that make an actual three-way decision; every
+            ### other model still writes the (empty, correctly shaped) table so
+            ### `load_table` can keep assuming every model has every table file.
+            if row["family"] in THREE_STATE_FAMILIES:
+                confusion = state_confusion(output["logits"], state_arrays[name], train_counts,
+                                            catalogue.class_names, device=device)
+                tables["state_confusion"] = confusion["state_confusion"]
+                tables["state_confusion_summary"] = confusion["state_confusion_summary"]
+            else:
+                tables["state_confusion"] = pd.DataFrame(columns=["class_index", "class_name", "train_positives",
+                                                                   "true_state", "predicted_state", "count",
+                                                                   "true_state_total", "share"])
+                tables["state_confusion_summary"] = pd.DataFrame(columns=["class_index", "class_name",
+                                                                          "train_positives", "entries", "accuracy",
+                                                                          "majority_baseline_accuracy",
+                                                                          "chi2_statistic", "chi2_p_value", "cramers_v"])
             if name == "train":
                 train_latent = output["latent"]
             else:
                 if train_latent is None or not np.asarray(train.mask).all():
                     raise ValueError("The annotation probe needs train-first splits and fully available training labels.")
                 probe_scores = ridge_probe(train_latent, train.targets, output["latent"], penalty=settings["probe_penalty"])  # (N, C)
+                # REMARK: `family` is deliberately omitted here — the ridge probe is
+                # always a plain linear score regardless of which loss trained the
+                # real head, so it must keep the default shape-only convention.
                 probe = ranking_tables(probe_scores, split.targets, state_arrays[name], train_counts,
                                        catalogue.class_names, device=device)
                 tables["probe_prediction"] = probe["prediction"]

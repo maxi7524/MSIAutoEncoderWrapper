@@ -99,6 +99,42 @@ def test_vpu_matches_analytic_marginal_risk_and_has_finite_extreme_gradients(evi
     assert logits.grad[1, 1] == 0
 
 
+def test_asymmetric_vpu_applies_alpha_to_marginal_and_beta_to_positive_terms(evidence_case):
+    """Asymmetric VPU retains the analytic P/U risk with explicit coefficients."""
+    _, batch = evidence_case
+    logits = torch.tensor([[1.0, -1.0], [0.5, 2.0], [-2.0, 0.0]], requires_grad=True)
+    criterion = VariationalPULoss(
+        "ion",
+        "molecule",
+        alpha=2.0,
+        beta=0.5,
+        consistency_weight=0,
+    )
+
+    loss = criterion({"head_ion": logits}, batch)
+    log_probability = F.logsigmoid(logits)
+    first_marginal = torch.logsumexp(log_probability[:, 0], 0) - torch.tensor(3.0).log()
+    first_positive = log_probability[0, 0]
+    second_marginal = torch.logsumexp(log_probability[[0, 2], 1], 0) - torch.tensor(2.0).log()
+    second_positive = log_probability[2, 1]
+    expected = torch.stack(
+        (
+            2.0 * first_marginal - 0.5 * first_positive,
+            2.0 * second_marginal - 0.5 * second_positive,
+        )
+    ).mean()
+
+    torch.testing.assert_close(loss, expected, rtol=1e-6, atol=1e-6)
+    loss.backward()
+    assert bool(torch.isfinite(logits.grad).all())
+
+
+def test_asymmetric_vpu_rejects_an_empty_objective():
+    """Both variational coefficients cannot be disabled simultaneously."""
+    with pytest.raises(ValueError, match="At least one"):
+        VariationalPULoss("ion", "molecule", alpha=0, beta=0)
+
+
 def test_vpu_negative_extension_preserves_core_risk(evidence_case):
     catalogue, batch = evidence_case
     logits = torch.zeros(3, 2, requires_grad=True)

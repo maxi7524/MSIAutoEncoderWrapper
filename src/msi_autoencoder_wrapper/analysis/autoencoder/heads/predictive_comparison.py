@@ -44,9 +44,105 @@ STATE_LABELS = {POSITIVE: "P", NEGATIVE: "N", UNLABELLED: "U"}
 #: how many classes the catalogue holds.
 CLASS_CHUNK = 128
 
+# REMARK: The default channel convention below (PNU N/P/U order for 3 channels,
+# JERM posterior/propensity order for 2 channels) is correct only for the heads it
+# was written for. `SelectiveHead` and `EvidentialHead` share the same *shapes* but
+# a genuinely different channel *layout*; reading them with the default convention
+# silently scores the wrong channel (verified against the campaign cache: it is
+# exactly what produced near-zero/inverted `average_precision`/`roc_auc` for the
+# conditions below before this fix). Dispatch is therefore keyed on `family`, the
+# registered criterion class name already recorded per condition
+# (`predictive_campaign.objective_identity`'s `family`), not on shape alone.
+#: `SelectiveHead` (`selective_head.py`) returns `(classifier, selection,
+#: auxiliary)`. `classifier` (channel 0) is the plain `binary_cross_entropy_with_logits`
+#: class-membership logit (`selective_losses.py`/`selective_taylor_pu_loss.py`'s own
+#: `forward()`); `selection`/`auxiliary` are an unrelated abstention mechanism.
+SELECTIVE_FAMILIES = frozenset({"SelectivePNLoss", "SelectiveTaylorVariationalPULoss"})
+#: `EvidentialHead` (`evidential_head.py`) returns `(negative_evidence,
+#: positive_evidence)`, not JERM's `(posterior_logit, propensity_logit)`. The mean
+#: Dirichlet positive probability must be recomputed from both channels exactly as
+#: `EvidentialTaylorVariationalPULoss.concentrations`/`probability` do.
+EVIDENTIAL_FAMILIES = frozenset({"EvidentialTaylorVariationalPULoss"})
+#: `DeepGamblerHead` stays `(negative, positive, reserve)` for both families, but
+#: `DeepGamblerTaylorVariationalPULoss`'s own Taylor-VPU term is defined on
+#: `positive - negative` (its own docstring/`forward()`), independent of `reserve` —
+#: different from plain `DeepGamblerPNLoss`, whose softmax risk makes the default
+#: `positive - logsumexp(negative, reserve)` the exact log-odds of positive against
+#: everything else, so that family keeps the default path.
+DEEP_GAMBLER_TAYLOR_FAMILIES = frozenset({"DeepGamblerTaylorVariationalPULoss"})
+#: Families where `sigmoid(positive_scores)` is a well-defined, model-intrinsic
+#: estimate of the positive-class probability, so `>= 0.5` is a meaningful decision —
+#: not only the literal-BCE families, but every family whose *training objective's own
+#: theory* targets that same quantity:
+#: - BCE family: `sigmoid(logit)` is the literal training target.
+#: - :data:`SELECTIVE_FAMILIES`: `classifier` (channel 0) is BCE-trained directly.
+#: - `VariationalPULoss`/`TaylorVariationalPULoss`: the variational PU bound's entire
+#:   theoretical point (Chen et al. 2020 / Zhao et al. 2023) is to make the trained
+#:   sigmoid output a valid posterior estimate under an unknown class prior — not
+#:   literal BCE, but targeting the identical quantity BCE targets.
+#: - `EvidentialTaylorVariationalPULoss`: `sigmoid(score)` reconstructs exactly the
+#:   Dirichlet mean `alpha_P / (alpha_P + alpha_N)` (see :func:`positive_scores`).
+#: - `JERMLoss`: `sigmoid(posterior_logit)` *is* the posterior branch's target by
+#:   construction (`jerm_head.py`'s own docstring; `positive_scores`' REMARK).
+#: - `DeepGamblerPNLoss`/`DeepGamblerTaylorVariationalPULoss`: `sigmoid(score)`
+#:   reconstructs the model's own categorical `positive` probability (plain: marginal
+#:   `p(P)`; hybrid: `p(P | accepted)`, conditioned on not abstaining) — still a
+#:   genuine, checkable probability, not merely a rank.
+#: Excluded — no meaningful 0.5 threshold exists, not merely an unproven one:
+#: - `SymmetricPURankingLoss`: its pairwise surrogate is shift-invariant by
+#:   construction (`l(d) + l(-d) = 1` regardless of any additive offset to the whole
+#:   score), so no absolute anchor exists at all, unlike every family above.
+#: - `ThreeStateCrossEntropyLoss`/`ObservedPNUSCrossEntropyLoss`: these make a
+#:   genuine three-way decision; forcing that through a binary 0.5-on-`positive`
+#:   cutoff here would be a strictly worse, redundant proxy for the dedicated
+#:   argmax-based three-way analysis in `part_8_pnu_state_discrimination.ipynb`
+#:   (`state_confusion`) — not included because no such number would compare.
+THRESHOLD_ANCHORED_FAMILIES = frozenset({
+    "ClassBalancedMultiLabelBCELoss", "MultiLabelBCELoss", "PositiveWeightedMultiLabelBCELoss",
+    "BCEPNLoss", "SignalMaskedBCELoss", *SELECTIVE_FAMILIES,
+    "VariationalPULoss", "TaylorVariationalPULoss", *EVIDENTIAL_FAMILIES, "JERMLoss",
+    "DeepGamblerPNLoss", *DEEP_GAMBLER_TAYLOR_FAMILIES,
+})
 
-def positive_scores(logits: np.ndarray) -> np.ndarray:
-    """Return stable positive log odds for binary, N/P/U or JERM outputs.
+
+def _threshold_eligible(family: str | None) -> bool:
+    """Whether `family`'s ranking score is a calibrated, 0.5-anchored log-odds.
+
+    :param family: Registered criterion class name, or ``None`` when unknown.
+    :type family: str | None
+    :return: ``True`` only for :data:`THRESHOLD_ANCHORED_FAMILIES`.
+    :rtype: bool
+    """
+    return family in THRESHOLD_ANCHORED_FAMILIES
+
+
+#: Families whose head makes an actual three-way N/P/U decision (`ThreeStateHead`,
+#: `evidence_losses.py`/`simulated_negative_losses.py`), the only ones
+#: :func:`state_confusion` applies to: every other family's 3-channel output (if any)
+#: means something else entirely (see :data:`SELECTIVE_FAMILIES`,
+#: :data:`DEEP_GAMBLER_TAYLOR_FAMILIES`, plain `DeepGamblerPNLoss`).
+THREE_STATE_FAMILIES = frozenset({"ThreeStateCrossEntropyLoss", "ObservedPNUSCrossEntropyLoss"})
+
+
+def _evidential_positive_log_odds(values: np.ndarray) -> np.ndarray:
+    """Recompute the Dirichlet mean positive log-odds from raw evidence logits.
+
+    Mirrors ``EvidentialTaylorVariationalPULoss.concentrations``/``probability``
+    exactly (``alpha = softplus(raw) + 1``, ``probability = alpha_P / alpha.sum()``)
+    so the analysis score matches what the loss itself optimizes, rather than
+    reimplementing an independent probability estimate.
+
+    :param values: Raw ``(negative_evidence, positive_evidence)`` logits, ``(N, C, 2)``.
+    :type values: numpy.ndarray
+    :return: Positive log-odds ``log(alpha_P / alpha_N)``, shape ``(N, C)``.
+    :rtype: numpy.ndarray
+    """
+    concentration = np.logaddexp(0.0, values) + 1.0  # softplus(raw) + 1, always > 0
+    return np.log(concentration[..., POSITIVE]) - np.log(concentration[..., NEGATIVE])  # (N, C)
+
+
+def positive_scores(logits: np.ndarray, family: str | None = None) -> np.ndarray:
+    """Return stable positive log odds for binary, N/P/U, JERM or family-specific outputs.
 
     This is the double-precision reference path used by tests and by any caller that
     needs the scores themselves; the batched evaluation below builds the same
@@ -56,6 +152,11 @@ def positive_scores(logits: np.ndarray) -> np.ndarray:
         ``(N, C, 2)`` (``(posterior_logit, propensity_logit)``, see
         :class:`~.architectures.types.autoencoders.heads.jerm_head.JERMHead`).
     :type logits: numpy.ndarray
+    :param family: Registered criterion class name; selects a non-default channel
+        reading for :data:`SELECTIVE_FAMILIES`, :data:`EVIDENTIAL_FAMILIES` and
+        :data:`DEEP_GAMBLER_TAYLOR_FAMILIES`. ``None`` (default) keeps the original
+        shape-only convention.
+    :type family: str | None
     :return: Positive ranking scores, shape ``(N, C)``.
     :rtype: numpy.ndarray
     :raises ValueError: If dimensions or values are invalid.
@@ -64,6 +165,18 @@ def positive_scores(logits: np.ndarray) -> np.ndarray:
     _validate_logits(values)
     if values.ndim == 2:
         return values
+    if family in SELECTIVE_FAMILIES:
+        if values.shape[-1] != 3:
+            raise ValueError("Selective-head logits must have shape (N, C, 3).")
+        return values[..., 0]  # classifier channel; see SELECTIVE_FAMILIES REMARK
+    if family in EVIDENTIAL_FAMILIES:
+        if values.shape[-1] != 2:
+            raise ValueError("Evidential-head logits must have shape (N, C, 2).")
+        return _evidential_positive_log_odds(values)
+    if family in DEEP_GAMBLER_TAYLOR_FAMILIES:
+        if values.shape[-1] != 3:
+            raise ValueError("Deep-Gambler-head logits must have shape (N, C, 3).")
+        return values[..., 1] - values[..., 0]  # positive - negative; reserve ignored
     if values.shape[-1] == 2:
         # REMARK: JERM's `posterior_logit` (channel 0) is already a plain
         # class-membership log odds (`JERMLoss` applies a bare sigmoid to it, see
@@ -86,12 +199,14 @@ def _validate_logits(values: np.ndarray | torch.Tensor) -> None:
         raise ValueError("Expected binary (N, C), N/P/U (N, C, 3) or JERM (N, C, 2) logits.")
 
 
-def _score_tensor(logits: Any, device: torch.device) -> torch.Tensor:
+def _score_tensor(logits: Any, device: torch.device, family: str | None = None) -> torch.Tensor:
     """Build the positive log odds on the evaluation device in single precision.
 
     :param logits: Binary ``(N, C)``, N/P/U ``(N, C, 3)`` or JERM ``(N, C, 2)`` head
         outputs.
     :param device: Device every downstream reduction runs on.
+    :param family: Registered criterion class name; see :func:`positive_scores`.
+    :type family: str | None
     :return: Positive ranking scores, shape ``(N, C)``.
     :rtype: torch.Tensor
     :raises ValueError: If dimensions or values are invalid.
@@ -100,6 +215,19 @@ def _score_tensor(logits: Any, device: torch.device) -> torch.Tensor:
     _validate_logits(values)
     if values.ndim == 2:
         return values
+    if family in SELECTIVE_FAMILIES:
+        if values.shape[-1] != 3:
+            raise ValueError("Selective-head logits must have shape (N, C, 3).")
+        return values[..., 0]
+    if family in EVIDENTIAL_FAMILIES:
+        if values.shape[-1] != 2:
+            raise ValueError("Evidential-head logits must have shape (N, C, 2).")
+        concentration = torch.nn.functional.softplus(values) + 1.0  # (N, C, 2)
+        return concentration[..., POSITIVE].log() - concentration[..., NEGATIVE].log()  # (N, C)
+    if family in DEEP_GAMBLER_TAYLOR_FAMILIES:
+        if values.shape[-1] != 3:
+            raise ValueError("Deep-Gambler-head logits must have shape (N, C, 3).")
+        return values[..., 1] - values[..., 0]
     if values.shape[-1] == 2:
         return values[..., 0]  # JERM posterior_logit; see `positive_scores`.
     return values[..., POSITIVE] - torch.logsumexp(values[..., [NEGATIVE, UNLABELLED]], dim=-1)  # (N, C)
@@ -244,8 +372,15 @@ def ranking_tables(
     class_names: tuple[str, ...],
     *,
     device: Any = None,
+    family: str | None = None,
+    threshold: float = 0.5,
 ) -> dict[str, pd.DataFrame]:
     """Measure ranking under two fixed evaluation populations, without a cutoff.
+
+    Threshold-dependent metrics (macro/micro precision, recall, F1, Hamming loss)
+    are also reported, but only for :data:`THRESHOLD_ANCHORED_FAMILIES`: every other
+    ``family`` gets ``nan`` there rather than a number computed at an arbitrary,
+    uncalibrated cutoff (see :func:`_threshold_eligible`).
 
     :param logits: Active head outputs, ``(N, C)`` or ``(N, C, 3)``.
     :param targets: Original binary annotations, ``(N, C)``.
@@ -253,12 +388,17 @@ def ranking_tables(
     :param train_counts: Observed training positives per class, ``(C,)``.
     :param class_names: Stable names in target-column order.
     :param device: Evaluation device; CUDA is used when available and none is given.
+    :param family: Registered criterion class name; see :func:`positive_scores` for
+        the score dispatch and :func:`_threshold_eligible` for the threshold gate.
+    :type family: str | None
+    :param threshold: Positive-probability cutoff for the threshold-dependent metrics.
+    :type threshold: float
     :return: Aggregate, per-class, pooled-curve and per-state diagnostic DataFrames.
     :rtype: dict[str, pandas.DataFrame]
     :raises ValueError: If shapes, labels or evidence semantics disagree.
     """
     resolved = _resolve_device(device)
-    scores = _score_tensor(logits, resolved)  # (N, C)
+    scores = _score_tensor(logits, resolved, family=family)  # (N, C)
     targets, states = np.asarray(targets), np.asarray(states)
     train_counts = np.asarray(train_counts)
     _validate_alignment(scores, targets, states, train_counts, class_names)
@@ -270,6 +410,9 @@ def ranking_tables(
         "operational_pn": ((state_tensor == POSITIVE) | (state_tensor == NEGATIVE)).to(torch.float32),
     }
     frequency = _frequency_labels(train_counts)  # (C,)
+    probabilities = torch.sigmoid(scores)  # (N, C); reused below and by the diagnostics block
+    threshold_anchored = _threshold_eligible(family)
+    predicted_positive = probabilities >= threshold  # (N, C)
     rows, aggregate, curves = [], [], []
     # Per-class evaluation, retaining undefined values and their denominators
     for population, mask in masks.items():
@@ -284,6 +427,19 @@ def ranking_tables(
         eligible = (train_counts > 0) & (positives_numpy > 0) & (negatives_numpy > 0)  # (C,)
         prevalence = np.divide(positives_numpy, retained_numpy, out=np.full(len(class_names), np.nan),
                                where=retained_numpy > 0)  # (C,)
+        ## Threshold-dependent per-class counts, gated on `threshold_anchored`
+        mask_bool = mask.bool()  # (N, C)
+        target_bool = target_tensor.bool()  # (N, C)
+        true_positive = (predicted_positive & target_bool & mask_bool).sum(dim=0).cpu().numpy()  # (C,)
+        false_positive = (predicted_positive & ~target_bool & mask_bool).sum(dim=0).cpu().numpy()  # (C,)
+        false_negative = (~predicted_positive & target_bool & mask_bool).sum(dim=0).cpu().numpy()  # (C,)
+        class_precision = np.divide(true_positive, true_positive + false_positive,
+                                    out=np.zeros(len(class_names)), where=(true_positive + false_positive) > 0)
+        class_recall = np.divide(true_positive, true_positive + false_negative,
+                                 out=np.zeros(len(class_names)), where=(true_positive + false_negative) > 0)
+        class_f1 = np.divide(2 * class_precision * class_recall, class_precision + class_recall,
+                             out=np.zeros(len(class_names)), where=(class_precision + class_recall) > 0)
+        show_threshold = eligible if threshold_anchored else np.zeros(len(class_names), dtype=bool)
         frame = pd.DataFrame({
             "population": population, "class_index": np.arange(len(class_names)),
             "class_name": list(class_names), "train_positives": train_counts.astype(np.int64),
@@ -291,13 +447,16 @@ def ranking_tables(
             "eligible": eligible, "frequency": frequency, "prevalence": prevalence,
             "average_precision": np.where(eligible, precision.cpu().numpy(), np.nan),
             "roc_auc": np.where(eligible, area.cpu().numpy(), np.nan),
+            "precision": np.where(show_threshold, class_precision, np.nan),
+            "recall": np.where(show_threshold, class_recall, np.nan),
+            "f1": np.where(show_threshold, class_f1, np.nan),
         })
         frame["ap_above_prevalence"] = frame.average_precision - frame.prevalence
         rows.append(frame)
         ## Macro aggregation: one curve per class, every class weighted equally
         for scope in ("train_supported", "rare", "medium", "frequent"):
             selected = frame[frame.eligible & ((frame.frequency == scope) if scope != "train_supported" else True)]
-            for metric in ("average_precision", "roc_auc", "ap_above_prevalence"):
+            for metric in ("average_precision", "roc_auc", "ap_above_prevalence", "precision", "recall", "f1"):
                 aggregate.append({"population": population, "scope": scope, "metric": metric,
                                   "value": selected[metric].mean(), "classes": len(selected),
                                   "entries": np.nan})
@@ -310,13 +469,33 @@ def ranking_tables(
             aggregate.append({"population": population, "scope": "train_supported",
                               "metric": f"micro_{metric}", "value": pooled[metric],
                               "classes": int(eligible.sum()), "entries": pooled["entries"]})
+        ### Pooled threshold metrics, gated the same way as the per-class columns above:
+        ### undefined at an uncalibrated cutoff, not just unreported.
+        if threshold_anchored:
+            pooled_predicted = predicted_positive[pooled_mask]  # (E,)
+            pooled_target = target_bool[pooled_mask]  # (E,)
+            pooled_entries = int(pooled_mask.sum().item())
+            pooled_tp = float((pooled_predicted & pooled_target).sum().item())
+            pooled_fp = float((pooled_predicted & ~pooled_target).sum().item())
+            pooled_fn = float((~pooled_predicted & pooled_target).sum().item())
+            micro_precision = pooled_tp / (pooled_tp + pooled_fp) if (pooled_tp + pooled_fp) > 0 else 0.0
+            micro_recall = pooled_tp / (pooled_tp + pooled_fn) if (pooled_tp + pooled_fn) > 0 else 0.0
+            micro_f1 = (2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+                       if (micro_precision + micro_recall) > 0 else 0.0)
+            hamming = float((pooled_predicted != pooled_target).float().mean().item()) if pooled_entries else float("nan")
+        else:
+            pooled_entries = 0
+            micro_precision = micro_recall = micro_f1 = hamming = float("nan")
+        for metric, value in (("micro_precision", micro_precision), ("micro_recall", micro_recall),
+                              ("micro_f1", micro_f1), ("hamming_loss", hamming)):
+            aggregate.append({"population": population, "scope": "train_supported", "metric": metric,
+                              "value": value, "classes": int(eligible.sum()), "entries": pooled_entries})
         for name, y_values in (("precision_recall", pooled["precision_at_recall"]),
                                ("roc", pooled["tpr_at_fpr"])):
             curves.append(pd.DataFrame({"population": population, "curve": name, "x": CURVE_GRID,
                                         "y": y_values, "classes": int(eligible.sum()),
                                         "entries": pooled["entries"]}))
     # Score spread is a diagnostic, not evidence of molecular calibration
-    probabilities = torch.sigmoid(scores)  # (N, C)
     quantiles = torch.tensor([0.0, 0.1, 0.5, 0.9, 1.0], device=resolved)
     diagnostics = []
     for state, label in STATE_LABELS.items():
@@ -344,6 +523,7 @@ def state_separation(
     class_names: tuple[str, ...],
     *,
     device: Any = None,
+    family: str | None = None,
 ) -> pd.DataFrame:
     """Measure where each head places evidence-negative and unlabelled entries.
 
@@ -372,13 +552,15 @@ def state_separation(
     :type class_names: tuple[str, ...]
     :param device: Evaluation device; CUDA is used when available and none is given.
     :type device: Any
+    :param family: Registered criterion class name; see :func:`positive_scores`.
+    :type family: str | None
     :return: One row per class with state counts, per-state score location and the
         two state-pair areas under the curve; undefined pairs remain NaN.
     :rtype: pandas.DataFrame
     :raises ValueError: If shapes or evidence-state codes are invalid.
     """
     resolved = _resolve_device(device)
-    scores = _score_tensor(logits, resolved)  # (N, C)
+    scores = _score_tensor(logits, resolved, family=family)  # (N, C)
     states = np.asarray(states)
     train_counts = np.asarray(train_counts)
     if tuple(scores.shape) != states.shape or len(class_names) != scores.shape[1] or train_counts.shape != (scores.shape[1],):
@@ -417,6 +599,104 @@ def state_separation(
     return result
 
 
+def state_confusion(
+    logits: np.ndarray,
+    states: np.ndarray,
+    train_counts: np.ndarray,
+    class_names: tuple[str, ...],
+    *,
+    device: Any = None,
+) -> dict[str, pd.DataFrame]:
+    """Cross-tabulate a three-state head's own hard decision against the true state.
+
+    :func:`state_separation` asks whether the *continuous* score ranks P above U
+    above N; it says nothing about the head's actual three-way decision
+    (``argmax`` over the N/P/U softmax), which is what a head that claims to
+    resolve N/P/U is actually for. This answers that directly, per class: of the
+    entries truly N (respectively P, U), how many does the head's own ``argmax``
+    place in each of the three predicted states — including whether N gets
+    confused with U, the failure mode this whole head family exists to avoid.
+
+    :param logits: N/P/U head outputs, shape ``(N, C, 3)``.
+    :type logits: numpy.ndarray
+    :param states: Shared evidence states, ``(N, C)``; -1 excludes unavailable entries.
+    :type states: numpy.ndarray
+    :param train_counts: Observed training positives per class, ``(C,)``.
+    :type train_counts: numpy.ndarray
+    :param class_names: Stable names in target-column order.
+    :type class_names: tuple[str, ...]
+    :param device: Evaluation device; CUDA is used when available and none is given.
+    :type device: Any
+    :return: ``state_confusion`` (one row per class x true state x predicted state,
+        long form) and ``state_confusion_summary`` (one row per class: available
+        entries, argmax accuracy, the majority-class baseline accuracy it should
+        beat, and a chi-square independence test of true vs. predicted state).
+    :rtype: dict[str, pandas.DataFrame]
+    :raises ValueError: If shapes or evidence-state codes are invalid.
+    """
+    from scipy.stats import chi2_contingency
+
+    resolved = _resolve_device(device)
+    values = torch.as_tensor(np.asarray(logits), dtype=torch.float32, device=resolved)  # (N, C, 3)
+    if values.ndim != 3 or values.shape[-1] != 3:
+        raise ValueError("State confusion requires N/P/U logits with shape (N, C, 3).")
+    states = np.asarray(states)
+    train_counts = np.asarray(train_counts)
+    if tuple(values.shape[:2]) != states.shape or len(class_names) != values.shape[1] or train_counts.shape != (values.shape[1],):
+        raise ValueError("Scores, states and class catalogue must align.")
+    if not np.isin(states, [-1, 0, 1, 2]).all():
+        raise ValueError("Invalid evidence-state codes.")
+    # REMARK: `argmax` reproduces the head's own decision (softmax is monotone in
+    # each logit, so ranking by logit or by softmax probability agrees); its codes
+    # already match the evidence-state codes (`NEGATIVE, POSITIVE, UNLABELLED = 0, 1, 2`)
+    # because that is the channel order `ThreeStateHead`/`positive_scores` assume.
+    predicted = values.argmax(dim=-1).cpu().numpy().astype(np.int8)  # (N, C)
+    available = states != UNAVAILABLE  # (N, C)
+    state_codes = tuple(STATE_LABELS)  # (NEGATIVE, POSITIVE, UNLABELLED) = (0, 1, 2)
+
+    confusion_rows, summary_rows = [], []
+    for class_index, class_name in enumerate(class_names):
+        column = available[:, class_index]
+        true_column = states[column, class_index]
+        predicted_column = predicted[column, class_index]
+        table = np.array([[int(((true_column == true_state) & (predicted_column == predicted_state)).sum())
+                           for predicted_state in state_codes] for true_state in state_codes])  # (3, 3)
+        true_totals = table.sum(axis=1)  # (3,)
+        for row, true_state in enumerate(state_codes):
+            for column_index, predicted_state in enumerate(state_codes):
+                confusion_rows.append({
+                    "class_index": class_index, "class_name": class_name,
+                    "train_positives": int(train_counts[class_index]),
+                    "true_state": STATE_LABELS[true_state], "predicted_state": STATE_LABELS[predicted_state],
+                    "count": int(table[row, column_index]), "true_state_total": int(true_totals[row]),
+                })
+        total = int(table.sum())
+        # REMARK: a class with fewer than two observed true states, or fewer than
+        # two observed predicted states, has no meaningful contingency table —
+        # `chi2_contingency` would fail or divide by zero; left undefined instead.
+        occupied_rows = true_totals > 0
+        occupied_columns = table.sum(axis=0) > 0
+        valid = total > 0 and occupied_rows.sum() > 1 and occupied_columns.sum() > 1
+        if valid:
+            reduced = table[occupied_rows][:, occupied_columns]
+            statistic, p_value, _, _ = chi2_contingency(reduced)
+            cramers_v = float(np.sqrt((statistic / total) / (min(reduced.shape) - 1)))
+        else:
+            statistic = p_value = cramers_v = float("nan")
+        summary_rows.append({
+            "class_index": class_index, "class_name": class_name,
+            "train_positives": int(train_counts[class_index]), "entries": total,
+            "accuracy": float(np.trace(table) / total) if total else float("nan"),
+            "majority_baseline_accuracy": float(true_totals.max() / total) if total else float("nan"),
+            "chi2_statistic": statistic, "chi2_p_value": p_value, "cramers_v": cramers_v,
+        })
+    confusion = pd.DataFrame(confusion_rows)
+    confusion["share"] = np.divide(confusion["count"], confusion["true_state_total"],
+                                   out=np.full(len(confusion), np.nan), where=confusion["true_state_total"] > 0)
+    logger.info("Computed N/P/U state confusion for %s classes on %s.", len(class_names), resolved)
+    return {"state_confusion": confusion, "state_confusion_summary": pd.DataFrame(summary_rows)}
+
+
 def score_histograms(
     logits: np.ndarray,
     states: np.ndarray,
@@ -424,6 +704,7 @@ def score_histograms(
     *,
     bins: int = HISTOGRAM_BINS,
     device: Any = None,
+    family: str | None = None,
 ) -> pd.DataFrame:
     """Retain complete score distributions per evidence state on shared fixed edges.
 
@@ -442,6 +723,8 @@ def score_histograms(
     :type bins: int
     :param device: Evaluation device; CUDA is used when available and none is given.
     :type device: Any
+    :param family: Registered criterion class name; see :func:`positive_scores`.
+    :type family: str | None
     :return: Long-form counts indexed by quantity, evidence state and class scope.
     :rtype: pandas.DataFrame
     :raises ValueError: If shapes disagree or the bin count is not positive.
@@ -449,7 +732,7 @@ def score_histograms(
     if bins < 1:
         raise ValueError("A positive bin count is required.")
     resolved = _resolve_device(device)
-    scores = _score_tensor(logits, resolved)  # (N, C)
+    scores = _score_tensor(logits, resolved, family=family)  # (N, C)
     states = np.asarray(states)
     train_counts = np.asarray(train_counts)
     if tuple(scores.shape) != states.shape or train_counts.shape != (scores.shape[1],):
