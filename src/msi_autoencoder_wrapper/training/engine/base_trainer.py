@@ -766,9 +766,14 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     dataset,
                     target_field,
                 )
+                # Dynamic supervision refresh
+                ## ``Subset`` does not proxy ``set_epoch`` from its owner.  Resolve
+                ## the capability before constructing the callback: a callback
+                ## returning ``None`` is not a valid sampler mask provider.
+                source_dataset = getattr(dataset, "dataset", dataset)
                 supervision_provider = (
-                    lambda: collect_supervision_masks(dataset, target_field)
-                    if callable(getattr(dataset, "set_epoch", None))
+                    (lambda: collect_supervision_masks(dataset, target_field))
+                    if callable(getattr(source_dataset, "set_epoch", None))
                     else None
                 )
                 batch_sampler = SupervisionMaskBatchSampler(
