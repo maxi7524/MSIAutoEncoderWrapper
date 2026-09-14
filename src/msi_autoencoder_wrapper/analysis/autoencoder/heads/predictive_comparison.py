@@ -46,13 +46,15 @@ CLASS_CHUNK = 128
 
 
 def positive_scores(logits: np.ndarray) -> np.ndarray:
-    """Return stable positive log odds for binary or N/P/U outputs.
+    """Return stable positive log odds for binary, N/P/U or JERM outputs.
 
     This is the double-precision reference path used by tests and by any caller that
     needs the scores themselves; the batched evaluation below builds the same
     quantity directly on the evaluation device in single precision.
 
-    :param logits: Finite logits of shape ``(N, C)`` or ``(N, C, 3)``.
+    :param logits: Finite logits of shape ``(N, C)``, N/P/U ``(N, C, 3)`` or JERM
+        ``(N, C, 2)`` (``(posterior_logit, propensity_logit)``, see
+        :class:`~.architectures.types.autoencoders.heads.jerm_head.JERMHead`).
     :type logits: numpy.ndarray
     :return: Positive ranking scores, shape ``(N, C)``.
     :rtype: numpy.ndarray
@@ -62,26 +64,33 @@ def positive_scores(logits: np.ndarray) -> np.ndarray:
     _validate_logits(values)
     if values.ndim == 2:
         return values
+    if values.shape[-1] == 2:
+        # REMARK: JERM's `posterior_logit` (channel 0) is already a plain
+        # class-membership log odds (`JERMLoss` applies a bare sigmoid to it, see
+        # `jerm_loss.py`); `propensity_logit` (channel 1) models annotation
+        # missingness, not class membership, and plays no part in ranking.
+        return values[..., 0]
     # REMARK: This is log(p_P / (1-p_P)), monotone in the existing positive
     # softmax probability. Ranking log odds avoids sigmoid saturation ties.
     return values[..., POSITIVE] - logsumexp(values[..., [NEGATIVE, UNLABELLED]], axis=-1)  # (N, C)
 
 
 def _validate_logits(values: np.ndarray | torch.Tensor) -> None:
-    """Reject non-finite values and shapes that are neither binary nor N/P/U."""
+    """Reject non-finite values and shapes that are neither binary, N/P/U nor JERM."""
     finite = bool(torch.isfinite(values).all()) if torch.is_tensor(values) else bool(np.isfinite(values).all())
     if not finite:
         raise ValueError("Head logits must be finite.")
     if values.ndim == 2:
         return
-    if values.ndim != 3 or values.shape[-1] != 3:
-        raise ValueError("Expected binary (N, C) or N/P/U (N, C, 3) logits.")
+    if values.ndim != 3 or values.shape[-1] not in (2, 3):
+        raise ValueError("Expected binary (N, C), N/P/U (N, C, 3) or JERM (N, C, 2) logits.")
 
 
 def _score_tensor(logits: Any, device: torch.device) -> torch.Tensor:
     """Build the positive log odds on the evaluation device in single precision.
 
-    :param logits: Binary ``(N, C)`` or N/P/U ``(N, C, 3)`` head outputs.
+    :param logits: Binary ``(N, C)``, N/P/U ``(N, C, 3)`` or JERM ``(N, C, 2)`` head
+        outputs.
     :param device: Device every downstream reduction runs on.
     :return: Positive ranking scores, shape ``(N, C)``.
     :rtype: torch.Tensor
@@ -91,6 +100,8 @@ def _score_tensor(logits: Any, device: torch.device) -> torch.Tensor:
     _validate_logits(values)
     if values.ndim == 2:
         return values
+    if values.shape[-1] == 2:
+        return values[..., 0]  # JERM posterior_logit; see `positive_scores`.
     return values[..., POSITIVE] - torch.logsumexp(values[..., [NEGATIVE, UNLABELLED]], dim=-1)  # (N, C)
 
 

@@ -435,7 +435,7 @@ def paired_intervals(frame: pd.DataFrame, *, label: str = "label", value: str = 
 
 def heatmap(frame: pd.DataFrame, *, index: str, columns: str, values: str, aggregate: str = "mean",
             colormap: str | None = None, value_format: str = "{:.3f}", title: str = "",
-            colorbar_label: str | None = None, theme=None):
+            colorbar_label: str | None = None, ax=None, theme=None):
     """Show one measurement across two categorical axes with the numbers printed.
 
     Use this only where both axes are genuinely categorical, for example condition
@@ -451,14 +451,19 @@ def heatmap(frame: pd.DataFrame, *, index: str, columns: str, values: str, aggre
     :param value_format: Format string for the printed cell value.
     :param title: Figure title.
     :param colorbar_label: Label of the colour scale; defaults to ``values``.
+    :param ax: Existing axis, e.g. one panel of several metrics stacked in one figure;
+        a new figure is created when omitted.
     :param theme: Existing theme.
     :return: Matplotlib figure.
     :rtype: matplotlib.figure.Figure
     """
     resolved = resolve_theme(theme)
     table = frame.pivot_table(index=index, columns=columns, values=values, aggfunc=aggregate)
-    figure, ax = plt.subplots(figsize=(max(6.0, 1.3 * table.shape[1] + 4.0), max(3.0, .5 * table.shape[0] + 2.0)),
-                              dpi=resolved.figure_dpi)
+    if ax is None:
+        figure, ax = plt.subplots(figsize=(max(6.0, 1.3 * table.shape[1] + 4.0), max(3.0, .5 * table.shape[0] + 2.0)),
+                                  dpi=resolved.figure_dpi)
+    else:
+        figure = ax.figure
     image = ax.imshow(table.to_numpy(dtype=float), aspect="auto",
                       cmap=colormap or resolved.probability_colormap, interpolation="nearest")
     ax.set_xticks(range(table.shape[1]), [short_label(name) for name in table.columns],

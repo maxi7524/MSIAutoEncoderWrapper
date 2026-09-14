@@ -23,6 +23,7 @@ from msi_autoencoder_wrapper.analysis.autoencoder.experiments.sweep_evaluation i
     prediction_metrics_frame,
     representation_stability_frame,
 )
+from msi_autoencoder_wrapper.models.datasets.splitting.partitions import SplitManifest
 
 CELL = PenaltySweepCell(
     penalty_metric="spectral",
@@ -119,6 +120,14 @@ class _StubPartitions:
             setattr(self, name, dataset)
 
 
+class _StubPartitionsWithManifest(_StubPartitions):
+    """A partitions stub that also carries a reproducibility manifest."""
+
+    def __init__(self, manifest: SplitManifest, **datasets) -> None:
+        super().__init__(**datasets)
+        self.manifest = manifest
+
+
 def _split(name: str, targets: np.ndarray, mask: np.ndarray) -> MaterializedSplit:
     samples = targets.shape[0]
     return MaterializedSplit(
@@ -178,6 +187,61 @@ class TestMaterializeSplit:
 
         with pytest.raises(ValueError):
             materialize_split(partitions, "train", "molecule", fraction=fraction)
+
+
+class TestSampleIdThreading:
+    """Per-pixel source identity, resolved from the splitter's own manifest."""
+
+    def test_sample_ids_absent_without_a_manifest(self) -> None:
+        # A plain stub (or any partitions object with no `manifest` attribute) must be
+        # tolerated, not treated as an error: existing callers never supplied one.
+        partitions = _StubPartitions(train=_StubDataset(10, bins=4, classes=2, target_field="molecule"))
+
+        split = materialize_split(partitions, "train", "molecule", fraction=1.0, seed=1)
+
+        assert split.sample_ids is None
+
+    def test_sample_ids_absent_when_this_split_has_no_assignments(self) -> None:
+        dataset = _StubDataset(10, bins=4, classes=2, target_field="molecule")
+        manifest = SplitManifest(strategy="stub", seed=1, assignments={"validation": tuple(range(10))})
+        partitions = _StubPartitionsWithManifest(manifest, train=dataset)
+
+        split = materialize_split(partitions, "train", "molecule", fraction=1.0, seed=1)
+
+        assert split.sample_ids is None
+
+    def test_sample_ids_are_positionally_aligned_with_indices(self) -> None:
+        dataset = _StubDataset(10, bins=4, classes=2, target_field="molecule")
+        manifest = SplitManifest(strategy="stub", seed=1,
+                                 assignments={"train": tuple(f"sample-{i}" for i in range(10))})
+        partitions = _StubPartitionsWithManifest(manifest, train=dataset)
+
+        split = materialize_split(partitions, "train", "molecule", fraction=0.5, seed=1)
+
+        assert list(split.sample_ids) == [f"sample-{i}" for i in split.indices]
+
+    def test_sample_ids_survive_a_cache_hit(self, tmp_path: Path) -> None:
+        dataset = _StubDataset(10, bins=4, classes=2, target_field="molecule")
+        manifest = SplitManifest(strategy="stub", seed=1,
+                                 assignments={"train": tuple(f"s{i}" for i in range(10))})
+        partitions = _StubPartitionsWithManifest(manifest, train=dataset)
+
+        first = materialize_split(partitions, "train", "molecule", fraction=0.5, seed=1, cache_directory=tmp_path)
+        second = materialize_split(partitions, "train", "molecule", fraction=0.5, seed=1, cache_directory=tmp_path)
+
+        np.testing.assert_array_equal(first.sample_ids, second.sample_ids)
+
+    def test_sample_ids_support_non_scalar_cohort_style_identity(self) -> None:
+        # A CohortDataset's sample id is a {"image_key", "spectrum_id"} mapping, not a
+        # plain scalar; the lookup must not assume a numeric/string dtype.
+        dataset = _StubDataset(4, bins=4, classes=2, target_field="molecule")
+        assignments = tuple({"image_key": f"image-{i // 2}", "spectrum_id": i} for i in range(4))
+        manifest = SplitManifest(strategy="stub", seed=1, assignments={"train": assignments})
+        partitions = _StubPartitionsWithManifest(manifest, train=dataset)
+
+        split = materialize_split(partitions, "train", "molecule", fraction=1.0, seed=1)
+
+        assert [entry["image_key"] for entry in split.sample_ids] == ["image-0", "image-0", "image-1", "image-1"]
 
 
 class TestFairScopeMask:

@@ -53,10 +53,23 @@ def test_ties_use_standard_average_precision():
     np.testing.assert_allclose(result["per_class"].roc_auc, .5, atol=1e-12, rtol=0)
 
 
-@pytest.mark.parametrize("logits", [np.zeros((3,)), np.zeros((3, 2, 2)), np.array([[np.inf]])])
+@pytest.mark.parametrize("logits", [np.zeros((3,)), np.zeros((3, 2, 4)), np.array([[np.inf]])])
 def test_invalid_scores_rejected(logits):
     with pytest.raises(ValueError):
         positive_scores(logits)
+
+
+def test_jerm_posterior_channel_is_ranked_and_propensity_is_ignored():
+    # (N, C, 2) = (posterior_logit, propensity_logit); only the posterior is a
+    # class-membership score (`JERMHead`/`JERMLoss` apply a bare sigmoid to it).
+    posterior = np.array([[1001., -5.], [1000., -5.], [999., -5.], [2000., -5.]])
+    propensity = np.array([[-50., 50.], [50., -50.], [0., 0.], [10., -10.]])
+    logits = np.stack([posterior, propensity], axis=-1)
+    scores = positive_scores(logits)
+    np.testing.assert_array_equal(scores, posterior)
+    # A propensity-only change must not move the ranking scores at all.
+    logits[..., 1] = -logits[..., 1]
+    np.testing.assert_array_equal(positive_scores(logits), posterior)
 
 
 def test_generalization_uses_common_classes_not_difference_of_macro_means():

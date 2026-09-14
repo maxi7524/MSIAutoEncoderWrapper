@@ -6,7 +6,7 @@ import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -174,6 +174,22 @@ def _data_contract(config: dict, settings: dict) -> dict:
     parameters = data.get("dataset", {}).get("parameters", {})
     if not parameters.get("chemistry"):
         parameters.pop("chemistry", None)
+    # REMARK: `simulated_negative`/`simulated_negative_metadata_key` describe how a
+    # target's TRAINING labels were simulated, not which pixels this analysis
+    # evaluates: the pipeline reclassifies P/N/U state itself via a shared
+    # `SignalEvidencePolicy` from `settings["evidence"]`, uniformly across every
+    # model, regardless of what a given model's own training run recorded here.
+    # Older artifacts (e.g. `predictive_initial`, trained before this runtime started
+    # serializing the field) omit it entirely; newer ones (e.g. `predictive_expanded`)
+    # serialize the campaign YAML's declared value. Both trained against the exact
+    # same declared `simulated_negative` config and, more importantly, the exact same
+    # saved split assignments (checked below) — so this key is dropped from the
+    # contract the same way `chemistry`'s benign default is, rather than failing two
+    # runs of the same campaign apart merely because config serialization evolved.
+    for target in parameters.get("annotation_settings", {}).get("targets", {}).values():
+        if isinstance(target, dict):
+            target.pop("simulated_negative", None)
+            target.pop("simulated_negative_metadata_key", None)
     assignments = data.get("dataset", {}).get("parameters", {}).get("split", {}).get("assignments")
     if not assignments or not all(name in assignments for name in ("train", "validation", "test")):
         raise ValueError("Saved train/validation/test assignments are required; never regenerate a split.")
@@ -320,6 +336,113 @@ def history_components(history: pd.DataFrame) -> pd.DataFrame:
     result["component_name"] = np.where(result.component == "head", stem.str.split("__").str[-1], stem)
     result["comparable"] = result.component == "reconstruction"
     return result
+
+
+def run_duration_frame(history: pd.DataFrame, models: pd.DataFrame) -> pd.DataFrame:
+    """Reduce per-epoch bookkeeping rows to one wall-clock record per training run.
+
+    Mirrors :func:`.penalty_sweep.run_duration_frame`'s deduplicate-then-sum reduction,
+    adapted to :func:`training_history`'s long-form layout (a ``duration`` metric row per
+    epoch, tagged as a bookkeeping component by :func:`history_components`) instead of the
+    contractive sweep's per-objective-term fan-out.
+
+    :param history: Long-form output of :func:`training_history`.
+    :type history: pandas.DataFrame
+    :param models: Inventory table; supplies identity columns (`source`, `role`,
+        `condition`, `label`, `repetition`) not carried on `history` rows.
+    :type models: pandas.DataFrame
+    :return: One record per model with `epochs`, `total_duration` and
+        `mean_epoch_duration` (seconds), plus the joined identity columns.
+    :rtype: pandas.DataFrame
+    """
+    durations = history[(history.metric == "duration") & history.epoch.notna()]
+    if durations.empty:
+        return pd.DataFrame(columns=["model_id", "source", "role", "condition", "label", "repetition",
+                                     "epochs", "total_duration", "mean_epoch_duration"])
+    per_epoch = durations.drop_duplicates(["model_id", "epoch"])
+    summary = per_epoch.groupby("model_id").value.agg(epochs="count", total_duration="sum",
+                                                       mean_epoch_duration="mean").reset_index()
+    identity = models[["model_id", "source", "role", "condition", "label", "repetition"]]
+    return summary.merge(identity, on="model_id", validate="one_to_one")
+
+
+def epoch_duration_samples(history: pd.DataFrame, models: pd.DataFrame) -> dict[str, list[float]]:
+    """Group individual epoch durations by condition label, preserving every measurement.
+
+    Returned as raw samples rather than a mean/standard-deviation summary because the
+    reproducibility contract requires distributions to be plotted from complete
+    observations, not only their reduction. Mirrors :func:`.penalty_sweep.epoch_duration_samples`;
+    :func:`run_duration_frame` performs the analogous reduction to one record per run.
+
+    :param history: Long-form output of :func:`training_history` (or its
+        :func:`history_components`-enriched form; only ``model_id``, ``metric``, ``epoch``
+        and ``value`` are read).
+    :type history: pandas.DataFrame
+    :param models: Inventory table; supplies the ``label`` each duration is grouped by.
+    :type models: pandas.DataFrame
+    :return: Mapping from condition ``label`` to every measured epoch duration in
+        seconds, pooled across repetitions.
+    :rtype: dict[str, list[float]]
+    """
+    durations = history.loc[(history.metric == "duration") & history.epoch.notna(),
+                            ["model_id", "epoch", "value"]].drop_duplicates(["model_id", "epoch"])
+    labelled = durations.merge(models[["model_id", "label"]], on="model_id", validate="many_to_one")
+    return {label: rows.value.astype(float).tolist() for label, rows in labelled.groupby("label")}
+
+
+def training_health_report(history: pd.DataFrame, models: pd.DataFrame, *,
+                           planned_epochs: Optional[int] = None) -> pd.DataFrame:
+    """Flag runs whose training did not behave, one record per model.
+
+    Checks applied per run, adapted from :func:`.penalty_sweep.training_health_report`
+    to a predictive objective (no single scalar "penalty" term, so the contractive
+    ``penalty_increased`` check is replaced by ``loss_increased`` on the total training
+    loss):
+
+    - ``non_finite_objectives``: any recorded metric value is NaN or infinite;
+    - ``loss_increased``: the final training ``total_loss`` exceeds the first, i.e. the
+      objective was not actually minimized over the run;
+    - ``short_run``: fewer measured epochs than ``planned_epochs`` (or the campaign's own
+      maximum measured epoch count, when ``planned_epochs`` is not given);
+    - ``no_improvement``: the trainer never recorded an improving checkpoint after the
+      first epoch (``is_best`` never set past epoch 1).
+
+    :param history: Long-form output of :func:`training_history`.
+    :type history: pandas.DataFrame
+    :param models: Inventory table; supplies identity columns not carried on `history`.
+    :type models: pandas.DataFrame
+    :param planned_epochs: Configured epoch budget; the campaign's own maximum measured
+        epoch count is used as the reference when ``None``.
+    :type planned_epochs: int | None
+    :return: One record per model with the boolean flags above, ``epochs``,
+        ``first_total_loss``/``final_total_loss`` and ``healthy``.
+    :rtype: pandas.DataFrame
+    """
+    epoch_rows = history[history.record_type == "epoch"]
+    reference_epochs = planned_epochs
+    if reference_epochs is None and not epoch_rows.empty:
+        reference_epochs = int(epoch_rows.groupby("model_id").epoch.nunique().max())
+
+    records = []
+    for model_id, rows in epoch_rows.groupby("model_id"):
+        epochs = rows.epoch.nunique()
+        non_finite = bool((~np.isfinite(rows.value.astype(float))).any())
+        train_loss = rows[(rows.metric == "total_loss") & (rows.history_split == "train")].sort_values("epoch")
+        first_loss = float(train_loss.value.iloc[0]) if not train_loss.empty else None
+        final_loss = float(train_loss.value.iloc[-1]) if not train_loss.empty else None
+        loss_increased = first_loss is not None and final_loss is not None and final_loss > first_loss
+        short_run = reference_epochs is not None and epochs < reference_epochs
+        no_improvement = not bool((rows[rows.epoch > 1].is_best).any())
+        records.append({"model_id": model_id, "epochs": epochs, "first_total_loss": first_loss,
+                        "final_total_loss": final_loss, "non_finite_objectives": non_finite,
+                        "loss_increased": loss_increased, "short_run": short_run,
+                        "no_improvement": no_improvement,
+                        "healthy": not (non_finite or loss_increased or short_run or no_improvement)})
+    identity = models[["model_id", "source", "role", "condition", "label", "repetition"]]
+    return pd.DataFrame(records).merge(identity, on="model_id", validate="one_to_one") if records else \
+        pd.DataFrame(columns=["model_id", "source", "role", "condition", "label", "repetition", "epochs",
+                              "first_total_loss", "final_total_loss", "non_finite_objectives",
+                              "loss_increased", "short_run", "no_improvement", "healthy"])
 
 
 def coverage_table(grid: pd.DataFrame, models: pd.DataFrame, *, source: str = "predictive_initial") -> pd.DataFrame:

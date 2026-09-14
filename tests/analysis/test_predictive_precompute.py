@@ -1,6 +1,7 @@
 """Artifact-layout and complete report workflow tests on deterministic miniature data."""
 
 from copy import deepcopy
+import dataclasses
 import json
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import yaml
 
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments import predictive_campaign as campaign
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments import predictive_precompute as cache
+from msi_autoencoder_wrapper.analysis.autoencoder.experiments import predictive_reports as reports
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments.sweep_evaluation import MaterializedSplit
 from msi_autoencoder_wrapper.data.annotation_evidence import IonCatalogue
 
@@ -282,6 +284,681 @@ def test_empty_chemistry_default_does_not_change_data_contract(miniature_campaig
     config_path.write_text(json.dumps(config))
     changed, _ = campaign.inventory(settings)
     assert changed.data_contract.nunique() == 2
+
+
+def test_simulated_negative_schema_does_not_change_data_contract(miniature_campaign):
+    """Regression: an older artifact omitting `simulated_negative` must still match a
+    newer one that records it, since the analysis applies its own shared evidence
+    policy at evaluation time regardless of what a model's own training run logged.
+    Caught for real comparing `predictive_initial` (omits the key) against
+    `predictive_expanded` (records it) on the live kidney campaign: both trained on
+    byte-identical split assignments, yet `_data_contract` disagreed before the fix.
+    """
+    settings, _ = miniature_campaign
+    models, _ = campaign.inventory(settings)
+    paths = [Path(row.artifact) / 'config' / 'config.json' for row in models.itertuples()]
+    configs = [json.loads(path.read_text()) for path in paths]
+    for config in configs:
+        # Both artifacts start with the same `targets.molecule` branch already present
+        # (as on the real campaign), just missing `simulated_negative` on either side.
+        config['data']['dataset']['parameters']['annotation_settings'] = {
+            "targets": {"molecule": {"empty_spectrum_policy": "exclude"}}}
+    configs[0]['data']['dataset']['parameters']['annotation_settings']['targets']['molecule'].update(
+        simulated_negative={"type": "SignalEvidenceSimulatedNegative", "parameters": {"relative_threshold": 0.0119}},
+        simulated_negative_metadata_key=None)
+    for path, config in zip(paths, configs):
+        path.write_text(json.dumps(config))
+    equivalent, _ = campaign.inventory(settings)
+    assert equivalent.data_contract.nunique() == 1
+
+    # A real difference elsewhere in the same branch must still be caught.
+    configs[1]['data']['dataset']['parameters']['annotation_settings']['targets']['molecule']['empty_spectrum_policy'] = "unlabelled"
+    paths[1].write_text(json.dumps(configs[1]))
+    changed, _ = campaign.inventory(settings)
+    assert changed.data_contract.nunique() == 2
+
+
+@pytest.fixture()
+def routine_settings(tmp_path: Path) -> dict:
+    """A minimal predictive settings mapping with one configured analysis routine."""
+    return {
+        "device": "cuda",
+        "settings_path": str(tmp_path / "analysis_settings.yaml"),
+        "analyses": {"campaign_training_dynamics": {"output_directory": str(tmp_path / "results")}},
+    }
+
+
+def test_analysis_settings_merge_shared_and_specific_entries(routine_settings):
+    merged = cache.analysis_settings(routine_settings, "campaign_training_dynamics")
+    assert merged["device"] == "cuda"
+    assert isinstance(merged["output_directory"], Path)
+    assert "analyses" not in merged
+
+
+def test_unknown_analysis_is_rejected(routine_settings):
+    with pytest.raises(KeyError):
+        cache.analysis_settings(routine_settings, "not_a_routine")
+
+
+def test_unconfigured_but_registered_analysis_is_rejected(routine_settings):
+    routine_settings["analyses"] = {}
+    with pytest.raises(KeyError):
+        cache.analysis_settings(routine_settings, "campaign_training_dynamics")
+
+
+def test_analysis_device_policy_matches_the_base_cache(routine_settings, monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="without CUDA"):
+        cache.resolve_device(routine_settings)
+    assert cache.resolve_device(routine_settings, allow_cpu=True).type == "cpu"
+
+
+def test_analysis_run_command_forms(routine_settings):
+    background = cache.run_analysis_command(routine_settings, "campaign_training_dynamics")
+    assert background.startswith("nohup ") and background.rstrip().endswith("&")
+    assert "--analysis campaign_training_dynamics" in background
+    assert "campaign_training_dynamics.log" in background
+    foreground = cache.run_analysis_command(routine_settings, "campaign_training_dynamics", background=False)
+    assert not foreground.startswith("nohup")
+    assert "-m msi_autoencoder_wrapper.analysis.autoencoder.experiments.predictive_precompute" in foreground
+
+
+def test_analysis_table_and_metadata_name_the_producing_command_when_absent(routine_settings):
+    with pytest.raises(FileNotFoundError) as failure:
+        cache.load_analysis_table(routine_settings, "campaign_training_dynamics", "inventory")
+    assert "--analysis campaign_training_dynamics" in str(failure.value)
+    with pytest.raises(FileNotFoundError) as failure:
+        cache.load_analysis_metadata(routine_settings, "campaign_training_dynamics")
+    assert "--analysis campaign_training_dynamics" in str(failure.value)
+
+
+def test_analysis_routine_registration_survives_module_execution_order():
+    # Regression, mirrors contractive_precompute's own guard test: a routine appended
+    # below the `__main__` guard would be defined after the CLI already parsed
+    # `--analysis`, so it would show as registered on import but be rejected at the
+    # command line.
+    source = Path(cache.__file__).read_text(encoding="utf-8")
+    guard = 'if __name__ == "__main__":'
+    assert source.index(guard) > source.rindex("@_routine("), (
+        "the entry-point guard must be the last statement, after every routine"
+    )
+
+
+def _models_frame(model_ids: list[str]) -> pd.DataFrame:
+    return pd.DataFrame({"model_id": model_ids, "source": "predictive_initial", "role": "candidate",
+                         "condition": [f"c{index}" for index in range(len(model_ids))],
+                         "label": model_ids, "repetition": 0})
+
+
+def test_run_duration_frame_deduplicates_epoch_bookkeeping_and_sums_durations():
+    # m1's epoch-1 duration is logged twice (the per-objective-term fan-out real training
+    # histories can produce) and must be counted once; its total_loss row must be ignored.
+    history = pd.DataFrame({
+        "model_id": ["m1", "m1", "m1", "m1", "m2"],
+        "metric": ["duration", "duration", "duration", "total_loss", "duration"],
+        "epoch": [1, 1, 2, 1, 1],
+        "value": [10.0, 10.0, 12.0, 0.5, 5.0],
+    })
+    result = campaign.run_duration_frame(history, _models_frame(["m1", "m2"])).set_index("model_id")
+    assert result.loc["m1", "epochs"] == 2
+    assert result.loc["m1", "total_duration"] == pytest.approx(22.0)
+    assert result.loc["m1", "mean_epoch_duration"] == pytest.approx(11.0)
+    assert result.loc["m2", "epochs"] == 1
+    assert result.loc["m2", "total_duration"] == pytest.approx(5.0)
+
+
+def test_run_duration_frame_is_empty_but_well_formed_without_duration_rows():
+    history = pd.DataFrame({"model_id": ["m1"], "metric": ["total_loss"], "epoch": [1], "value": [0.5]})
+    result = campaign.run_duration_frame(history, _models_frame(["m1"]))
+    assert result.empty
+    assert {"model_id", "epochs", "total_duration", "mean_epoch_duration"} <= set(result.columns)
+
+
+def _epoch_row(model_id: str, epoch: int, metric: str, value: float, *,
+               history_split: str = "train", is_best: bool = False, record_type: str = "epoch") -> dict:
+    return {"model_id": model_id, "epoch": epoch, "metric": metric, "value": value,
+           "history_split": history_split, "is_best": is_best, "record_type": record_type}
+
+
+def test_epoch_duration_samples_deduplicates_and_groups_by_label():
+    history = pd.DataFrame({
+        "model_id": ["m1", "m1", "m1", "m2"],
+        "metric": ["duration", "duration", "duration", "duration"],
+        "epoch": [1, 1, 2, 1],
+        "value": [10.0, 10.0, 12.0, 5.0],
+    })
+    models = pd.DataFrame({"model_id": ["m1", "m2"], "label": ["bce_global", "bce_global"]})
+    samples = campaign.epoch_duration_samples(history, models)
+    # m1's epoch-1 duplicate must collapse to one sample; both models share one label.
+    assert sorted(samples["bce_global"]) == [5.0, 10.0, 12.0]
+
+
+def test_training_health_report_flags_each_failure_mode_independently():
+    history = pd.DataFrame([
+        # m_healthy: three epochs, loss strictly decreasing, improves after epoch 1.
+        _epoch_row("m_healthy", 1, "total_loss", 1.0, is_best=True),
+        _epoch_row("m_healthy", 2, "total_loss", 0.7, is_best=True),
+        _epoch_row("m_healthy", 3, "total_loss", 0.5, is_best=True),
+        # m_short: only one epoch measured, while the campaign otherwise reaches three.
+        _epoch_row("m_short", 1, "total_loss", 1.0, is_best=True),
+        # m_worse: loss increases and the trainer never improves past epoch 1.
+        _epoch_row("m_worse", 1, "total_loss", 1.0, is_best=True),
+        _epoch_row("m_worse", 2, "total_loss", 1.2, is_best=False),
+        _epoch_row("m_worse", 3, "total_loss", 1.4, is_best=False),
+        # m_broken: a non-finite value anywhere invalidates the run outright.
+        _epoch_row("m_broken", 1, "total_loss", float("nan"), is_best=True),
+        _epoch_row("m_broken", 2, "total_loss", 0.4, is_best=True),
+        _epoch_row("m_broken", 3, "total_loss", 0.3, is_best=True),
+    ])
+    models = _models_frame(["m_healthy", "m_short", "m_worse", "m_broken"])
+    report = campaign.training_health_report(history, models).set_index("model_id")
+
+    assert report.loc["m_healthy", "healthy"]
+    assert not report.loc["m_healthy", ["non_finite_objectives", "loss_increased", "short_run", "no_improvement"]].any()
+
+    assert not report.loc["m_short", "healthy"]
+    assert report.loc["m_short", "short_run"]
+
+    assert not report.loc["m_worse", "healthy"]
+    assert report.loc["m_worse", "loss_increased"]
+    assert report.loc["m_worse", "no_improvement"]
+
+    assert not report.loc["m_broken", "healthy"]
+    assert report.loc["m_broken", "non_finite_objectives"]
+
+
+def test_training_health_report_respects_an_explicit_planned_epoch_budget():
+    history = pd.DataFrame([_epoch_row("m1", epoch, "total_loss", 1.0 - .1 * epoch, is_best=True)
+                            for epoch in (1, 2, 3)])
+    # Three measured epochs is short against an explicit five-epoch budget, even though
+    # it is the campaign's own maximum (the implicit fallback would call this healthy).
+    report = campaign.training_health_report(history, _models_frame(["m1"]), planned_epochs=5).set_index("model_id")
+    assert report.loc["m1", "short_run"]
+
+
+def test_campaign_training_dynamics_routine_runs_end_to_end(miniature_campaign, tmp_path):
+    settings, _ = miniature_campaign
+    settings["analyses"] = {"campaign_training_dynamics": {"output_directory": str(tmp_path / "dynamics_results")}}
+    output = cache.precompute_analysis(settings, "campaign_training_dynamics", allow_cpu=True)
+
+    inventory = cache.load_analysis_table(settings, "campaign_training_dynamics", "inventory")
+    assert len(inventory) == 2 and inventory.ready.all()
+    sources = cache.load_analysis_table(settings, "campaign_training_dynamics", "sources")
+    assert sources.available.all()
+    coverage = cache.load_analysis_table(settings, "campaign_training_dynamics", "condition_coverage")
+    # One row per declared condition in the real campaign grid; none of them match this
+    # fixture's synthetic, unrelated objective, so coverage is correctly all zero here.
+    assert len(coverage) == 8
+    assert (coverage.ready_tasks == 0).all()
+
+    dynamics = cache.load_analysis_table(settings, "campaign_training_dynamics", "training_dynamics")
+    evaluation = cache.load_analysis_table(settings, "campaign_training_dynamics", "final_evaluation")
+    assert len(dynamics) == 4  # 2 epoch-type rows (epoch, validation_masserstein) per model
+    assert len(evaluation) == 2  # 1 evaluation-type row per model
+
+    health = cache.load_analysis_table(settings, "campaign_training_dynamics", "training_health").set_index("model_id")
+    # This fixture's minimal one-epoch history never logs an improvement past epoch 1,
+    # so both models are correctly flagged unhealthy for that reason alone.
+    assert not health.healthy.any()
+    assert health.no_improvement.all()
+    assert not health[["non_finite_objectives", "loss_increased", "short_run"]].any().any()
+
+    durations = cache.load_analysis_table(settings, "campaign_training_dynamics", "run_durations")
+    assert durations.empty  # no `duration` metric is logged in this fixture's history
+
+    metadata = cache.load_analysis_metadata(settings, "campaign_training_dynamics")
+    assert metadata["analysis"] == "campaign_training_dynamics"
+    assert metadata["tasks"] == 2
+    assert (output / "training_health.csv").is_file()
+
+
+def test_campaign_training_dynamics_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, _ = miniature_campaign
+    models, _ = campaign.inventory(settings)
+    # This fixture's default one-epoch history is enough for the routine tests above, but
+    # the notebook's loss-trajectory and duration-violin cells need more than one epoch to
+    # draw anything real: replace it with a richer, multi-epoch history (total_loss
+    # decreasing, an improving checkpoint past epoch 1, and a per-epoch duration reading).
+    first_epoch_duration = {"predictive_initial/task_000000": 12.0, "historical_bce/task_000000": 9.0}
+    for model in models.to_dict("records"):
+        entries = [{"phase": "joint", "metrics": {"epoch": epoch, "duration": first_epoch_duration[model["model_id"]] + epoch,
+                                                  "total_loss": 1.0 - 0.1 * epoch, "is_best": epoch > 1}}
+                  for epoch in (1, 2, 3)]
+        entries.append({"phase": "joint", "split": "test", "metrics": {"masserstein": .2}})
+        (Path(model["artifact"]) / "config" / "history.json").write_text(json.dumps(entries))
+
+    settings["planned_epochs"] = 15
+    settings["analyses"] = {"campaign_training_dynamics": {"output_directory": str(tmp_path / "results")}}
+    cache.precompute_analysis(settings, "campaign_training_dynamics", allow_cpu=True)
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_0_0_campaign_training_dynamics.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            exec(compile(cell.source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["ARTIFACT_DIR"].glob("*.csv"))
+    assert set(namespace["duration_samples"]) == set(namespace["ordered_labels"])
+    assert len(namespace["conditions"]) == 1  # only predictive_initial's one synthetic condition
+    assert namespace["baseline_epoch_seconds"] == pytest.approx(11.0)  # (10 + 11 + 12) / 3
+
+
+def test_reconstruction_local_routine_compares_two_different_head_types(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+
+    settings["compared"] = {"pnu": "pnu (ThreeStateCrossEntropyLoss)", "baseline": "binary (ClassBalancedMultiLabelBCELoss)"}
+    settings["cases_per_category"] = 1
+    settings["top_k"] = 2  # the fixture's catalogue has only 2 classes
+    settings["analyses"] = {"reconstruction_local": {"output_directory": str(tmp_path / "results")}}
+
+    output = cache.precompute_analysis(settings, "reconstruction_local", allow_cpu=True)
+
+    grid = cache.load_analysis_table(settings, "reconstruction_local", "grid")
+    assert set(grid.label) == set(settings["compared"].values())
+    cases = cache.load_analysis_table(settings, "reconstruction_local", "selected_cases")
+    assert {"W pnu", "W baseline"} <= set(cases.columns)
+    spectra = cache.load_analysis_table(settings, "reconstruction_local", "displayed_spectra")
+    assert set(spectra.series) >= {"input", "pnu", "baseline"}
+    curves = cache.load_analysis_table(settings, "reconstruction_local", "amplitude_curves")
+    assert set(curves.model) == {"pnu", "baseline", "between models"}
+    # The disagreement curve carries no per-model latent angle; every real model curve does.
+    assert curves.query("model == 'between models'").median_angle_degrees.isna().all()
+    assert curves.query("model != 'between models'").median_angle_degrees.notna().all()
+
+    metadata = cache.load_analysis_metadata(settings, "reconstruction_local")
+    assert metadata["compared"] == settings["compared"]
+    assert set(metadata["compared_heads"].values()) == {"pnu", "binary"}
+    assert (output / "amplitude_curves.csv").is_file()
+
+
+def test_reconstruction_local_rejects_a_condition_absent_from_the_inventory(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    settings["compared"] = {"pnu": "pnu (ThreeStateCrossEntropyLoss)", "missing": "not a real condition"}
+    settings["analyses"] = {"reconstruction_local": {"output_directory": str(tmp_path / "results")}}
+
+    with pytest.raises(ValueError, match="absent from the ready inventory"):
+        cache.precompute_analysis(settings, "reconstruction_local", allow_cpu=True)
+
+
+def test_reconstruction_local_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+
+    settings["compared"] = {"pnu": "pnu (ThreeStateCrossEntropyLoss)", "baseline": "binary (ClassBalancedMultiLabelBCELoss)"}
+    settings["cases_per_category"] = 1
+    settings["top_k"] = 2  # the fixture's catalogue has only 2 classes
+    settings["display_amplitudes"] = [0.0, 0.5, 1.0]
+    settings["curve_amplitudes"] = [0.0, 0.5, 1.0]
+    settings["analyses"] = {"reconstruction_local": {"output_directory": str(tmp_path / "results")}}
+    cache.precompute_analysis(settings, "reconstruction_local", allow_cpu=True)
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_1_reconstruction_local.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            exec(compile(cell.source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["ARTIFACT_DIR"].glob("*.csv"))
+    assert namespace["HEADS"] == {"pnu": "pnu", "baseline": "binary"}
+    assert len(namespace["shown_rows"]) >= 1
+    assert set(namespace["curve_frame"].model) == {"pnu", "baseline", "between models"}
+
+
+def test_reconstruction_global_routine_without_per_image_identity(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    settings["global_perturbation_amplitudes"] = [0.0, 1.0]
+    settings["global_perturbation_sample_pixels"] = 6
+    settings["analyses"] = {"reconstruction_global": {"output_directory": str(tmp_path / "results")}}
+    cache.precompute_analysis(settings, "reconstruction_global", allow_cpu=True)
+
+    # The fixture's MaterializedSplit carries no `sample_ids` (default None), so the
+    # per-image breakdown must degrade gracefully to an empty, correctly-shaped table
+    # rather than crash the CSV round trip (an entirely columnless frame does).
+    image_breakdown = cache.load_analysis_table(settings, "reconstruction_global", "image_breakdown")
+    assert image_breakdown.empty
+    assert {"model_id", "image_key", "mean_masserstein"} <= set(image_breakdown.columns)
+
+    drift = cache.load_analysis_table(settings, "reconstruction_global", "perturbation_drift")
+    assert set(drift.model_id) == set(models.model_id)
+    assert "times_baseline" in drift.columns
+    # At amplitude 0 the baseline's own drift against itself is exactly 0, so its ratio
+    # to itself is the undefined 0/0 (correctly NaN); only amplitude > 0 is checked.
+    baseline_positive_amplitude = drift.query("role == 'baseline' and amplitude > 0")
+    np.testing.assert_allclose(baseline_positive_amplitude.times_baseline, 1.0)
+
+    summary = cache.load_analysis_table(settings, "reconstruction_global", "reconstruction_summary")
+    assert {"metric", "statistic", "value"} <= set(summary.columns)
+
+    metadata = cache.load_analysis_metadata(settings, "reconstruction_global")
+    assert metadata["analysis"] == "reconstruction_global"
+    assert metadata["per_image_identity_available"] is False
+    assert metadata["models"] == 2
+
+
+def test_reconstruction_global_routine_groups_by_image_when_available(miniature_campaign, monkeypatch, tmp_path):
+    settings, (splits, catalogue, axis) = miniature_campaign
+    # A CohortDataset-style sample identity, attached to the test split only.
+    test_split = splits["test"]
+    sample_ids = np.array([{"image_key": f"image-{position % 2}", "spectrum_id": position}
+                           for position in range(test_split.sampled)], dtype=object)
+    splits = {**splits, "test": dataclasses.replace(test_split, sample_ids=sample_ids)}
+    prepared = (splits, catalogue, axis)
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    settings["global_perturbation_amplitudes"] = [0.0, 1.0]
+    settings["global_perturbation_sample_pixels"] = 6
+    settings["analyses"] = {"reconstruction_global": {"output_directory": str(tmp_path / "results")}}
+    cache.precompute_analysis(settings, "reconstruction_global", allow_cpu=True)
+
+    image_breakdown = cache.load_analysis_table(settings, "reconstruction_global", "image_breakdown")
+    assert not image_breakdown.empty
+    assert set(image_breakdown.image_key) == {"image-0", "image-1"}
+    assert set(image_breakdown.model_id) == set(models.model_id)
+
+    metadata = cache.load_analysis_metadata(settings, "reconstruction_global")
+    assert metadata["per_image_identity_available"] is True
+
+
+def test_reconstruction_global_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, (splits, catalogue, axis) = miniature_campaign
+    test_split = splits["test"]
+    sample_ids = np.array([{"image_key": f"image-{position % 2}", "spectrum_id": position}
+                           for position in range(test_split.sampled)], dtype=object)
+    splits = {**splits, "test": dataclasses.replace(test_split, sample_ids=sample_ids)}
+    prepared = (splits, catalogue, axis)
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    real_models, real_sources = campaign.inventory(settings)
+    # A second repetition of the same condition label: on the real campaign every
+    # label has several repetitions, so any notebook cell that does
+    # `identity.set_index("label")` without deduplicating first breaks on the real
+    # data even though it looks fine against a fixture with one row per label.
+    # `reconstruction_global` re-derives its own model list via `campaign.inventory`
+    # rather than accepting one, so the patched inventory (not a locally spliced
+    # DataFrame) is what actually needs to carry the duplicate.
+    duplicate = real_models.iloc[[0]].copy()
+    duplicate["model_id"] = duplicate["model_id"] + "_repeat"
+    duplicate["repetition"] = 1
+    models_with_repeat = pd.concat([real_models, duplicate], ignore_index=True)
+    monkeypatch.setattr(campaign, "inventory", lambda settings: (models_with_repeat, real_sources))
+    cache.precompute(models_with_repeat, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    settings["global_perturbation_amplitudes"] = [0.0, 1.0]
+    settings["global_perturbation_sample_pixels"] = 6
+    settings["analyses"] = {"reconstruction_global": {"output_directory": str(tmp_path / "results")}}
+    cache.precompute_analysis(settings, "reconstruction_global", allow_cpu=True)
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_2_reconstruction_global.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            exec(compile(cell.source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["ARTIFACT_DIR"].glob("*.csv"))
+    assert namespace["PER_IMAGE_AVAILABLE"] is True
+    assert set(namespace["ordered_labels"]) == set(namespace["identity"].label)
+    # The duplicated-label row above must not have been silently dropped or collapsed.
+    assert namespace["identity"].label.duplicated().any()
+    assert namespace["masserstein_summary"].index.is_unique
+    assert "verdict" in namespace["at_largest"].columns
+
+
+def test_latent_geometry_routine_computes_sensitivity_and_structure_samples(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+
+    settings["pair_count"] = 10  # the fixture's evaluation split has only 6 pixels
+    settings["epsilons"] = [0.01, 0.1]
+    settings["analyses"] = {"latent_geometry": {"output_directory": str(tmp_path / "results")}}
+    output = cache.precompute_analysis(settings, "latent_geometry", allow_cpu=True)
+
+    sensitivity = cache.load_analysis_table(settings, "latent_geometry", "angular_sensitivity")
+    assert set(sensitivity.model_id) == set(models.model_id)
+    assert set(sensitivity.epsilon) == {0.01, 0.1}
+    assert (sensitivity.mean_angle_degrees >= 0).all()
+
+    structure = cache.load_analysis_table(settings, "latent_geometry", "angular_structure")
+    assert set(structure.model_id) == set(models.model_id)
+    assert {"observed_mean_cos_theta", "observed_sd_cos_theta"} <= set(structure.columns)
+
+    samples = cache.load_analysis_table(settings, "latent_geometry", "angular_structure_samples")
+    assert set(samples.model_id) == set(models.model_id)
+    # `structure_test` may return fewer than `pair_count` distinct pairs on a tiny
+    # sample (6 pixels here); every model must still get at least one, and the same
+    # count as every other model since they share the same rng draw and pair_count.
+    counts = samples.groupby("model_id").size()
+    assert (counts > 0).all()
+    assert counts.nunique() == 1
+
+    metadata = cache.load_analysis_metadata(settings, "latent_geometry")
+    assert metadata["analysis"] == "latent_geometry"
+    assert metadata["models"] == 2
+    assert (output / "angular_sensitivity.csv").is_file()
+
+
+def test_latent_geometry_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    # `neighbours` is part of the base cache's provenance identity, so it must be set to
+    # a value valid for this tiny fixture (geometry_similarity's trustworthiness/continuity
+    # need n_neighbors < n_samples/2) BEFORE the base precompute runs, not after — changing
+    # it afterwards would make `load_table` see a provenance mismatch and refuse to load.
+    settings["neighbours"] = 1
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    settings["pair_count"] = 10  # the fixture's evaluation split has only 6 pixels
+    settings["epsilons"] = [0.01, 0.1]
+    settings["analyses"] = {"latent_geometry": {"output_directory": str(tmp_path / "results")}}
+    cache.precompute_analysis(settings, "latent_geometry", allow_cpu=True)
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_3_latent_geometry.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            exec(compile(cell.source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["ARTIFACT_DIR"].glob("*.csv"))
+    # The fixture's two models are each the only member of their own condition, so no
+    # same-condition/different-seed pair exists — the graceful-empty branch is what
+    # this asserts, not a real reproducibility comparison.
+    assert namespace["reproducibility"].empty
+    assert set(namespace["CONDITION_ORDER"]) == set(models.label)
+    assert "geometry_baseline_contrasts" in namespace
+    assert (namespace["ARTIFACT_DIR"] / "geometry_baseline_contrasts.csv").is_file()
+
+
+def test_prediction_global_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_4_prediction_global.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            source = cell.source
+            if 'RESULTS = NOTEBOOK_DIR / "part_4_prediction_global_results"' in source:
+                source = source.replace('RESULTS = NOTEBOOK_DIR / "part_4_prediction_global_results"',
+                                        f'RESULTS = Path({str(tmp_path)!r})')
+            exec(compile(source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["RESULTS"].glob("*.csv"))
+    assert set(namespace["CONDITION_ORDER"]) == set(models.label)
+    assert namespace["baseline_label"] == "binary (ClassBalancedMultiLabelBCELoss)"
+    assert {"average_precision", "roc_auc", "ap_above_prevalence"} <= set(namespace["summary_table"].columns)
+
+
+def test_prediction_global_vs_baseline_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_5_prediction_global_vs_baseline.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            source = cell.source
+            if 'RESULTS = NOTEBOOK_DIR / "part_5_prediction_global_vs_baseline_results"' in source:
+                source = source.replace('RESULTS = NOTEBOOK_DIR / "part_5_prediction_global_vs_baseline_results"',
+                                        f'RESULTS = Path({str(tmp_path)!r})')
+            exec(compile(source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["RESULTS"].glob("*"))
+    assert set(namespace["selected"].label) <= set(models.label)
+    assert {"label", "pairs", "mean_difference", "ci_low", "ci_high"} <= set(namespace["selected"].columns)
+
+
+def test_prediction_local_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    # Small historical catalogue for the real class-stratification notebook, matching
+    # the fixture's two classes "A"/"B" (mirrors `test_full_cache_resume_and_all_notebook_cells`).
+    population = tmp_path / "part_0_1_annotation_population_results"
+    evidence = tmp_path / "part_0_2_evidence_threshold_selection_results"
+    population.mkdir()
+    evidence.mkdir()
+    pd.DataFrame({"class_name": ["A", "B"], "mz": [200., 202.],
+                 "prevalence": [.005, .5]}).to_csv(population / "class_prevalence.csv", index=False)
+    pd.DataFrame({"class_name": ["B", "A"], "regime": ["common", "rare"],
+                 "relative_threshold": [.005, .005], "bin_radius": [1, 1],
+                 "negative_fraction_of_unannotated": [.3, .4]}).to_csv(evidence / "class_regimes.csv", index=False)
+    pd.DataFrame({"class_name": ["A", "B"], "evidence_auc": [.8, .4]}).to_csv(evidence / "class_separation.csv", index=False)
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_6_prediction_local.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            source = cell.source
+            if "NOTEBOOK_DIR = SETTINGS_PATH.parent" in source:
+                source = source.replace("NOTEBOOK_DIR = SETTINGS_PATH.parent", f"NOTEBOOK_DIR = Path({str(tmp_path)!r})")
+            exec(compile(source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["RESULTS"].glob("*"))
+    assert set(namespace["strata"].class_name) == {"A", "B"}
+    assert set(namespace["head_probe"].split) == {"validation", "test"}
+    assert np.isfinite(namespace["head_probe"].query("population == 'annotation_retrieval'")["value_head"]).all()
+    assert set(namespace["gaps"].metric) >= {"average_precision", "roc_auc"}
+
+
+def test_decision_summary_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):
+    settings, prepared = miniature_campaign
+    monkeypatch.setattr(cache, "prepare_splits", lambda models, settings: prepared)
+    monkeypatch.setattr(cache.ModelLoader, "load_artifact", lambda path, strict=True: (_TinyModel(), {}, Path(path)))
+    models, _ = campaign.inventory(settings)
+    # Richer, multi-epoch history (as in the part_0_0 notebook test) so `run_durations`
+    # carries real, non-degenerate values for the "affordable" decision criterion.
+    first_epoch_duration = {"predictive_initial/task_000000": 12.0, "historical_bce/task_000000": 9.0}
+    for model in models.to_dict("records"):
+        entries = [{"phase": "joint", "metrics": {"epoch": epoch, "duration": first_epoch_duration[model["model_id"]] + epoch,
+                                                  "total_loss": 1.0 - 0.1 * epoch, "is_best": epoch > 1}}
+                  for epoch in (1, 2, 3)]
+        entries.append({"phase": "joint", "split": "test", "metrics": {"masserstein": .2}})
+        (Path(model["artifact"]) / "config" / "history.json").write_text(json.dumps(entries))
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+
+    # Sibling notebooks' own derived tables, computed directly with the same shared
+    # helpers those notebooks use (rather than executing their full cell sequences).
+    dynamics_results = tmp_path / "part_0_0_campaign_training_dynamics_results"
+    prediction_results = tmp_path / "part_4_prediction_global_results"
+    dynamics_results.mkdir()
+    prediction_results.mkdir()
+    history = campaign.history_components(campaign.training_history(models))
+    campaign.run_duration_frame(history, models).to_csv(dynamics_results / "run_durations.csv", index=False)
+    prediction = cache.load_table(settings, "prediction")
+    contrast_source = prediction.query("split == 'validation' and population == 'annotation_retrieval' and "
+                                       "scope == 'train_supported' and metric in ['average_precision', 'roc_auc', 'ap_above_prevalence']")
+    units = reports.experimental_units(contrast_source, models, ["metric"])
+    _, contrasts = reports.paired_comparisons(units, ["metric"])
+    reports.baseline_contrasts(contrasts, models).to_csv(prediction_results / "baseline_contrasts.csv", index=False)
+
+    monkeypatch.setattr(campaign, "load_settings", lambda path: settings)
+    monkeypatch.chdir(REPOSITORY)
+    import matplotlib.pyplot as plt
+    path = REPOSITORY / "assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/part_7_decision_summary_geometry_vs_prediction.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    namespace = {"__name__": "__main__"}
+    for number, cell in enumerate(notebook.cells):
+        if cell.cell_type == "code":
+            source = cell.source
+            if "NOTEBOOK_DIR = SETTINGS_PATH.parent" in source:
+                source = source.replace("NOTEBOOK_DIR = SETTINGS_PATH.parent", f"NOTEBOOK_DIR = Path({str(tmp_path)!r})")
+            exec(compile(source, f"{path.name}:cell-{number}", "exec"), namespace)
+            plt.close("all")
+
+    assert list(namespace["ARTIFACT_DIR"].glob("*"))
+    decision_frame = namespace["decision_frame"]
+    assert {"beats_baseline", "keeps_variation", "affordable", "carried_forward"} <= set(decision_frame.columns)
+    assert len(decision_frame) == 1  # one swept condition (predictive_initial) against the baseline
+    # historical_bce's own epoch durations (10/11/12s) against itself: cost_multiple == 1.
+    assert namespace["baseline_epoch_seconds"] == pytest.approx(11.0)
 
 
 def test_history_components_separate_split_prefix_and_comparability():

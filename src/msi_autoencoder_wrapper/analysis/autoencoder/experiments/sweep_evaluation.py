@@ -109,6 +109,12 @@ class MaterializedSplit:
     :type fraction: float
     :param seed: Seed of the generator that drew ``indices``.
     :type seed: int
+    :param sample_ids: Stable per-pixel source identity, aligned with ``indices``, from
+        ``partitions.manifest.assignments[name]`` (an ``int`` for a merged-store
+        ``PixelDataset``, a ``{"image_key", "spectrum_id"}`` mapping for a
+        ``CohortDataset``). ``None`` when ``partitions`` carries no manifest (e.g. a
+        test stub), or additive callers that do not need per-image grouping.
+    :type sample_ids: numpy.ndarray | None
     """
 
     name: str
@@ -119,6 +125,7 @@ class MaterializedSplit:
     total: int
     fraction: float
     seed: int
+    sample_ids: Optional[np.ndarray] = None
 
     @property
     def sampled(self) -> int:
@@ -147,6 +154,36 @@ def _resolve_dataset(dataset: Any) -> tuple[Any, Optional[np.ndarray]]:
         mapping = level if mapping is None else level[mapping]
         current = current.dataset
     return current, mapping
+
+
+def _resolve_sample_ids(partitions: Any, split_name: str, indices: np.ndarray) -> Optional[np.ndarray]:
+    """Look up each decoded pixel's stable source identity, when one is recorded.
+
+    ``DatasetSplitter.split`` builds ``partitions.manifest.assignments[name]`` from the
+    exact same, identically ordered index list used to build the split view itself (see
+    ``DatasetSplitter.split`` and ``_sample_id``), so position ``i`` of that tuple is
+    always the sample id of split-local position ``i`` — independent of split strategy.
+    ``indices`` are exactly such split-local positions, so a plain positional lookup is
+    correct without touching the dataset itself.
+
+    :param partitions: Dataset partitions, as returned by ``active_dataset.create_partitions()``.
+        A stub without a ``manifest`` attribute (e.g. in tests) is tolerated, not an error.
+    :type partitions: Any
+    :param split_name: Split attribute the ids are being resolved for.
+    :type split_name: str
+    :param indices: Split-local positions actually decoded.
+    :type indices: numpy.ndarray
+    :return: One entry per position in ``indices``, or ``None`` when no manifest, or no
+        assignments for this split, is available.
+    :rtype: numpy.ndarray | None
+    """
+    manifest = getattr(partitions, "manifest", None)
+    if manifest is None:
+        return None
+    assignments = manifest.assignments.get(split_name)
+    if assignments is None:
+        return None
+    return np.asarray(assignments, dtype=object)[indices]
 
 
 def _decode_metadata(
@@ -245,6 +282,7 @@ def materialize_split(
     ## Deterministic index draw, sorted so the request follows dataset order
     generator = np.random.default_rng(seed)
     indices = np.sort(generator.choice(total, size=sample_size, replace=False))
+    sample_ids = _resolve_sample_ids(partitions, split_name, indices)
 
     metadata = _decode_metadata(dataset, split_name, target_field, fraction, seed, total)
     array_path = sidecar_path = None
@@ -275,6 +313,7 @@ def materialize_split(
                             total=total,
                             fraction=fraction,
                             seed=seed,
+                            sample_ids=sample_ids,
                         )
 
     ## Batched decode: one reader call, one binning call and one normalization per chunk
@@ -328,6 +367,7 @@ def materialize_split(
         total=total,
         fraction=fraction,
         seed=seed,
+        sample_ids=sample_ids,
     )
 
 
