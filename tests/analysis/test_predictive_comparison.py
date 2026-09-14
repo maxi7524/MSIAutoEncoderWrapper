@@ -9,7 +9,8 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from msi_autoencoder_wrapper.analysis.autoencoder.heads.metrics import probabilities_from_logits
 from msi_autoencoder_wrapper.analysis.autoencoder.heads.predictive_comparison import (
-    class_agreement, generalization_gaps, pooled_ranking, positive_scores, ranking_tables,
+    agreement_summary, class_agreement, class_extremes, disagreement_by_property,
+    disagreement_extremes, generalization_gaps, pooled_ranking, positive_scores, ranking_tables,
     score_histograms, state_separation,
 )
 
@@ -175,3 +176,59 @@ def test_batched_per_class_ranking_reproduces_the_scikit_learn_reference(device)
                 continue
             assert row.average_precision == pytest.approx(average_precision_score(y, s), abs=1e-5)
             assert row.roc_auc == pytest.approx(roc_auc_score(y, s), abs=1e-5)
+
+
+def test_class_extremes_finds_worst_tail_and_shared_failures():
+    # ion0 is worst for both conditions; ion2 is only ever a middling/best value.
+    rows = [
+        {"label": "A", "class_name": "ion0", "average_precision": .01},
+        {"label": "A", "class_name": "ion1", "average_precision": .50},
+        {"label": "A", "class_name": "ion2", "average_precision": .90},
+        {"label": "B", "class_name": "ion0", "average_precision": .02},
+        {"label": "B", "class_name": "ion1", "average_precision": .40},
+        {"label": "B", "class_name": "ion2", "average_precision": .95},
+    ]
+    worst, best, shared = class_extremes(pd.DataFrame(rows), count=1)
+    assert set(worst.class_name) == {"ion0"} and len(worst) == 2  # One per condition.
+    assert set(best.class_name) == {"ion2"} and len(best) == 2
+    assert list(shared.class_name) == ["ion0"]
+    assert shared.iloc[0].conditions == 2
+    assert shared.iloc[0].mean_value == pytest.approx((.01 + .02) / 2)
+
+
+def test_agreement_summary_reports_perfect_correlation_for_a_uniform_shift():
+    rows = []
+    for label, shift in (("A", 0.0), ("B", 0.1)):
+        for index, base in enumerate([.1, .5, .9]):
+            rows.append(dict(model_id=f"{label}-0", label=label, split="validation", population="annotation_retrieval",
+                             class_index=index, class_name=f"ion{index}", train_positives=10, frequency="medium",
+                             prevalence=.1, eligible=True, average_precision=base + shift, roc_auc=base + shift))
+    summary = agreement_summary(class_agreement(pd.DataFrame(rows)))
+    assert len(summary) == 1
+    row = summary.iloc[0]
+    assert row.classes == 3
+    assert row.spearman == pytest.approx(1.0)
+    assert row.mean_difference == pytest.approx(-0.1)
+    assert row.left_higher_fraction == 0.0
+
+
+def test_disagreement_extremes_keeps_both_tails_per_pair():
+    agreement = pd.DataFrame({
+        "left": ["A"] * 4, "right": ["B"] * 4, "class_name": ["ion0", "ion1", "ion2", "ion3"],
+        "value_left": [.1, .4, .6, .9], "value_right": [.9, .4, .6, .1],
+        "difference": [-.8, .0, .0, .8],
+    })
+    tails = disagreement_extremes(agreement, count=1)
+    assert list(tails.class_name) == ["ion0", "ion3"]  # Most negative, then most positive.
+
+
+def test_disagreement_by_property_groups_by_support_and_window():
+    characterized = pd.DataFrame({
+        "left": ["A", "A"], "right": ["B", "B"], "class_name": ["ion0", "ion1"],
+        "difference": [.10, .30], "train_support": ["1-9 positives", "1-9 positives"], "mz": [150.0, 250.0],
+    })
+    by_support, by_window = disagreement_by_property(characterized, mz_window=100)
+    assert by_support.set_index("train_support").loc["1-9 positives", "mean_difference"] == pytest.approx(.20)
+    windows = by_window.set_index("mz_window")
+    assert windows.loc["100-200 m/z", "mean_difference"] == pytest.approx(.10)
+    assert windows.loc["200-300 m/z", "mean_difference"] == pytest.approx(.30)

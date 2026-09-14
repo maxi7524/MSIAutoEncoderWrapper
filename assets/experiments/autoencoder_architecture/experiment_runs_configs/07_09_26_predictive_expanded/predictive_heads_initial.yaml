@@ -53,6 +53,13 @@ task:
                 empty_spectrum_policy: exclude
                 unobserved_label_policy: unlabelled
                 add_annotation_presence_target: false
+                simulated_negative:
+                  type: SignalEvidenceSimulatedNegative
+                  parameters:
+                    relative_threshold: 0.0119
+                    bin_radius: 1
+                    batch_size: 256
+                    cache_directory: cache/evidence/simulated_negatives
           subset:
             fraction: 0.1
             seed: 42
@@ -111,6 +118,14 @@ task:
         epochs: 15
         batch_size: 64
         gradient_clip_norm: 5.0
+        supervision_sampling:
+          target_field: molecule
+          proportions:
+            positive: 1
+            simulated_negative: 1
+            unlabelled: 1
+          replacement: true
+          seed: 43
         optimizer:
           type: AdamW
           params:

@@ -77,6 +77,24 @@ class CompositeLoss(nn.Module):
         loss_logs["total_loss"] = total_loss.item()
         return total_loss, loss_logs
 
+    def on_optimizer_step(self, model: nn.Module) -> None:
+        """Notify all active criteria after the model optimizer update.
+
+        :param model: Model updated by the active optimizer.
+        :type model: torch.nn.Module
+        """
+        for loss_fn in self.loss_functions.values():
+            loss_fn.on_optimizer_step(model)
+
+    def on_epoch_end(self, model: nn.Module) -> None:
+        """Notify active criteria after one complete training epoch.
+
+        :param model: Model optimized during the completed epoch.
+        :type model: torch.nn.Module
+        """
+        for loss_fn in self.loss_functions.values():
+            loss_fn.on_epoch_end(model)
+
 
 class CriterionsManager:
     """

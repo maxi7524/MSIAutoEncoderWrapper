@@ -82,6 +82,24 @@ def miniature_campaign(tmp_path):
     return settings, (splits, catalogue, np.arange(6, dtype=np.float32) + 200)
 
 
+def test_source_digest_excludes_training_only_subtrees(tmp_path):
+    (tmp_path / "analysis").mkdir()
+    (tmp_path / "analysis" / "predictive_precompute.py").write_text("A = 1\n")
+    (tmp_path / "training").mkdir()
+    (tmp_path / "training" / "some_loss.py").write_text("B = 1\n")
+    before = cache._source_digest(tmp_path, exclude=cache.TRAINING_ONLY_SOURCES)
+    (tmp_path / "training" / "some_loss.py").write_text("B = 2\n")  # Training-only edit.
+    after_training_edit = cache._source_digest(tmp_path, exclude=cache.TRAINING_ONLY_SOURCES)
+    assert before == after_training_edit
+    (tmp_path / "analysis" / "predictive_precompute.py").write_text("A = 2\n")  # Analysis edit.
+    after_analysis_edit = cache._source_digest(tmp_path, exclude=cache.TRAINING_ONLY_SOURCES)
+    assert after_analysis_edit != before
+    # Without the exclusion, the same training-only edit would be visible: the match
+    # above is TRAINING_ONLY_SOURCES doing its job, not incidental hash luck.
+    unscoped_after_training_edit = cache._source_digest(tmp_path)
+    assert unscoped_after_training_edit != after_training_edit
+
+
 def test_inventory_duplicate_grid_and_relocation(miniature_campaign):
     settings, _ = miniature_campaign
     models, sources = campaign.inventory(settings)
@@ -124,6 +142,36 @@ def test_inference_restores_training_mode_and_selects_only_active_head():
     assert outputs["logits"].shape == (5, 2, 3)
     assert outputs["reconstruction"].shape == (5, 6)
     np.testing.assert_allclose(outputs["reconstruction"].sum(axis=1), 1, atol=1e-6, rtol=0)
+
+
+def test_geometry_table_carries_structure_and_label_correlation_metrics_for_u_only(miniature_campaign):
+    settings, prepared = miniature_campaign
+    models, _ = campaign.inventory(settings)
+    cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+    geometry = cache.load_table(settings, "geometry")
+    new_metrics = {"observed_mean_cos_theta", "observed_sd_cos_theta", "uniform_baseline_sd_cos_theta",
+                  "effective_dimension", "two_nn_intrinsic_dimension", "label_correlation_spearman_r",
+                  "label_correlation_p_value", "label_correlation_pairs"}
+    present = set(geometry.metric)
+    assert new_metrics <= present
+    for metric in new_metrics:
+        assert set(geometry.query("metric == @metric").space) == {"u"}, metric
+    # Every ready model and non-train split contributes one row per new metric.
+    per_model_split = geometry.query("metric == 'two_nn_intrinsic_dimension'")
+    assert len(per_model_split) == len(models) * 2  # validation + test, not train.
+
+
+def test_peak_matching_is_computed_on_the_bounded_case_set(miniature_campaign):
+    settings, prepared = miniature_campaign
+    models, _ = campaign.inventory(settings)
+    run = cache.precompute(models, settings, prepared=prepared, model_loader=lambda path: _TinyModel())
+    peak_matching = cache.load_table(settings, "peak_matching")
+    cases = cache.load_table(settings, "spectrum_cases")
+    assert not peak_matching.empty
+    assert {"peak_mz", "mz_error", "relative_intensity_error", "original_intensity", "detected"} <= set(peak_matching.columns)
+    # Every matched-peak row must come from a position actually selected as a case.
+    assert set(peak_matching.row_position) <= set(cases.row_position)
+    assert (run / "sample_indices.csv").is_file()
 
 
 def test_required_source_with_no_completed_candidate_is_rejected(miniature_campaign):

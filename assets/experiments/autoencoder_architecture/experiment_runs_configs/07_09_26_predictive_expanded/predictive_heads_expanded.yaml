@@ -1,0 +1,297 @@
+# Additional paired molecular heads: 10 objective cells x 5 paired seeds = 50 tasks.
+# The real-data population, subset, split, architecture, optimizer, and run seeds
+# are intentionally identical to predictive_heads_initial.yaml.
+
+schema_version: 1
+experiment:
+  name: kidney-predictive-heads-expanded
+task:
+  entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
+  preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
+  test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
+  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
+  parameters:
+    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
+    factory_parameters:
+      project_path: data/kidney_workspace
+      project_path_anchor: repository
+      image_path: datasets/kidney/kidney.imzML
+      device: null
+      reader:
+        strategy: PyImzMLReader
+        parameters: {}
+      annotations:
+        strategy: auto
+        parameters: {}
+      binning:
+        strategy: LinearBinning
+        parameters:
+          bin_step: 0.55
+          x_min: 200.0
+          x_max: 900.0
+          aggregation: sum
+      inverse_binning:
+        strategy: PassthroughInverseBinner
+      dataset:
+        strategy: PixelDataset
+        parameters:
+          source: image
+          normalization: tic
+          target_specs:
+            molecule:
+              type: multi_label
+          annotation_settings:
+            mapping:
+              x_mapping: binner
+            selection:
+              annotated_fraction: 1.0
+              unannotated_fraction: 0.0
+              max_unannotated_to_annotated_ratio: 0.0
+              seed: 42
+            targets:
+              molecule:
+                empty_spectrum_policy: exclude
+                unobserved_label_policy: unlabelled
+                add_annotation_presence_target: false
+                simulated_negative:
+                  type: SignalEvidenceSimulatedNegative
+                  parameters:
+                    relative_threshold: 0.0119
+                    bin_radius: 1
+                    batch_size: 256
+                    cache_directory: cache/evidence/simulated_negatives
+          subset:
+            fraction: 0.1
+            seed: 42
+            method: proportional_multilabel
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_count: 3
+          split:
+            strategy: proportional_multilabel
+            fractions:
+              train: 0.8
+              validation: 0.1
+              test: 0.1
+            parameters:
+              group_fields: dataset_id
+              minimum_positive_per_split: 1
+      variant:
+        grid: architectures
+      # One grid cell supplies both the objective and the exact head family it
+      # needs.  Methods never execute unrelated output heads.
+      predictive:
+        grid: methods
+        select: predictive
+    model_name: null
+    training:
+      patience: 10
+      continuation:
+        enabled: true
+        resume: true
+        checkpoint_every_epochs: 1
+      checkpoint:
+        enabled: true
+        restore_best: true
+      phases:
+      - phase_name: joint_predictive
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        # Each method selects its own required P/N_sim/U source pools below.
+        # The sampler is coupled to the head and criterion through ``methods``.
+        supervision_sampling:
+          grid: methods
+          select: supervision_sampling
+        optimizer:
+          type: AdamW
+          params:
+            lr: 0.001
+            weight_decay: 0.0001
+        criterions:
+          grid: methods
+          select: criterions
+runs:
+  repetitions: 5
+seeds:
+  common_seeds:
+    split: 42
+    dataloader: 43
+  run_seeds:
+    model_initialization: 1000
+    training: 2000
+grid:
+  architectures:
+    values:
+    - name: conv1d-ae-32-16-8-latent-10
+      preset: CNNAutoencoder
+      parameters:
+        latent_dim: 10
+        channels: [1, 32, 16, 8]
+        kernels: [5, 7, 3]
+        strides: [3, 3, 3]
+        output_normalization:
+          type: tic
+          parameters:
+            epsilon: 1.0e-12
+  methods:
+    values:
+    # Strict P/N_sim BCE: U is excluded.
+    - predictive: &binary_head
+        projector:
+          strategy: LinearProjector
+          parameters: {latent_dim: 10, projection_dim: 64}
+        heads:
+          molecule_binary:
+            target_field: molecule
+            strategy: LinearClassificationHead
+            parameters: {latent_dim: 10, output_dim: auto_from_target, hidden_dim: 128, dropout: 0.1}
+      criterions: &bce_pn
+        reconstruction: &masserstein_reconstruction
+          masserstein: {target: MassersteinLoss, weight: 1.0}
+        heads:
+          molecule_binary:
+            bce_pn_simulated_negative: {target: BCEPNLoss, weight: 0.2, params: {}}
+      supervision_sampling: &pn_sampling
+        target_field: molecule
+        proportions: {positive: 1, simulated_negative: 1}
+        replacement: true
+        seed: 43
+    # Observed N_sim/P/U categorical baseline; output order is N_sim, P, U.
+    - predictive: &pnu_head
+        projector:
+          strategy: LinearProjector
+          parameters: {latent_dim: 10, projection_dim: 64}
+        heads:
+          molecule_pnu_observed:
+            target_field: molecule
+            strategy: ThreeStateHead
+            parameters: {latent_dim: 10, output_dim: auto_from_target, hidden_dim: 128, dropout: 0.1}
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_pnu_observed:
+            observed_pnu_cross_entropy: {target: ObservedPNUSCrossEntropyLoss, weight: 0.2, params: {}}
+      supervision_sampling: &pnu_sampling
+        target_field: molecule
+        proportions: {positive: 1, simulated_negative: 1, unlabelled: 1}
+        replacement: true
+        seed: 43
+    # Existing VPU core plus a separate N_sim BCE extension.
+    - predictive: *binary_head
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_binary:
+            vpu_plus_simulated_negative:
+              target: VariationalPULoss
+              weight: 0.2
+              params: {negative_weight: 0.0, consistency_weight: 0.0, simulated_negative_weight: 1.0}
+      supervision_sampling: *pnu_sampling
+    # Equation (8) Taylor-VPU with the paper's EMA consistency term.
+    - predictive: *binary_head
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_binary:
+            taylor_vpu:
+              target: TaylorVariationalPULoss
+              weight: 0.2
+              params: {order: 2, consistency_weight: 1.0, teacher_momentum: 0.999, simulated_negative_weight: 0.0}
+      supervision_sampling: &pu_sampling
+        target_field: molecule
+        proportions: {positive: 1, unlabelled: 1}
+        replacement: true
+        seed: 43
+    - predictive: *binary_head
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_binary:
+            taylor_vpu_plus_simulated_negative:
+              target: TaylorVariationalPULoss
+              weight: 0.2
+              params: {order: 2, consistency_weight: 1.0, teacher_momentum: 0.999, simulated_negative_weight: 1.0}
+      supervision_sampling: *pnu_sampling
+    # Supervised selective heads consume only declared P/N_sim labels.
+    - predictive: &selective_head
+        projector:
+          strategy: LinearProjector
+          parameters: {latent_dim: 10, projection_dim: 64}
+        heads:
+          molecule_selective:
+            target_field: molecule
+            strategy: SelectiveHead
+            parameters: {latent_dim: 10, output_dim: auto_from_target, hidden_dim: 128, dropout: 0.1}
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_selective:
+            selective_pn:
+              target: SelectivePNLoss
+              weight: 0.2
+              params: {target_coverage: 0.8, coverage_weight: 32.0, selective_weight: 0.5}
+      supervision_sampling: *pn_sampling
+    - predictive: &gambler_head
+        projector:
+          strategy: LinearProjector
+          parameters: {latent_dim: 10, projection_dim: 64}
+        heads:
+          molecule_gambler:
+            target_field: molecule
+            strategy: DeepGamblerHead
+            parameters: {latent_dim: 10, output_dim: auto_from_target, hidden_dim: 128, dropout: 0.1}
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_gambler:
+            deep_gambler_pn: {target: DeepGamblerPNLoss, weight: 0.2, params: {reward: 1.5}}
+      supervision_sampling: *pn_sampling
+    # PU/reject hybrids retain the Taylor P/U core and add P/N_sim reject loss.
+    - predictive: *selective_head
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_selective:
+            selective_taylor_vpu_plus_simulated_negative:
+              target: SelectiveTaylorVariationalPULoss
+              weight: 0.2
+              params: {order: 2, simulated_negative_weight: 1.0, target_coverage: 0.8, coverage_weight: 32.0, selective_weight: 0.5, reject_weight: 1.0}
+      supervision_sampling: *pnu_sampling
+    - predictive: *gambler_head
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_gambler:
+            deep_gambler_taylor_vpu_plus_simulated_negative:
+              target: DeepGamblerTaylorVariationalPULoss
+              weight: 0.2
+              params: {order: 2, simulated_negative_weight: 1.0, reward: 1.5, gambling_weight: 1.0}
+      supervision_sampling: *pnu_sampling
+    # Taylor-VPU core plus reliable-label Dirichlet supervision and uncertainty.
+    - predictive:
+        projector:
+          strategy: LinearProjector
+          parameters: {latent_dim: 10, projection_dim: 64}
+        heads:
+          molecule_evidential:
+            target_field: molecule
+            strategy: EvidentialHead
+            parameters: {latent_dim: 10, output_dim: auto_from_target, hidden_dim: 128, dropout: 0.1}
+      criterions:
+        reconstruction: *masserstein_reconstruction
+        heads:
+          molecule_evidential:
+            evidential_taylor_vpu:
+              target: EvidentialTaylorVariationalPULoss
+              weight: 0.2
+              params: {order: 2, evidential_weight: 1.0, kl_weight: 1.0, kl_annealing_steps: 1000}
+      supervision_sampling: *pnu_sampling
+execution:
+  backend: local
+  max_parallel_runs: 1
+  entropy:
+    task_walltime: 01:00:00
+reports: []
+reporting:
+  continue_on_error: true

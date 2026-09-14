@@ -13,6 +13,7 @@ from ...criterions_manager import CriterionsManager
 from .....models.datasets.base_dataset import MSIBaseDataset
 from .....utils.exceptions import raise_validation_error
 from .training_targets import collect_training_multilabel_targets
+from .supervision_masks import supervised_pu_masks
 
 
 @CriterionsManager.register_criterion("autoencoder", "head", "NNPUMultiLabelLoss")
@@ -38,6 +39,9 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
     :type min_prior: float
     :param max_prior: Upper probability bound below one.
     :type max_prior: float
+    :param simulated_negative_weight: Weight of the separate BCE term applied
+        only where the dataset explicitly declares ``N_sim``.
+    :type simulated_negative_weight: float
     """
 
     def __init__(
@@ -50,6 +54,7 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
         prior_multiplier: float = 1.0,
         min_prior: float = 1e-4,
         max_prior: float = 0.99,
+        simulated_negative_weight: float = 0.0,
     ) -> None:
         super().__init__(
             head_id=head_id,
@@ -65,16 +70,21 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
             raise_validation_error(
                 "NNPUMultiLabelLoss", "class_prior is required for fixed priors."
             )
-        if prior_multiplier <= 0 or not 0 < min_prior < max_prior < 1:
+        if (
+            prior_multiplier <= 0
+            or not 0 < min_prior < max_prior < 1
+            or simulated_negative_weight < 0
+        ):
             raise_validation_error(
                 "NNPUMultiLabelLoss",
-                "prior_multiplier must be positive and prior bounds must satisfy 0 < min < max < 1.",
+                "Invalid prior bounds or simulated-negative weight.",
             )
         self.prior_method = prior_method
         self.class_prior = class_prior
         self.prior_multiplier = float(prior_multiplier)
         self.min_prior = float(min_prior)
         self.max_prior = float(max_prior)
+        self.simulated_negative_weight = float(simulated_negative_weight)
         self.register_buffer("class_priors", torch.empty(0), persistent=False)
         self.register_buffer("active_classes", torch.empty(0, dtype=torch.bool), persistent=False)
         self._config = {
@@ -86,6 +96,7 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
             "prior_multiplier": self.prior_multiplier,
             "min_prior": self.min_prior,
             "max_prior": self.max_prior,
+            "simulated_negative_weight": self.simulated_negative_weight,
         }
 
     def on_phase_start(
@@ -158,8 +169,13 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
                     mask.detach().cpu(),
                 )
         priors = self.class_priors.to(device=logits.device, dtype=logits.dtype)  # (C,)
-        labelled_positive = (targets > 0.5) & mask  # (B, C)
-        unlabelled = (targets <= 0.5) & mask  # (B, C)
+        labelled_positive, unlabelled, simulated_negative = supervised_pu_masks(
+            batch_data,
+            self.target_field,
+            targets,
+            mask,
+            self.class_indices,
+        )
         positive_count = labelled_positive.sum(dim=0)  # (C,)
         unlabelled_count = unlabelled.sum(dim=0)  # (C,)
         positive_loss = F.softplus(-logits)  # (B, C)
@@ -183,5 +199,11 @@ class MSINNPUMultiLabelLoss(MSIHeadCriterion):
             else (positive_count > 0) & (unlabelled_count > 0)
         )
         if not bool(active.any()):
-            return logits.sum() * 0.0
-        return (positive_risk + negative_risk.clamp_min(0.0))[active].mean()
+            loss = logits.sum() * 0.0  # ()
+        else:
+            loss = (positive_risk + negative_risk.clamp_min(0.0))[active].mean()  # ()
+        if self.simulated_negative_weight > 0 and bool(simulated_negative.any()):
+            loss = loss + self.simulated_negative_weight * F.softplus(
+                logits[simulated_negative]
+            ).mean()  # ()
+        return loss

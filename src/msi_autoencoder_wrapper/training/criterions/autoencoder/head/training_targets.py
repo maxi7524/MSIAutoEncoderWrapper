@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Subset
 
 from .....data import TargetBatch
+from .....data.supervision_masks import simulated_negative_mask_key
 from .....utils.exceptions import raise_incompatible_interface_error
 
 
@@ -52,7 +53,20 @@ def collect_training_multilabel_targets(
         raise_incompatible_interface_error(
             "HeadCriterion", "Multi-label training masks must have shape [N] or [N, C]."
         )
-    return targets, masks
+    simulated_negative = target_batch.masks.get(
+        simulated_negative_mask_key(target_field)
+    )
+    if simulated_negative is None:
+        return targets, masks
+    simulated_negative = simulated_negative.to(dtype=torch.bool)
+    if simulated_negative.shape == targets.shape[:1]:
+        simulated_negative = simulated_negative.unsqueeze(1).expand_as(targets)
+    if simulated_negative.shape != targets.shape:
+        raise_incompatible_interface_error(
+            "HeadCriterion",
+            "Simulated-negative masks must have shape [N] or [N, C].",
+        )
+    return targets, masks & ~simulated_negative
 
 
 def _collate_legacy_targets(dataset: Any, target_field: str) -> TargetBatch:

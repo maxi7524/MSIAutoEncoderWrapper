@@ -20,6 +20,7 @@ from msi_autoencoder_wrapper.data.pretraining import (
     SyntheticSpectrumDataset,
     SyntheticSamplingManager,
 )
+from msi_autoencoder_wrapper.data.supervision_masks import simulated_negative_mask_key
 from msi_autoencoder_wrapper.training.criterions.autoencoder.pretraining.element_count_loss import ElementCountLoss
 
 
@@ -59,6 +60,19 @@ def test_random_background_has_known_negative_ion_labels(synthetic_factory):
         assert bool(masks["molecule"].all())
         assert not bool(masks["element_counts"].any())
         assert int((spectrum > 0).sum()) <= 5
+        batch = dataset.collate_fn([dataset[i]])
+        assert bool(batch.targets.masks[simulated_negative_mask_key("molecule")].all())
+
+
+def test_synthetic_labels_emit_positive_and_simulated_negative_masks(synthetic_factory):
+    """Generator-owned labels distinguish present ions from known absences."""
+    dataset = synthetic_factory(("single_annotated",))
+    batch = dataset.collate_fn([dataset[0]])
+    values = batch.targets.values["molecule"][0]
+    simulated_negative = batch.targets.masks[simulated_negative_mask_key("molecule")][0]
+    assert int((values > 0.5).sum()) == 1
+    assert int(simulated_negative.sum()) == 1
+    assert not bool(simulated_negative[values > 0.5].any())
 
 
 def test_mixtures_do_not_sum_element_counts(synthetic_factory):

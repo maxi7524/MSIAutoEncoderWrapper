@@ -23,6 +23,8 @@ from ...data import (
     SharedAxisRawBatch,
     RawSpectrumCollator,
     SpectrumBatch,
+    SupervisionMaskBatchSampler,
+    collect_supervision_masks,
 )
 
 # Logger initialization
@@ -304,6 +306,9 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             for epoch in range(start_epoch, epochs):
                 if synthetic_config is not None:
                     dataset_partitions["train"].set_epoch(epoch)
+                batch_sampler = getattr(dataloader, "batch_sampler", None)
+                if isinstance(batch_sampler, SupervisionMaskBatchSampler):
+                    batch_sampler.set_epoch(epoch)
                 model.train()
                 epoch_start_time = time.time()
                 accumulated_metrics: Dict[str, float] = {}
@@ -395,6 +400,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                                 ),
                             )
                     optimizer.step()
+                    composite_loss.on_optimizer_step(model)
                     if task_progress is not None:
                         task_progress.update(1)
 
@@ -467,6 +473,8 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 }
                 for key, running_sum in accumulated_metrics.items():
                     mean_metrics[key] = running_sum / processed_batches_limit
+
+                composite_loss.on_epoch_end(model)
 
                 if validation_loader is not None:
                     validation_metrics = self._evaluate_loader(
@@ -737,6 +745,49 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             loader_config.setdefault("prefetch_factor", 2)
             loader_config.setdefault("persistent_workers", True)
         try:
+            supervision_config = phase_config.get("supervision_sampling")
+            batch_sampler = None
+            if supervision_config is not None:
+                if not isinstance(supervision_config, dict):
+                    raise_validation_error(
+                        "Trainer", "supervision_sampling must be a mapping."
+                    )
+                target_field = supervision_config.get("target_field")
+                if not isinstance(target_field, str) or not target_field:
+                    raise_validation_error(
+                        "Trainer", "supervision_sampling.target_field must be a nonempty string."
+                    )
+                proportions = supervision_config.get("proportions")
+                if not isinstance(proportions, dict):
+                    raise_validation_error(
+                        "Trainer", "supervision_sampling.proportions must be a mapping."
+                    )
+                targets, availability, simulated_negative = collect_supervision_masks(
+                    dataset,
+                    target_field,
+                )
+                supervision_provider = (
+                    lambda: collect_supervision_masks(dataset, target_field)
+                    if callable(getattr(dataset, "set_epoch", None))
+                    else None
+                )
+                batch_sampler = SupervisionMaskBatchSampler(
+                    targets,
+                    availability,
+                    simulated_negative,
+                    batch_size=batch_size,
+                    proportions=proportions,
+                    steps_per_epoch=supervision_config.get("steps_per_epoch"),
+                    replacement=bool(supervision_config.get("replacement", True)),
+                    seed=int(supervision_config.get("seed", seed or 0)),
+                    supervision_provider=supervision_provider,
+                )
+                logger.info(
+                    "Using P/U/N_sim mask sampler: target=%s proportions=%s batches=%s.",
+                    target_field,
+                    proportions,
+                    len(batch_sampler),
+                )
             source_dataset = getattr(dataset, "dataset", dataset)
             dense_collator = getattr(source_dataset, "collate_fn", None)
             if callable(dense_collator):
@@ -755,6 +806,10 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 schemas = schemas_getter() if callable(schemas_getter) else {}
                 loader_config["collate_fn"] = RawSpectrumCollator(schemas)
                 dataset = RawDatasetView(dataset)
+            if batch_sampler is not None:
+                loader_config.pop("shuffle", None)
+                loader_config.pop("drop_last", None)
+                return DataLoader(dataset, batch_sampler=batch_sampler, **loader_config)
             return DataLoader(dataset, batch_size=batch_size, **loader_config)
         except (TypeError, ValueError) as error:
             raise_validation_error(

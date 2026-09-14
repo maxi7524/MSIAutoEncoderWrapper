@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.special import logsumexp
+from scipy.stats import spearmanr
 
 from ....data.annotation_evidence import NEGATIVE, POSITIVE, UNAVAILABLE, UNLABELLED
 from ....utils.logger import get_custom_logger
@@ -534,3 +535,127 @@ def class_agreement(per_class: pd.DataFrame, *, metric: str = "average_precision
     result = pd.concat(rows, ignore_index=True)
     logger.info("Paired %s class-level comparisons across %s conditions.", len(result), len(labels))
     return result.drop(columns=["eligible_left", "eligible_right"])
+
+
+def class_extremes(profiles: pd.DataFrame, *, value: str = "average_precision", count: int = 15,
+                   group: str = "label") -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split every condition's per-class values into its best and worst tail, and find shared failures.
+
+    The extremes of a per-class distribution are diagnostic even though they are selected
+    post hoc: a class at the bottom for every condition is a property of the data (too few
+    positives, or an annotation the spectrum does not support), whereas a class at the
+    bottom for one condition only is a property of that objective. The two are told apart by
+    counting, across conditions, how many worst-tails a class belongs to.
+
+    :param profiles: One row per (condition, class), carrying ``value`` and ``class_name``.
+    :type profiles: pandas.DataFrame
+    :param value: Column ranked to find the extremes.
+    :type value: str
+    :param count: Number of classes kept in each tail, per condition.
+    :type count: int
+    :param group: Column identifying one condition.
+    :type group: str
+    :return: ``(worst, best, shared_failures)``. ``worst``/``best`` hold ``count`` rows per
+        condition, sorted ascending/descending by ``value``. ``shared_failures`` has one row
+        per class that appears in more than one condition's worst tail, with the number of
+        conditions it fails in and its mean value across them, sorted by that count then by
+        the mean value ascending.
+    :rtype: tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]
+    """
+    ordered = profiles.sort_values([group, value])
+    worst = ordered.groupby(group).head(count)
+    best = ordered.groupby(group).tail(count)
+    shared_failures = (worst.groupby("class_name")
+                       .agg(conditions=(group, "nunique"), mean_value=(value, "mean"))
+                       .reset_index().sort_values(["conditions", "mean_value"], ascending=[False, True]))
+    shared_failures = shared_failures[shared_failures.conditions > 1]
+    logger.info("Extracted %s-class extremes for %s conditions; %s classes fail in more than one.",
+               count, ordered[group].nunique(), len(shared_failures))
+    return worst, best, shared_failures
+
+
+def agreement_summary(agreement: pd.DataFrame) -> pd.DataFrame:
+    """Summarize one :func:`class_agreement` pair as rank correlation and paired difference.
+
+    Two summaries answer different questions. The Spearman correlation across classes
+    states whether the pair orders classes the same way: near one with a nonzero mean
+    difference is a uniform shift, lower means the pair disagrees about which classes are
+    hard and the macro means average genuinely different behaviour. The mean/median paired
+    difference is the per-class counterpart of a macro difference, with the per-class
+    variation retained rather than collapsed.
+
+    :param agreement: Output of :func:`class_agreement`, with ``value_left``/``value_right``
+        and ``difference`` per (left, right, class).
+    :type agreement: pandas.DataFrame
+    :return: One row per (left, right) with the class count, Spearman correlation, mean and
+        median difference, and the fraction of classes on which ``left`` scores higher.
+        ``spearman`` is NaN when fewer than three classes are paired.
+    :rtype: pandas.DataFrame
+    """
+    rows = []
+    for (left, right), group in agreement.groupby(["left", "right"]):
+        correlation = spearmanr(group.value_left, group.value_right) if len(group) > 2 else None
+        rows.append({"left": left, "right": right, "classes": len(group),
+                     "spearman": float(correlation.statistic) if correlation is not None else float("nan"),
+                     "mean_difference": float(group.difference.mean()),
+                     "median_difference": float(group.difference.median()),
+                     "left_higher_fraction": float((group.difference > 0).mean())})
+    result = pd.DataFrame(rows)
+    logger.info("Summarized per-class agreement for %s condition pairs.", len(result))
+    return result
+
+
+def disagreement_extremes(agreement: pd.DataFrame, *, count: int = 12) -> pd.DataFrame:
+    """Retain the classes with the largest signed paired difference in each direction.
+
+    Naming the classes that carry a disagreement turns an aggregate difference into
+    something checkable. Selection is on the signed ``difference`` of :func:`class_agreement`,
+    independently within every (left, right) pair, so the returned frame mixes classes
+    favouring ``left`` (most negative difference) and classes favouring ``right`` (most
+    positive), each represented up to ``count`` times per pair.
+
+    :param agreement: Output of :func:`class_agreement`.
+    :type agreement: pandas.DataFrame
+    :param count: Number of classes kept from each tail of the signed difference, per pair.
+    :type count: int
+    :return: Rows from both tails of every (left, right) pair, in signed-difference order.
+    :rtype: pandas.DataFrame
+    """
+    tails = []
+    for _, group in agreement.groupby(["left", "right"]):
+        ordered_pair = group.sort_values("difference")
+        tails.append(pd.concat([ordered_pair.head(count), ordered_pair.tail(count)]))
+    if not tails:
+        return agreement.iloc[0:0]
+    result = pd.concat(tails, ignore_index=True)
+    logger.info("Retained %s-class disagreement tails for %s condition pairs.", count, len(tails))
+    return result
+
+
+def disagreement_by_property(characterized: pd.DataFrame, *, mz_window: int = 100) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Aggregate a paired per-class difference by training support and by m/z window.
+
+    Naming the classes that separate two conditions is not yet an explanation. This groups
+    the same paired ``difference`` by two properties fixed independently of any model —
+    training-positive support and the 100 m/z window containing the class — so a difference
+    driven by one narrow stratum is visible as such rather than blended into an overall mean.
+
+    :param characterized: :func:`class_agreement` output merged with class properties
+        ``train_support`` and ``mz`` (one row per left/right/class).
+    :type characterized: pandas.DataFrame
+    :param mz_window: Width in Da of the m/z aggregation window.
+    :type mz_window: int
+    :return: ``(by_support, by_window)``, each with the class count and the mean/median
+        difference per (left, right, stratum).
+    :rtype: tuple[pandas.DataFrame, pandas.DataFrame]
+    """
+    by_support = (characterized.groupby(["left", "right", "train_support"])
+                 .agg(classes=("class_name", "size"), mean_difference=("difference", "mean"),
+                      median_difference=("difference", "median")).reset_index())
+    lower = (np.floor(characterized.mz / mz_window) * mz_window).astype(int)
+    windowed = characterized.assign(mz_window=lower.astype(str) + "-" + (lower + mz_window).astype(str) + " m/z")
+    by_window = (windowed.groupby(["left", "right", "mz_window"])
+                .agg(classes=("mz", "size"), mean_difference=("difference", "mean")).reset_index())
+    logger.info("Aggregated disagreement by support (%s rows) and by %sDa m/z window (%s rows).",
+               len(by_support), mz_window, len(by_window))
+    return by_support, by_window

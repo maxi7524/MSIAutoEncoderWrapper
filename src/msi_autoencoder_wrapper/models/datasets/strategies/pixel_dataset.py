@@ -23,6 +23,8 @@ from ....data import (
     TargetSample,
     TargetSchema,
 )
+from ....data.supervision_masks import simulated_negative_mask_key
+from ....data.simulated_negatives import SimulatedNegativeManager, SimulatedNegativeStrategy
 
 # Logger initialization
 logger = get_custom_logger(__name__)
@@ -96,6 +98,8 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         self._resolved_class_mappings: Optional[Dict[str, Dict[str, int]]] = None
         self._masked_training_positives: dict[int, frozenset[int]] = {}
         self._training_positive_mask_initialized = False
+        self._simulated_negative_strategy: SimulatedNegativeStrategy | None = None
+        self._simulated_negative_masks: dict[int, torch.Tensor] | None = None
         self._initialize_annotation_support(
             annotation_settings,
             enabled="molecule" in self.target_specs,
@@ -109,6 +113,18 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             "annotation_settings": self.get_annotation_settings().get_config(),
             "split": self.get_split_config(),
         }
+
+    def configure_annotations(self, settings: Mapping[str, Any] | None) -> None:
+        """Replace annotation policies and invalidate derived negative masks.
+
+        :param settings: Dataset annotation mapping configuration.
+        :type settings: Mapping[str, Any] | None
+        :return: None.
+        :rtype: None
+        """
+        super().configure_annotations(settings)
+        self._simulated_negative_strategy = None
+        self._simulated_negative_masks = None
 
     def create_partitions(self) -> Any:
         """Create partitions and deterministically hide configured train positives.
@@ -499,9 +515,16 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             return TargetSample.empty()
         annotation_reader = self.active_context.annotation_reader
         mappings = self.get_class_mappings()
+        molecule_policy = self.get_annotation_target_settings("molecule")
         metadata = (
             annotation_reader.get_spectrum_metadata(spectrum_id)
-            if any(field not in {"molecule", "chemical_class", "element_counts"} for field in self.target_specs)
+            if (
+                any(
+                    field not in {"molecule", "chemical_class", "element_counts"}
+                    for field in self.target_specs
+                )
+                or molecule_policy.simulated_negative_metadata_key is not None
+            )
             else {}
         )
         targets: Dict[str, torch.Tensor] = {}
@@ -511,30 +534,14 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
                 continue
             mapping = mappings[field]
             if field == "molecule":
-                target = torch.zeros(len(mapping), dtype=torch.float32)
-                molecule_index = self.get_mapped_annotation_index()
-                identities = (
-                    molecule_index.identities_for_spectrum(spectrum_id)
-                    if molecule_index is not None
-                    else (
-                        (
-                            str(annotation.get("formula", "")),
-                            str(annotation.get("adduct", "")),
-                        )
-                        for annotation in annotation_reader.get_spectrum_annotations(
-                            spectrum_id
-                        )
-                    )
-                )
-                for formula, adduct in identities:
-                    class_index = mapping.get(f"{formula}|{adduct}")
-                    if class_index is not None:
-                        target[class_index] = 1.0
+                canonical_target = self._canonical_molecule_target(spectrum_id)
+                target = canonical_target.clone()  # (C,)
                 masked_classes = self._masked_training_positives.get(spectrum_id)
                 if masked_classes:
                     target[list(masked_classes)] = 0.0
                 targets[field] = target
                 target_policy = self.get_annotation_target_settings(field)
+                molecule_index = self.get_mapped_annotation_index()
                 spectrum_has_annotation = molecule_index.has_annotations(spectrum_id)
                 if (
                     target_policy.empty_spectrum_policy == "reconstruction_only"
@@ -548,6 +555,27 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
                     # unlabelled. The dataset records availability, while the loss
                     # owns the statistical interpretation.
                     target_masks[field] = torch.ones(len(mapping), dtype=torch.bool)
+                simulated_negative = self._simulated_negative_mask(
+                    metadata,
+                    target_policy.simulated_negative_metadata_key,
+                    canonical_target,
+                    torch.ones_like(target_masks[field]),
+                )  # (C,)
+                if target_policy.simulated_negative is not None:
+                    simulated_negative = self._strategy_simulated_negative_mask(
+                        spectrum_id,
+                        canonical_target,
+                    )  # (C,)
+                if not (
+                    target_policy.empty_spectrum_policy == "reconstruction_only"
+                    and not spectrum_has_annotation
+                ):
+                    # N_sim is verified supervision even if ordinary unknown
+                    # labels are masked. It therefore makes those columns available.
+                    target_masks[field] |= simulated_negative
+                target_masks[simulated_negative_mask_key(field)] = (
+                    simulated_negative & target_masks[field]
+                )  # (C,)
                 continue
             values = metadata_values(metadata, field)
             if spec["type"] == "multi_label":
@@ -595,6 +623,208 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             targets["element_counts"] = torch.zeros(len(mappings["element_counts"]), dtype=torch.float32)
             target_masks["element_counts"] = torch.zeros(len(mappings["element_counts"]), dtype=torch.bool)
         return TargetSample(values=targets, masks=target_masks)
+
+    def _canonical_molecule_target(self, spectrum_id: int) -> torch.Tensor:
+        """Return original molecular annotations before any train-only masking.
+
+        :param spectrum_id: Stable source spectrum identifier.
+        :type spectrum_id: int
+        :return: Binary molecule target with shape ``(C,)``.
+        :rtype: torch.Tensor
+        """
+        mapping = self.get_class_mappings()["molecule"]
+        target = torch.zeros(len(mapping), dtype=torch.float32)
+        molecule_index = self.get_mapped_annotation_index()
+        annotation_reader = self.active_context.annotation_reader
+        identities = (
+            molecule_index.identities_for_spectrum(spectrum_id)
+            if molecule_index is not None
+            else (
+                (
+                    str(annotation.get("formula", "")),
+                    str(annotation.get("adduct", "")),
+                )
+                for annotation in annotation_reader.get_spectrum_annotations(spectrum_id)
+            )
+        )
+        for formula, adduct in identities:
+            class_index = mapping.get(f"{formula}|{adduct}")
+            if class_index is not None:
+                target[class_index] = 1.0
+        return target
+
+    def _strategy_simulated_negative_mask(
+        self,
+        spectrum_id: int,
+        canonical_target: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return the strategy-produced ``N_sim`` row for one source spectrum.
+
+        :param spectrum_id: Stable source spectrum identifier.
+        :type spectrum_id: int
+        :param canonical_target: Original molecule annotations with shape ``(C,)``.
+        :type canonical_target: torch.Tensor
+        :return: Reliable-negative mask with shape ``(C,)``.
+        :rtype: torch.Tensor
+        """
+        self._materialize_strategy_simulated_negatives()
+        if self._simulated_negative_masks is None:
+            return torch.zeros_like(canonical_target, dtype=torch.bool)  # (C,)
+        try:
+            return self._simulated_negative_masks[spectrum_id]
+        except KeyError as error:
+            raise_validation_error(
+                "PixelDataset",
+                f"No simulated-negative row was materialized for source spectrum {spectrum_id}.",
+            )
+            raise error  # pragma: no cover
+
+    def _materialize_strategy_simulated_negatives(self) -> None:
+        """Build and retain every selected source row's strategy-derived mask."""
+        if self._simulated_negative_masks is not None:
+            return
+        source_indices, masks = self._compute_strategy_simulated_negative_mask()
+        self._simulated_negative_masks = {
+            source_index: masks[position].clone()
+            for position, source_index in enumerate(source_indices)
+        }
+        logger.info(
+            "Materialized simulated-negative masks: strategy=%s spectra=%s entries=%s.",
+            type(self._simulated_negative_strategy).__name__,
+            len(source_indices),
+            int(masks.sum().item()),
+        )
+
+    def precompute_simulated_negatives(self) -> dict[str, int | str]:
+        """Materialize the configured reliable-negative cache without retaining it.
+
+        This operation is intended for the campaign-resolution stage.  The
+        persisted strategy artifact is shared by every subsequently launched
+        task, while individual training workers retain only their own runtime
+        lookup table after loading it.
+
+        :return: Cache materialization summary.
+        :rtype: dict[str, int | str]
+        """
+        policy = self.get_annotation_target_settings("molecule")
+        if policy.simulated_negative is None:
+            return {"strategy": "none", "spectra": 0, "entries": 0}
+        source_indices, masks = self._compute_strategy_simulated_negative_mask()
+        return {
+            "strategy": type(self._simulated_negative_strategy).__name__,
+            "spectra": len(source_indices),
+            "entries": int(masks.sum().item()),
+        }
+
+    def _compute_strategy_simulated_negative_mask(
+        self,
+    ) -> tuple[tuple[int, ...], torch.Tensor]:
+        """Compute or load one global strategy mask for selected source rows."""
+        policy = self.get_annotation_target_settings("molecule")
+        if policy.simulated_negative is None:
+            return (), torch.empty((0, 0), dtype=torch.bool)
+        if self._simulated_negative_strategy is None:
+            self._simulated_negative_strategy = SimulatedNegativeManager.load_config(
+                policy.simulated_negative
+            )
+        source_indices = self._simulated_negative_source_indices()
+        targets = torch.stack(
+            [self._canonical_molecule_target(source_index) for source_index in source_indices]
+        )  # (N, C)
+        candidate_availability = torch.ones_like(targets, dtype=torch.bool)  # (N, C)
+        masks = self._simulated_negative_strategy.build_mask(
+            self,
+            "molecule",
+            source_indices,
+            targets,
+            candidate_availability,
+        )  # (N, C)
+        if masks.shape != targets.shape:
+            raise_validation_error(
+                "PixelDataset",
+                "Simulated-negative strategy must return a mask with shape (N, C).",
+            )
+        masks = masks.to(dtype=torch.bool, device="cpu") & (targets <= 0.5)  # (N, C)
+        return source_indices, masks
+
+    def _simulated_negative_source_indices(self) -> tuple[int, ...]:
+        """Return selected stable source identifiers in deterministic order."""
+        if self._selection is not None:
+            return self._selection.source_indices
+        return tuple(int(index) for index in self._annotation_visible_source_indices().tolist())
+
+    def get_evidence_spectra(self, source_indices: Sequence[int]) -> torch.Tensor:
+        """Return model-input spectra for one evidence strategy batch.
+
+        :param source_indices: Stable source spectrum identifiers.
+        :type source_indices: Sequence[int]
+        :return: Binned and normalized spectra with shape ``(B, M)``.
+        :rtype: torch.Tensor
+
+        REMARK: This duplicates the dense dataset input path deliberately: the
+        strategy must observe exactly the same binner and normalization as the
+        signal-evidence criterions, while it runs before a DataLoader exists.
+        """
+        if self.source != "image":
+            raise_validation_error(
+                "PixelDataset",
+                "Signal-evidence simulated negatives require source='image'.",
+            )
+        reader = self.active_context.get_data_reader(self.source)
+        binner = self.active_context.binner
+        spectra: list[torch.Tensor] = []
+        for source_index in source_indices:
+            mass_values, intensities = reader.GetSpectrum(int(source_index))
+            mapped = binner.transform_spectrum(mass_values, intensities).cpu().numpy()
+            if not np.all(np.isfinite(mapped)):
+                raise_validation_error(
+                    "PixelDataset",
+                    f"Binned spectrum {source_index} contains non-finite values.",
+                )
+            spectra.append(torch.from_numpy(self._normalize(mapped.astype(np.float32, copy=False))))
+        if not spectra:
+            feature_count = len(self.active_context.binner.GetXAxis())
+            return torch.empty((0, feature_count), dtype=self.dtype)
+        return torch.stack(spectra)  # (B, M)
+
+    @staticmethod
+    def _simulated_negative_mask(
+        metadata: Mapping[str, Any],
+        metadata_key: str | None,
+        target: torch.Tensor,
+        availability: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return a reliable-negative mask declared by source metadata.
+
+        :param metadata: Reader metadata for one source spectrum.
+        :type metadata: Mapping[str, Any]
+        :param metadata_key: Configured Boolean metadata field, or ``None``.
+        :type metadata_key: str | None
+        :param target: Binary molecular annotations with shape ``(C,)``.
+        :type target: torch.Tensor
+        :param availability: Molecular availability mask with shape ``(C,)``.
+        :type availability: torch.Tensor
+        :return: ``N_sim`` mask with shape ``(C,)``.
+        :rtype: torch.Tensor
+
+        The metadata flag applies to all non-positive molecular columns in the
+        source spectrum. Per-class ``N_sim`` flags are intentionally not
+        inferred from annotation absence.
+        """
+        if metadata_key is None:
+            return torch.zeros_like(availability, dtype=torch.bool)  # (C,)
+        nested = metadata.get("metadata", {})
+        flag = metadata.get(metadata_key, nested.get(metadata_key))
+        if flag is None:
+            return torch.zeros_like(availability, dtype=torch.bool)  # (C,)
+        if not isinstance(flag, bool):
+            raise_validation_error(
+                "PixelDataset",
+                f"Metadata field '{metadata_key}' must be Boolean when configured for simulated negatives.",
+            )
+        if not flag:
+            return torch.zeros_like(availability, dtype=torch.bool)  # (C,)
+        return availability.bool() & (target <= 0.5)  # (C,)
 
     def _configure_training_positive_mask(self, train_partition: Any) -> None:
         """Materialize one reproducible positive-label mask for the train split.

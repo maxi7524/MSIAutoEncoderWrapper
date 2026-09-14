@@ -13,6 +13,7 @@ from ...core.wrapper import MSIAutoEncoderWrapper
 from ...models.architectures.architectures_manager import ArchitecturesManager
 from ...models.datasets.dataset_manager import DatasetManager
 from ...models.model_loader import ModelLoader
+from ...data import prepare_jerm_static_spy_cache
 from ...utils.logger import get_custom_logger
 
 logger = get_custom_logger(__name__)
@@ -189,6 +190,8 @@ def resolve_single_image_campaign(
     inverse_binner_paths: dict[Any, Path] = {}
     context_paths: dict[Any, Path] = {}
     datasets_by_binning: dict[Any, Any] = {}
+    planning_pipelines: dict[Any, tuple[MSIAutoEncoderWrapper, Any]] = {}
+    jerm_precomputes: set[Any] = set()
     split_paths: dict[int, Path] = {}
     split_dataset: Any = None
     resolved_parameters: list[dict[str, Any]] = []
@@ -223,13 +226,38 @@ def resolve_single_image_campaign(
         variant = factory_parameters["variant"]
         predictive = factory_parameters.get("predictive", {})
         binning_key = _freeze(binning)
+        dataset_key = (binning_key, _freeze(factory_parameters["dataset"]), int(
+            task["reproducibility"]["common_seeds"]["split"]
+        ))
         model_key = (binning_key, _freeze(variant), _freeze(predictive), _freeze(factory_parameters["dataset"]))
 
-        if model_key not in model_paths:
+        # Shared dataset precompute
+        ## Build evidence-derived target masks exactly once for every immutable
+        ## subset/binner/split contract, before distributed workers start.
+        if dataset_key not in planning_pipelines:
             wrapper, dataset = _build_planning_pipeline(
                 factory_parameters,
                 split_seed=int(task["reproducibility"]["common_seeds"]["split"]),
             )
+            precompute = getattr(dataset, "precompute_simulated_negatives", None)
+            if callable(precompute):
+                summary = precompute()
+                logger.info(
+                    "Prepared campaign simulated negatives: strategy=%s spectra=%s entries=%s.",
+                    summary["strategy"], summary["spectra"], summary["entries"],
+                )
+            planning_pipelines[dataset_key] = (wrapper, dataset)
+        wrapper, dataset = planning_pipelines[dataset_key]
+        if (
+            _requires_criterion(
+                parameters.get("training", {}), "JERMLoss"
+            )
+            and dataset_key not in jerm_precomputes
+        ):
+            prepare_jerm_static_spy_cache(dataset, "molecule")
+            jerm_precomputes.add(dataset_key)
+
+        if model_key not in model_paths:
             ArchitecturesManager.discover_architectures()
             preset = ArchitecturesManager._PRESET_REGISTRY["autoencoder"][variant["preset"]]
             component_layout = preset(
@@ -486,3 +514,15 @@ def _write_yaml(path: Path, value: dict[str, Any]) -> None:
     """Write one deterministic resolved runtime artifact."""
     with path.open("w", encoding="utf-8") as stream:
         yaml.safe_dump(value, stream, sort_keys=False)
+
+
+def _requires_criterion(training: dict[str, Any], target: str) -> bool:
+    """Return whether a training definition contains one criterion target."""
+    for phase in training.get("phases", []):
+        criterions = phase.get("criterions", {})
+        for head_losses in criterions.get("heads", {}).values():
+            for name, definition in head_losses.items():
+                configured = definition.get("target", name) if isinstance(definition, dict) else definition
+                if configured == target:
+                    return True
+    return False

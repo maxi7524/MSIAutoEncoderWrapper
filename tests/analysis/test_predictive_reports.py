@@ -1,12 +1,14 @@
 """Paired-seed inference, duplicate protection and validation-only selection."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments.predictive_reports import (
     baseline_contrasts, condition_order, condition_summary, decision_table, experimental_units,
-    paired_comparisons, resolve_shortlist,
+    geometry_similarity, paired_comparisons, resolve_shortlist,
 )
 
 
@@ -134,3 +136,53 @@ def test_decision_table_reports_pooled_metrics_without_letting_them_select():
     assert table.loc["A", "micro_validation_annotation_retrieval"] == pytest.approx(.1)
     # Selection still follows the macro quantity.
     assert table.loc["A", "validation_rank"] == 1
+
+
+def test_geometry_similarity_reports_cka_for_both_spaces_and_the_full_battery_only_for_u(tmp_path):
+    rng = np.random.default_rng(7)
+    inventory = pd.DataFrame([
+        dict(model_id="left", label="A", condition="A", repetition=0, initialization_seed=1,
+            training_seed=1, data_contract="data", backbone_contract="backbone", training_contract="training"),
+        dict(model_id="right", label="B", condition="B", repetition=0, initialization_seed=1,
+            training_seed=1, data_contract="data", backbone_contract="backbone", training_contract="training"),
+    ]).set_index("model_id", drop=False)
+    rows = np.arange(30)
+    models = []
+    for model_id, seed in (("left", 1), ("right", 2)):
+        directory = tmp_path / model_id
+        directory.mkdir()
+        for split in ("validation", "test"):
+            u = rng.normal(size=(30, 5))
+            np.savez_compressed(directory / f"{split}_latent.npz", z=u, u=u, rows=rows)
+        models.append({"model_id": model_id, "directory": str(directory)})
+    (tmp_path / "latest.json").write_text(json.dumps({"models": models}))
+    settings = {"cache_directory": str(tmp_path), "neighbours": 5}
+    result = geometry_similarity(settings, inventory.reset_index(drop=True))
+    assert set(result.split) == {"validation", "test"}
+    both_spaces = result.query("metric == 'linear_cka'")
+    assert set(both_spaces.space) == {"z", "u"}
+    battery_only = result.query("metric != 'linear_cka'")
+    assert set(battery_only.space) == {"u"}
+    assert set(battery_only.metric) == {"procrustes_distance", "knn_overlap", "trustworthiness", "continuity"}
+    assert not result.same_condition.any()
+    assert result.same_seed.all()
+
+
+def test_geometry_similarity_raises_on_mismatched_sample_row_order(tmp_path):
+    inventory = pd.DataFrame([
+        dict(model_id="left", label="A", condition="A", repetition=0, initialization_seed=1,
+            training_seed=1, data_contract="data", backbone_contract="backbone", training_contract="training"),
+        dict(model_id="right", label="B", condition="B", repetition=0, initialization_seed=1,
+            training_seed=1, data_contract="data", backbone_contract="backbone", training_contract="training"),
+    ])
+    models = []
+    for model_id, rows in (("left", np.arange(10)), ("right", np.arange(1, 11))):
+        directory = tmp_path / model_id
+        directory.mkdir()
+        for split in ("validation", "test"):
+            u = np.random.default_rng(0).normal(size=(10, 4))
+            np.savez_compressed(directory / f"{split}_latent.npz", z=u, u=u, rows=rows)
+        models.append({"model_id": model_id, "directory": str(directory)})
+    (tmp_path / "latest.json").write_text(json.dumps({"models": models}))
+    with pytest.raises(ValueError, match="identical sample row order"):
+        geometry_similarity({"cache_directory": str(tmp_path), "neighbours": 3}, inventory)

@@ -25,6 +25,12 @@ from .autoencoder.head.multilabel_bce_loss import (
 from .autoencoder.head.nnpu_multilabel_loss import MSINNPUMultiLabelLoss
 from .autoencoder.head.evidence_losses import SignalMaskedBCELoss, ThreeStateCrossEntropyLoss
 from .autoencoder.head.variational_pu_loss import VariationalPULoss
+from .autoencoder.head.taylor_variational_pu_loss import TaylorVariationalPULoss
+from .autoencoder.head.selective_taylor_pu_loss import (
+    DeepGamblerTaylorVariationalPULoss,
+    SelectiveTaylorVariationalPULoss,
+)
+from .autoencoder.head.evidential_pu_loss import EvidentialTaylorVariationalPULoss
 from .autoencoder.head.symmetric_pu_ranking_loss import SymmetricPURankingLoss
 from .autoencoder.pretraining.element_count_loss import ElementCountLoss
 from .autoencoder.reconstruction.masserstein_loss import MSIMassersteinLoss
@@ -55,6 +61,10 @@ __all__ = [
     "SignalMaskedBCELoss",
     "ThreeStateCrossEntropyLoss",
     "VariationalPULoss",
+    "TaylorVariationalPULoss",
+    "SelectiveTaylorVariationalPULoss",
+    "DeepGamblerTaylorVariationalPULoss",
+    "EvidentialTaylorVariationalPULoss",
     "SymmetricPURankingLoss",
     "ElementCountLoss",
 ]

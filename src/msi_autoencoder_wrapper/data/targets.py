@@ -25,7 +25,7 @@ class TargetSchema:
 
 @dataclass(frozen=True)
 class TargetSample:
-    """Store target values and availability masks for one sample."""
+    """Store target values and availability or supervision masks for one sample."""
 
     values: Mapping[str, torch.Tensor]
     masks: Mapping[str, torch.Tensor]
@@ -33,12 +33,22 @@ class TargetSample:
     @classmethod
     def empty(cls) -> "TargetSample":
         """Return an empty target sample."""
-        return cls(values=MappingProxyType({}), masks=MappingProxyType({}))
+        empty = MappingProxyType({})
+        return cls(values=empty, masks=empty)
 
 
 @dataclass(frozen=True)
 class TargetBatch:
-    """Store collated target values, masks, and shared schemas."""
+    """Store collated target values, masks, and shared schemas.
+
+    :param values: Target tensors keyed by target field.
+    :type values: Mapping[str, torch.Tensor]
+    :param masks: Availability masks keyed by target field, plus optional
+        auxiliary supervision masks such as ``molecule__simulated_negative``.
+    :type masks: Mapping[str, torch.Tensor]
+    :param schemas: Shared target schemas.
+    :type schemas: Mapping[str, TargetSchema]
+    """
 
     values: Mapping[str, torch.Tensor]
     masks: Mapping[str, torch.Tensor]

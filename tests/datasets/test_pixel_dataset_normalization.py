@@ -11,6 +11,7 @@ from msi_dataset_manager.annotations.index import build_annotation_index
 from msi_autoencoder_wrapper.models.datasets.strategies.pixel_dataset import (
     PixelDataset,
 )
+from msi_autoencoder_wrapper.data.supervision_masks import simulated_negative_mask_key
 from msi_autoencoder_wrapper.utils.exceptions import ValidationError
 
 
@@ -138,6 +139,66 @@ def test_pixel_dataset_masks_missing_metadata_targets() -> None:
 
     assert targets["condition"].item() == 0
     assert not masks["condition"].item()
+
+
+def test_pixel_dataset_declares_nsim_from_configured_source_metadata() -> None:
+    """A configured metadata flag marks only zero molecular targets as N_sim."""
+    class Reader:
+        def GetNumberOfSpectra(self):
+            return 2
+
+    class AnnotationReader:
+        def get_dataset_metadata(self):
+            return {"metadata": {"is_simulated_negative": True}}
+
+        def get_spectrum_metadata(self, spectrum_id):
+            return self.get_dataset_metadata()
+
+        def get_annotations(self):
+            return [{"formula": "A", "adduct": "+H"}]
+
+        def get_spectrum_annotations(self, spectrum_id):
+            return [{"formula": "A", "adduct": "+H"}] if spectrum_id == 0 else []
+
+        def get_spectrum_annotation_index(self, spectrum_ids):
+            return build_annotation_index(
+                spectrum_ids=[0] if spectrum_ids is None else spectrum_ids,
+                entries={0: [(("A", "+H"), 1.0)]},
+            )
+
+    class Context:
+        annotation_reader = AnnotationReader()
+        binner = type(
+            "Binner",
+            (),
+            {
+                "GetXAxis": staticmethod(lambda: np.array([1.0], dtype=np.float32)),
+                "map_mass_values_to_bins": staticmethod(
+                    lambda values: np.zeros(len(values), dtype=np.int32)
+                ),
+            },
+        )()
+
+        @staticmethod
+        def get_data_reader(source):
+            return Reader()
+
+    dataset = PixelDataset(
+        active_context=Context(),
+        target_specs={"molecule": {"type": "multi_label"}},
+        annotation_settings={
+            "targets": {
+                "molecule": {
+                    "simulated_negative_metadata_key": "is_simulated_negative",
+                    "unobserved_label_policy": "masked",
+                }
+            }
+        },
+    )
+    sample = dataset._target_sample(1)
+    assert torch.equal(sample.values["molecule"], torch.tensor([0.0]))
+    assert bool(sample.masks["molecule"].item())
+    assert bool(sample.masks[simulated_negative_mask_key("molecule")].item())
 
 
 def test_pixel_dataset_rejects_sparse_explicit_class_indices() -> None:

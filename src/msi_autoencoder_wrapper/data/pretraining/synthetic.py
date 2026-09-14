@@ -14,6 +14,7 @@ from msi_dataset_manager.annotations.chemistry import parse_formula
 from ..annotation_evidence import IonCatalogue
 from ..batches import SpectrumBatch
 from ..spaces import SpectrumSpace
+from ..supervision_masks import simulated_negative_mask_key
 from ..targets import TargetBatch, TargetSchema
 from ...utils.logger import get_custom_logger
 from .sampling import (
@@ -239,6 +240,10 @@ class SyntheticSpectrumDataset(Dataset):
 
         values = {name: torch.zeros(schema.class_count, dtype=torch.float32) for name, schema in self.schemas.items()}
         masks = {name: torch.zeros(schema.class_count, dtype=torch.bool) for name, schema in self.schemas.items()}
+        masks[simulated_negative_mask_key("molecule")] = torch.zeros(
+            self.schemas["molecule"].class_count,
+            dtype=torch.bool,
+        )  # (C_molecule,)
         if definition.label_targets:
             target_ions = [self.source_to_target[ion] for ion in ions]
             if any(ion is None for ion in target_ions):
@@ -247,6 +252,12 @@ class SyntheticSpectrumDataset(Dataset):
                 )
             values["molecule"][[int(ion) for ion in target_ions]] = 1.0
             masks["molecule"].fill_(True)
+            # Synthetic composition gives exact absences for its known catalogue.
+            ## The target values remain zero; only this mask makes them N_sim.
+            masks[simulated_negative_mask_key("molecule")].fill_(True)
+            masks[simulated_negative_mask_key("molecule")][
+                values["molecule"] > 0.5
+            ] = False
         if definition.label_targets and "chemical_class" in values:
             class_index = {name: i for i, name in enumerate(self.schemas["chemical_class"].class_names)}
             certain, possible, complete = set(), set(), True
@@ -285,7 +296,10 @@ class SyntheticSpectrumDataset(Dataset):
             space=self.space,
             targets=TargetBatch(
                 values={name: torch.stack([s[2][name] for s in samples]) for name in self.schemas},
-                masks={name: torch.stack([s[3][name] for s in samples]) for name in self.schemas},
+                masks={
+                    name: torch.stack([s[3][name] for s in samples])
+                    for name in samples[0][3]
+                },
                 schemas=self.schemas,
             ),
             metadata=(

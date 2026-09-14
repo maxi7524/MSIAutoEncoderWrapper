@@ -18,9 +18,11 @@ from ....data.annotation_evidence import IonCatalogue, SignalEvidencePolicy
 from ....models.model_loader import ModelLoader
 from ....utils.logger import get_custom_logger
 from ..heads.predictive_comparison import ranking_tables, score_histograms, state_separation
-from ..latent.predictive_geometry import geometry_tables, ridge_probe
+from ..latent.predictive_geometry import (
+    geometry_tables, intrinsic_dimension_estimate, label_structure_correlation, ridge_probe, structure_summary,
+)
 from ..latent.sphere_geometry import canonicalize, encoder_layer_norm_parameters
-from ..reconstruction.metrics import masserstein_distances, reconstruction_metrics
+from ..reconstruction.metrics import masserstein_distances, peak_matching_errors, reconstruction_metrics
 from .predictive_campaign import fingerprint, relocated_data
 from .sweep_evaluation import MaterializedSplit, materialize_split
 
@@ -47,6 +49,14 @@ PROVENANCE_IDENTITY = ("settings", "source_sha256", "experiment_sha256", "versio
 DECODING_SOURCES = ("data", "readers", "binners", "normalization", "models/datasets",
                     "analysis/autoencoder/experiments/sweep_evaluation.py")
 
+#: Subtrees that determine how a checkpoint is *trained*, never how an already-trained
+#: checkpoint is *loaded and evaluated*: `precompute()` only calls `ModelLoader.load_artifact`
+#: and forward passes, it never constructs a criterion. Excluded from `source_sha256` so that
+#: active work on losses, pretraining or training-only data augmentation does not invalidate
+#: this campaign's hours-long inference cache; a head or dataset module actually used for
+#: *inference* stays under `models`/`analysis`/`data` proper and keeps invalidating it.
+TRAINING_ONLY_SOURCES = ("training", "data/pretraining", "data/simulated_negatives")
+
 
 def provenance_identity(record: dict) -> dict:
     """Reduce a provenance record to the entries that must match for cache reuse.
@@ -59,19 +69,26 @@ def provenance_identity(record: dict) -> dict:
     return {key: record[key] for key in PROVENANCE_IDENTITY if key in record}
 
 
-def _source_digest(source_root: Path, prefixes: tuple[str, ...] | None = None) -> str:
+def _source_digest(source_root: Path, prefixes: tuple[str, ...] | None = None, *,
+                   exclude: tuple[str, ...] = ()) -> str:
     """Hash the content of every selected Python source file, path included.
 
     :param source_root: Package root whose modules are hashed.
     :param prefixes: Optional relative directory or file prefixes; ``None`` hashes all.
+    :param exclude: Relative directory or file prefixes dropped after ``prefixes`` is
+        applied, e.g. subtrees known not to affect the hashed computation's output.
     :return: SHA-256 digest over ordered (relative path, bytes) pairs.
     :rtype: str
     """
+    def _matches(relative: str, patterns: tuple[str, ...]) -> bool:
+        return any(relative == pattern or relative.startswith(pattern.rstrip("/") + "/") for pattern in patterns)
+
     digest = hashlib.sha256()
     for path in sorted(source_root.rglob("*.py")):
         relative = path.relative_to(source_root).as_posix()
-        if prefixes is not None and not any(relative == prefix or relative.startswith(prefix.rstrip("/") + "/")
-                                            for prefix in prefixes):
+        if prefixes is not None and not _matches(relative, prefixes):
+            continue
+        if exclude and _matches(relative, exclude):
             continue
         digest.update(relative.encode())
         digest.update(path.read_bytes())
@@ -97,12 +114,13 @@ def provenance(settings: dict) -> dict:
     """
     root = Path(settings["repository_root"])
     source_root = root / "src" / "msi_autoencoder_wrapper"
-    # REMARK: The full digest covers every reused metric, model and data
-    # implementation, local edits included, so an analysis change invalidates the
-    # stored numbers. The narrower decoding digest keys only the decoded tensors.
+    # REMARK: The full digest (training-only subtrees excluded, see TRAINING_ONLY_SOURCES)
+    # covers every reused metric, model and data implementation, local edits included, so an
+    # analysis change invalidates the stored numbers. The narrower decoding digest keys only
+    # the decoded tensors.
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=False)
     return {"settings": {key: settings[key] for key in INFERENCE_SETTINGS if key in settings},
-            "source_sha256": _source_digest(source_root),
+            "source_sha256": _source_digest(source_root, exclude=TRAINING_ONLY_SOURCES),
             "decoding_sha256": _source_digest(source_root, DECODING_SOURCES),
             "git_commit": commit.stdout.strip(),
             "experiment_sha256": hashlib.sha256(Path(settings["experiment_config"]).read_bytes()).hexdigest(),
@@ -339,8 +357,25 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
             sample = geometry_indices[name]
             u = canonicalize(output["latent"], gamma, beta)  # (N, D)
             if name != "train":
+                available_targets = split.targets * split.mask
                 for space, latent in (("z", output["latent"]), ("u", u)):
-                    for key, frame in geometry_tables(latent, split.targets * split.mask, sample, k=settings["neighbours"]).items():
+                    computed = geometry_tables(latent, available_targets, sample, k=settings["neighbours"])
+                    if space == "u":
+                        ### Structure-vs-null, intrinsic dimension and label correlation are only
+                        ### defined on the canonicalized sphere (`sphere_geometry.structure_test`'s
+                        ### uniform baseline assumes the zero-row-sum/constant-norm constraint that
+                        ### canonicalization enforces), so they are computed for u only, never z.
+                        extra = [{"metric": key, "value": value}
+                                for key, value in structure_summary(
+                                    latent, sample, np.random.default_rng(settings["sample_seed"])).items()]
+                        extra.append({"metric": "two_nn_intrinsic_dimension",
+                                     "value": intrinsic_dimension_estimate(latent, sample)})
+                        correlation = label_structure_correlation(
+                            latent, sample, available_targets, np.random.default_rng(settings["sample_seed"] + 1))
+                        extra.extend({"metric": f"label_correlation_{key}", "value": value}
+                                    for key, value in correlation.items())
+                        computed["geometry"] = pd.concat([computed["geometry"], pd.DataFrame(extra)], ignore_index=True)
+                    for key, frame in computed.items():
                         tables.setdefault(key, pd.DataFrame())
                         tables[key] = pd.concat([tables[key], frame.assign(space=space)], ignore_index=True)
             # All model-specific worst examples are explicitly labelled as selected.
@@ -352,6 +387,16 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
                                       "reconstruction": output["reconstruction"][cases].reshape(-1),
                                       "selected_as_worst": np.repeat(np.isin(cases, worst), len(axis))})
             tables["spectrum_cases"] = case_rows
+            ### Peak-level reconstruction fidelity (position vs. intensity error), on the same
+            ### bounded case set as the spectrum examples above, not the full split: matching is
+            ### per-spectrum and its cost scales with peak count, so it is confined to the cases
+            ### already selected for inspection rather than run over every pixel.
+            peaks = peak_matching_errors(split.spectra.numpy()[cases], output["reconstruction"][cases], axis)
+            tables["peak_matching"] = pd.DataFrame({
+                "row_position": cases[peaks["spectrum_index"]], "peak_mz": peaks["peak_mz"],
+                "mz_error": peaks["mz_error"], "relative_intensity_error": peaks["relative_intensity_error"],
+                "original_intensity": peaks["original_intensity"], "detected": peaks["detected"],
+                "selected_as_worst": np.isin(cases[peaks["spectrum_index"]], worst)})
             np.savez_compressed(model_dir / f"{name}_latent.npz", z=output["latent"][sample], u=u[sample], rows=sample)
             for key, frame in tables.items():
                 collected.setdefault(key, []).append(frame.assign(split=name, model_id=row["model_id"], label=row["label"],

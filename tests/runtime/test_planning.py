@@ -67,3 +67,41 @@ def test_plan_fingerprint_changes_when_settings_change() -> None:
     second = build_plan(changed)
 
     assert first.config_fingerprint != second.config_fingerprint
+
+
+def test_plan_reuses_one_grid_cell_for_corresponding_head_and_criterion() -> None:
+    """A selected grid field keeps one method's head and criterion coupled."""
+    config = _config()
+    config["task"]["parameters"] = {
+        "predictive": {"grid": "methods", "select": "predictive"},
+        "training": {
+            "criterions": {"grid": "methods", "select": "criterions"},
+        },
+    }
+    config["runs"] = {"repetitions": 1}
+    config["grid"] = {
+        "methods": {
+            "values": [
+                {
+                    "predictive": {
+                        "heads": {"binary": {"strategy": "LinearClassificationHead"}},
+                    },
+                    "criterions": {"heads": {"binary": {"loss": "BCEPNLoss"}}},
+                },
+                {
+                    "predictive": {
+                        "heads": {"selective": {"strategy": "SelectiveHead"}},
+                    },
+                    "criterions": {
+                        "heads": {"selective": {"loss": "SelectivePNLoss"}},
+                    },
+                },
+            ],
+        },
+    }
+
+    plan = build_plan(config)
+
+    assert len(plan.tasks) == 2
+    assert plan.tasks[0].parameters["predictive"] == config["grid"]["methods"]["values"][0]["predictive"]
+    assert plan.tasks[0].parameters["training"]["criterions"] == config["grid"]["methods"]["values"][0]["criterions"]

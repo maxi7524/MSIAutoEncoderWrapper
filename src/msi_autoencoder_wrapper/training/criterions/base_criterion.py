@@ -64,6 +64,26 @@ class MSIBaseCriterion(nn.Module, ConfigurableComponent, ABC):
         del transient_cache
         return batch_data
 
+    def on_optimizer_step(self, model: nn.Module) -> None:
+        """Run an optional hook immediately after an optimizer update.
+
+        :param model: Model updated by the active optimizer.
+        :type model: torch.nn.Module
+
+        REMARK: This hook is intentionally called after ``optimizer.step()``.
+        Criteria with stateful teachers can therefore track the new student
+        parameters without entering the backward graph.
+        """
+        del model
+
+    def on_epoch_end(self, model: nn.Module) -> None:
+        """Run an optional hook after the final training batch of an epoch.
+
+        :param model: Model optimized during the completed epoch.
+        :type model: torch.nn.Module
+        """
+        del model
+
     @abstractmethod
     def forward(
         self,

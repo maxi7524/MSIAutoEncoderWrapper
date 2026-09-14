@@ -11,7 +11,7 @@ import pandas as pd
 from scipy.stats import t
 
 from ....utils.logger import get_custom_logger
-from ..latent.predictive_geometry import representation_similarity
+from ..latent.predictive_geometry import pairwise_geometry_battery, representation_similarity
 
 logger = get_custom_logger(__name__)
 
@@ -282,11 +282,18 @@ def decision_table(prediction: pd.DataFrame, reconstruction: pd.DataFrame, inven
 
 
 def geometry_similarity(settings: dict, inventory: pd.DataFrame) -> pd.DataFrame:
-    """Measure CKA across heads and seeds using the identical cached pixel rows.
+    """Measure representation similarity across heads and seeds on the identical cached pixel rows.
+
+    Every pair uses the model's own saved ``{split}_latent.npz``, which already holds only the
+    shared sampled rows in one fixed order, so no new inference or resampling happens here.
+    ``linear_cka`` is reported for both ``z`` and ``u``; ``procrustes_distance``,
+    ``knn_overlap``, ``trustworthiness`` and ``continuity`` are additionally reported for
+    ``u`` only, since they are a paired-comparison battery meaningful on the canonicalized
+    representation the rest of the geometry analysis uses (`sphere_geometry`).
 
     :param settings: Resolved settings with completed shared inference.
     :param inventory: Ready model inventory.
-    :return: Pairwise CKA with same-condition and same-seed flags.
+    :return: Pairwise similarity/alignment metrics with same-condition and same-seed flags.
     :rtype: pandas.DataFrame
     :raises ValueError: If sampled row order differs.
     """
@@ -301,12 +308,17 @@ def geometry_similarity(settings: dict, inventory: pd.DataFrame) -> pd.DataFrame
             with np.load(Path(left["directory"]) / f"{split}_latent.npz") as first, np.load(Path(right["directory"]) / f"{split}_latent.npz") as second:
                 if not np.array_equal(first["rows"], second["rows"]):
                     raise ValueError("Representation comparison requires identical sample row order.")
+                identity = {"left_model": left["model_id"], "right_model": right["model_id"],
+                           "left": a.label, "right": b.label, "split": split,
+                           "same_condition": a.condition == b.condition,
+                           "same_seed": all(a[key] == b[key] for key in PAIR_KEYS[:3])}
                 for space in ("z", "u"):
-                    rows.append({"left_model": left["model_id"], "right_model": right["model_id"],
-                                 "left": a.label, "right": b.label, "split": split, "space": space,
-                                 "same_condition": a.condition == b.condition,
-                                 "same_seed": all(a[key] == b[key] for key in PAIR_KEYS[:3]),
-                                 "metric": "linear_cka", "value": representation_similarity(first[space], second[space])})
+                    rows.append({**identity, "space": space, "metric": "linear_cka",
+                                "value": representation_similarity(first[space], second[space])})
+                positions = np.arange(len(first["rows"]))
+                battery = pairwise_geometry_battery(first["u"], second["u"], positions, k=settings["neighbours"])
+                rows.extend({**identity, "space": "u", "metric": metric, "value": value}
+                            for metric, value in battery.items() if metric != "linear_cka")
     return pd.DataFrame(rows)
 
 

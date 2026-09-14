@@ -7,7 +7,10 @@ import pandas as pd
 from scipy.spatial.distance import cdist
 
 from ....utils.logger import get_custom_logger
-from .sphere_geometry import dimension_usage, linear_cka
+from .sphere_geometry import (
+    dimension_usage, knn_overlap, linear_cka, procrustes_distance, rsa_spearman,
+    structure_test, trustworthiness_continuity, two_nn_intrinsic_dimension,
+)
 
 logger = get_custom_logger(__name__)
 
@@ -122,3 +125,121 @@ def ridge_probe(train_latent: np.ndarray, train_targets: np.ndarray, evaluated_l
     rhs = standardized.T @ (y - intercept) / len(x)  # (D, C)
     weights = np.linalg.solve(gram + penalty * np.eye(x.shape[1]), rhs)  # (D, C)
     return ((evaluated_latent - mean) / scale) @ weights + intercept  # (N_eval, C)
+
+
+def structure_summary(u: np.ndarray, indices: np.ndarray, rng: np.random.Generator, *, pair_count: int = 5000) -> dict[str, float]:
+    """Test whether one model's sampled representation has any structure beyond sphere noise.
+
+    Wraps :func:`sphere_geometry.structure_test` on the same shared sampled rows used by
+    :func:`geometry_tables`, so this and the pair-distance histograms describe the same
+    points. A model whose observed cos-theta spread matches the closed-form uniform-sphere
+    null (``observed_sd_cos_theta`` close to ``uniform_baseline_sd_cos_theta``,
+    ``observed_mean_cos_theta`` close to 0) has a representation indistinguishable from
+    unstructured noise on the canonicalized sphere; a narrower spread indicates clustering,
+    and a wider or skewed one (not visible in this summary — plot the raw samples for that)
+    indicates polarized or multi-cluster structure rather than uniform noise.
+
+    :param u: Canonicalized codes for the full split, ``(N, D)``.
+    :type u: numpy.ndarray
+    :param indices: Shared sampled row positions, ``(S,)`` — the same indices passed to
+        :func:`geometry_tables` for this model and split.
+    :type indices: numpy.ndarray
+    :param rng: Seeded generator for the random-pair sample.
+    :type rng: numpy.random.Generator
+    :param pair_count: Number of random pairs drawn from the sampled rows.
+    :type pair_count: int
+    :return: ``observed_mean_cos_theta``, ``observed_sd_cos_theta``,
+        ``uniform_baseline_sd_cos_theta``, ``effective_dimension``.
+    :rtype: dict[str, float]
+    """
+    result = structure_test(u[np.asarray(indices, dtype=int)], rng, pair_count=pair_count)
+    result.pop("cos_theta_samples", None)
+    return result
+
+
+def intrinsic_dimension_estimate(u: np.ndarray, indices: np.ndarray) -> float:
+    """Return the TwoNN intrinsic-dimension estimate on the shared sampled rows.
+
+    Complementary to :func:`geometry_tables`'s covariance-based ``effective_rank`` and
+    ``participation_ratio``: a non-linear, local estimate of how many dimensions the point
+    cloud actually occupies, rather than a global linear one. Uses the same sampled rows as
+    :func:`geometry_tables` so both numbers describe the same points.
+
+    REMARK: ``O(S^2)`` in the sample size, like the pair-distance histograms it is computed
+    alongside; do not call it on the full unsampled split.
+
+    :param u: Canonicalized codes for the full split, ``(N, D)``.
+    :type u: numpy.ndarray
+    :param indices: Shared sampled row positions, ``(S,)``.
+    :type indices: numpy.ndarray
+    :return: Estimated intrinsic dimension.
+    :rtype: float
+    """
+    return two_nn_intrinsic_dimension(u[np.asarray(indices, dtype=int)])
+
+
+def pairwise_geometry_battery(u_left: np.ndarray, u_right: np.ndarray, indices: np.ndarray, *, k: int = 10) -> dict[str, float]:
+    """Compare two models' representations on the same shared, row-aligned pixels.
+
+    A global shape match (e.g. equal ``effective_rank``) does not imply the same local
+    neighbourhood structure, and vice versa: ``procrustes_distance`` and
+    :func:`representation_similarity` (linear CKA) test global geometric alignment, while
+    ``knn_overlap`` and ``trustworthiness_continuity`` test local neighbourhood
+    preservation. All four are computed on the identical sampled rows of both inputs, in the
+    same order — the caller must guarantee the row alignment (same pixels, same order),
+    exactly as :func:`geometry_tables` requires for its own sample.
+
+    :param u_left: Canonicalized codes of the first model, full split, ``(N, D)``.
+    :type u_left: numpy.ndarray
+    :param u_right: Canonicalized codes of the second model, full split, ``(N, D)``,
+        row-aligned with ``u_left``.
+    :type u_right: numpy.ndarray
+    :param indices: Shared sampled row positions, ``(S,)``.
+    :type indices: numpy.ndarray
+    :param k: Neighbourhood size for ``knn_overlap``/``trustworthiness_continuity``; capped
+        at ``S - 1``.
+    :type k: int
+    :return: ``procrustes_distance`` (a proper metric in ``[0, 1]``), ``linear_cka``,
+        ``knn_overlap``, ``trustworthiness``, ``continuity``.
+    :rtype: dict[str, float]
+    """
+    ids = np.asarray(indices, dtype=int)
+    left, right = u_left[ids], u_right[ids]
+    neighbours = min(k, len(ids) - 1)
+    trust_cont = trustworthiness_continuity(left, right, n_neighbors=neighbours)
+    return {"procrustes_distance": procrustes_distance(left, right),
+            "linear_cka": representation_similarity(left, right),
+            "knn_overlap": knn_overlap(left, right, k=neighbours),
+            **trust_cont}
+
+
+def label_structure_correlation(u: np.ndarray, indices: np.ndarray, targets: np.ndarray,
+                                rng: np.random.Generator, *, pair_count: int = 5000) -> dict[str, float]:
+    """Correlate latent angular distance with annotation-label dissimilarity.
+
+    Wraps :func:`sphere_geometry.rsa_spearman` on the shared sampled rows. A
+    representation can have rich geometric structure (:func:`structure_summary`,
+    ``effective_rank``) that is nonetheless unrelated to the annotated molecules; a
+    Spearman correlation near 0 between latent angle and label-Jaccard distance means the
+    geometry and the annotations are unrelated, while a strong correlation means pixels with
+    similar latent codes also carry similar annotations. This does not distinguish a
+    representation that never saw the labels from one trained against them — comparing the
+    value across conditions is what does that.
+
+    :param u: Canonicalized codes for the full split, ``(N, D)``.
+    :type u: numpy.ndarray
+    :param indices: Shared sampled row positions, ``(S,)``.
+    :type indices: numpy.ndarray
+    :param targets: Available-positive indicator matrix for the full split, ``(N, C)``,
+        row-aligned with ``u``.
+    :type targets: numpy.ndarray
+    :param rng: Seeded generator for the random-pair sample.
+    :type rng: numpy.random.Generator
+    :param pair_count: Number of random pairs drawn from the sampled rows.
+    :type pair_count: int
+    :return: ``spearman_r``, ``p_value``, ``pairs`` (actual sampled pair count after
+        dropping identical-index draws).
+    :rtype: dict[str, float]
+    """
+    ids = np.asarray(indices, dtype=int)
+    return rsa_spearman(u[ids], targets[ids], rng, pair_count=pair_count)

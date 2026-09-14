@@ -7,6 +7,8 @@ from ......configuration import ConfigurableComponent
 
 class MSIBaseHead(nn.Module, ConfigurableComponent, ABC):
     """Contractual interface mapping bottleneck representations to multi-task target fields inside AE."""
+
+    requires_input_spectrum = False
     def __init__(self) -> None:
         super().__init__()
         self._config: dict[str, Any] = {}

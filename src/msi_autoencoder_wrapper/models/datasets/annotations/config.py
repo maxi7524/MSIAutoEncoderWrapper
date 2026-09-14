@@ -17,6 +17,8 @@ class AnnotationTargetSettings:
     add_annotation_presence_target: bool = False
     train_positive_mask_fraction: float = 0.0
     train_positive_mask_seed: int = 0
+    simulated_negative_metadata_key: str | None = None
+    simulated_negative: Mapping[str, Any] | None = None
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None) -> "AnnotationTargetSettings":
@@ -69,12 +71,34 @@ class AnnotationTargetSettings:
                 raise_validation_error(
                     "AnnotationSettings", "train_positive_mask.seed must be an integer."
                 )
+        simulated_negative_key = values.get("simulated_negative_metadata_key")
+        if simulated_negative_key is not None and (
+            not isinstance(simulated_negative_key, str)
+            or not simulated_negative_key.strip()
+        ):
+            raise_validation_error(
+                "AnnotationSettings",
+                "simulated_negative_metadata_key must be a nonempty string or null.",
+            )
+        simulated_negative = values.get("simulated_negative")
+        if simulated_negative is not None and not isinstance(simulated_negative, Mapping):
+            raise_validation_error(
+                "AnnotationSettings",
+                "simulated_negative must be a mapping or null.",
+            )
+        if simulated_negative_key is not None and simulated_negative is not None:
+            raise_validation_error(
+                "AnnotationSettings",
+                "Configure either simulated_negative_metadata_key or simulated_negative, not both.",
+            )
         return cls(
             empty_spectrum_policy=empty_policy,
             unobserved_label_policy=unobserved_policy,
             add_annotation_presence_target=presence,
             train_positive_mask_fraction=train_positive_mask_fraction,
             train_positive_mask_seed=train_positive_mask_seed,
+            simulated_negative_metadata_key=simulated_negative_key,
+            simulated_negative=(None if simulated_negative is None else dict(simulated_negative)),
         )
 
     def get_config(self) -> dict[str, Any]:
@@ -90,6 +114,10 @@ class AnnotationTargetSettings:
                 }
                 if self.train_positive_mask_fraction > 0.0
                 else None
+            ),
+            "simulated_negative_metadata_key": self.simulated_negative_metadata_key,
+            "simulated_negative": (
+                None if self.simulated_negative is None else dict(self.simulated_negative)
             ),
         }
 

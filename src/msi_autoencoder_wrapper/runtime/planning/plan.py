@@ -40,10 +40,15 @@ class ExperimentPlan:
 def _grid_references(value: Any) -> set[str]:
     """Return all named grid references embedded in one task parameter tree."""
     if isinstance(value, dict):
-        if set(value) == {"grid"}:
+        if set(value) in ({"grid"}, {"grid", "select"}):
             reference = value["grid"]
             if not isinstance(reference, str) or not reference:
                 raise ValueError("A grid reference must contain a non-empty grid name.")
+            selection = value.get("select")
+            if selection is not None and (
+                not isinstance(selection, str) or not selection
+            ):
+                raise ValueError("A grid selection must contain a non-empty field name.")
             return {reference}
         return set().union(*(_grid_references(item) for item in value.values()))
     if isinstance(value, list):
@@ -54,8 +59,16 @@ def _grid_references(value: Any) -> set[str]:
 def _replace_grid_references(value: Any, assignments: dict[str, Any]) -> Any:
     """Replace declarative ``{grid: name}`` nodes with selected values."""
     if isinstance(value, dict):
-        if set(value) == {"grid"}:
-            return deepcopy(assignments[value["grid"]])
+        if set(value) in ({"grid"}, {"grid", "select"}):
+            selected = deepcopy(assignments[value["grid"]])
+            field = value.get("select")
+            if field is None:
+                return selected
+            if not isinstance(selected, dict) or field not in selected:
+                raise ValueError(
+                    f"Grid '{value['grid']}' does not provide selected field '{field}'."
+                )
+            return deepcopy(selected[field])
         return {key: _replace_grid_references(item, assignments) for key, item in value.items()}
     if isinstance(value, list):
         return [_replace_grid_references(item, assignments) for item in value]

@@ -81,7 +81,11 @@ class MSIBaseAutoencoderArchitecture(MSIBaseMasterArchitecture):
         ## 4. Multi-task auxiliary downstream tasks head processing pass
         if self.heads:
             for head_name, head_module in self.heads.items():
-                outputs[f"head_{head_name}"] = head_module(z)
+                outputs[f"head_{head_name}"] = (
+                    head_module(z, input_spectrum=x)
+                    if getattr(head_module, "requires_input_spectrum", False)
+                    else head_module(z)
+                )
 
         return outputs
 
