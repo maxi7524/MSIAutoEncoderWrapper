@@ -188,7 +188,8 @@ def _cache_path(
 ) -> Path:
     """Return the immutable cache location for one JERM train contract."""
     wrapper = getattr(getattr(dataset, "active_context", None), "_wrapper", None)
-    project_path = getattr(wrapper, "_project_path", None)
+    workspace = getattr(wrapper, "workspace", None)
+    project_path = getattr(workspace, "project_path_resolved", None)
     if not project_path:
         raise ValueError("JERM static precompute requires a workspace project path.")
     binner = getattr(getattr(dataset, "active_context", None), "binner", None)

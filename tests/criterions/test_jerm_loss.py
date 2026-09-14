@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
 import torch.nn as nn
 
 from msi_autoencoder_wrapper.data import SpectrumBatch, SpectrumSpace, TargetBatch
 from msi_autoencoder_wrapper.data.supervision_masks import simulated_negative_mask_key
-from msi_autoencoder_wrapper.data.jerm_spy import _nearest_spy_source_ids
+from msi_autoencoder_wrapper.data.jerm_spy import _cache_path, _nearest_spy_source_ids
 from msi_autoencoder_wrapper.training.criterions.autoencoder.head.jerm_loss import JERMLoss
 
 
@@ -113,3 +115,26 @@ def test_jerm_uses_compact_static_posterior_storage() -> None:
     assert criterion._pseudo_ids.tolist() == [0, 1, 2, 3]
     assert criterion._pseudo_positive[:, 0].tolist() == [True, True, False, False]
     assert not bool(criterion._posterior_seen.any())
+
+
+def test_jerm_cache_path_uses_the_workspace_proxy(tmp_path) -> None:
+    """JERM precompute resolves the staged workspace rather than private state."""
+    dataset = SimpleNamespace(
+        normalization="tic",
+        active_context=SimpleNamespace(
+            _wrapper=SimpleNamespace(
+                workspace=SimpleNamespace(project_path_resolved=tmp_path)
+            ),
+            binner=None,
+        ),
+    )
+
+    path = _cache_path(
+        dataset,
+        "molecule",
+        torch.tensor([3, 7]),
+        torch.tensor([[True], [False]]),
+        torch.tensor([[False], [True]]),
+    )
+
+    assert path.parent == tmp_path / "cache" / "evidence" / "jerm_static_spy"
