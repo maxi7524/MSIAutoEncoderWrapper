@@ -133,6 +133,13 @@ def test_ranking_tables_threshold_metrics_gated_by_family():
     per_class = eligible_tables["per_class"]
     eligible_rows = per_class[per_class.eligible]
     assert eligible_rows[["precision", "recall", "f1"]].notna().all().all()
+    count_columns = ["true_positive", "false_positive", "false_negative"]
+    assert eligible_rows[count_columns].notna().all().all()
+    # The stored counts must reproduce the stored ratios exactly, since any caller
+    # grouping classes by a criterion this module does not know about (see
+    # `class_stratification.stratified_metrics`) pools these counts directly.
+    reconstructed_precision = eligible_rows.true_positive / (eligible_rows.true_positive + eligible_rows.false_positive)
+    np.testing.assert_allclose(reconstructed_precision.to_numpy(), eligible_rows.precision.to_numpy(), atol=1e-12)
     aggregate = eligible_tables["prediction"].set_index(["population", "scope", "metric"])
     key = ("annotation_retrieval", "train_supported")
     for metric in ("precision", "recall", "f1"):
@@ -143,6 +150,7 @@ def test_ranking_tables_threshold_metrics_gated_by_family():
     ranking_only_tables = ranking_tables(logits, targets, states, targets.sum(axis=0),
                                          ("a", "b", "c", "d"), family="SymmetricPURankingLoss")
     assert ranking_only_tables["per_class"][["precision", "recall", "f1"]].isna().all().all()
+    assert ranking_only_tables["per_class"][count_columns].isna().all().all()
     ranking_only_aggregate = ranking_only_tables["prediction"].set_index(["population", "scope", "metric"])
     for metric in ("precision", "recall", "f1", "micro_precision", "micro_recall", "micro_f1", "hamming_loss"):
         assert np.isnan(ranking_only_aggregate.loc[(*key, metric), "value"])
@@ -150,6 +158,7 @@ def test_ranking_tables_threshold_metrics_gated_by_family():
     # No `family` keeps the previous, unchanged default: no threshold metrics.
     default_tables = ranking_tables(logits, targets, states, targets.sum(axis=0), ("a", "b", "c", "d"))
     assert default_tables["per_class"][["precision", "recall", "f1"]].isna().all().all()
+    assert default_tables["per_class"][count_columns].isna().all().all()
 
 
 def test_ranking_tables_hamming_loss_matches_manual_computation():
@@ -167,6 +176,14 @@ def test_ranking_tables_hamming_loss_matches_manual_computation():
     aggregate = tables["prediction"].set_index(["population", "scope", "metric"])
     observed = aggregate.loc[("annotation_retrieval", "train_supported", "hamming_loss"), "value"]
     assert observed == pytest.approx(expected_hamming)
+
+    # The per-class true_positive/false_positive/false_negative counts, summed over
+    # both classes, must reproduce the same pooled Hamming loss -- this is exactly
+    # the pooling `class_stratification.stratified_metrics` performs per stratum.
+    per_class = tables["per_class"].query("population == 'annotation_retrieval'")
+    mismatches = (per_class.false_positive + per_class.false_negative).sum()
+    total_available = per_class.available.sum()
+    assert mismatches / total_available == pytest.approx(expected_hamming)
 
 
 def test_state_confusion_cross_tabulates_true_against_predicted_state():

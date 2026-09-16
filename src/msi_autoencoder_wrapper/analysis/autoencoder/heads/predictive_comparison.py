@@ -380,7 +380,13 @@ def ranking_tables(
     Threshold-dependent metrics (macro/micro precision, recall, F1, Hamming loss)
     are also reported, but only for :data:`THRESHOLD_ANCHORED_FAMILIES`: every other
     ``family`` gets ``nan`` there rather than a number computed at an arbitrary,
-    uncalibrated cutoff (see :func:`_threshold_eligible`).
+    uncalibrated cutoff (see :func:`_threshold_eligible`). The per-class table also
+    carries the raw ``true_positive``/``false_positive``/``false_negative`` counts
+    behind ``precision``/``recall``/``f1``, gated the same way, so any caller that
+    groups classes by a criterion this module does not know about (see
+    :func:`~.class_stratification.stratified_metrics`) can pool exact micro
+    precision/recall/F1/Hamming loss over that grouping instead of re-deriving them
+    from the macro ratios.
 
     :param logits: Active head outputs, ``(N, C)`` or ``(N, C, 3)``.
     :param targets: Original binary annotations, ``(N, C)``.
@@ -450,6 +456,14 @@ def ranking_tables(
             "precision": np.where(show_threshold, class_precision, np.nan),
             "recall": np.where(show_threshold, class_recall, np.nan),
             "f1": np.where(show_threshold, class_f1, np.nan),
+            # REMARK: raw confusion counts, gated identically to precision/recall/f1
+            # above, let any downstream grouping (e.g. `class_stratification`'s
+            # per-stratum aggregation) pool exact micro precision/recall/F1/Hamming
+            # loss over an arbitrary class subset without re-deriving them from the
+            # macro ratios, which is lossy whenever a class's precision is exactly 0.
+            "true_positive": np.where(show_threshold, true_positive, np.nan),
+            "false_positive": np.where(show_threshold, false_positive, np.nan),
+            "false_negative": np.where(show_threshold, false_negative, np.nan),
         })
         frame["ap_above_prevalence"] = frame.average_precision - frame.prevalence
         rows.append(frame)
