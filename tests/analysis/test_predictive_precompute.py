@@ -122,6 +122,46 @@ def test_inventory_duplicate_grid_and_relocation(miniature_campaign):
     assert saved["data"]["context"]["components"]["reader"]["parameters"]["file_path"].startswith("/old/")
 
 
+def test_task_objective_uses_complete_resolved_training_criteria() -> None:
+    """Resolved grid metadata may omit fixed reconstruction and contrastive terms."""
+    head = {"molecule_vpu": {"vpu": {"target": "VariationalPULoss", "weight": 0.2}}}
+    complete = {
+        "reconstruction": {"masserstein": {"target": "MassersteinLoss", "weight": 1.0}},
+        "heads": head,
+        "contrastive": {},
+    }
+    task = {
+        "grid_parameters": {"objectives": {"heads": head}},
+        "parameters": {"training": {"phases": [{"criterions": complete}]}},
+    }
+
+    assert campaign._task_objective(task) == complete
+
+
+def test_inventory_can_restrict_a_source_to_selected_condition_labels(miniature_campaign):
+    """Source filters exclude unrelated objectives from a shared campaign download."""
+    settings, _ = miniature_campaign
+    settings["sources"][0]["include_labels"] = ["pnu (ThreeStateCrossEntropyLoss)"]
+
+    models, _ = campaign.inventory(settings)
+
+    assert set(models["source"]) == {"predictive_initial", "historical_bce"}
+    assert models.loc[models.source == "predictive_initial", "label"].tolist() == [
+        "pnu (ThreeStateCrossEntropyLoss)"
+    ]
+
+
+def test_configured_grid_expands_all_runtime_grid_axes():
+    """Coverage auditing must match the planner when contrastive is a separate axis."""
+    config = REPOSITORY / "assets/experiments/autoencoder_architecture/experiment_runs_configs/14_09_26_predictive_final/vpu_precision_sweep.yaml"
+
+    grid = campaign.configured_grid(config)
+
+    assert len(grid) == 10  # 5 VPU settings x 2 contrastive settings.
+    assert grid.label.eq("vpu_alpha_1_beta_1 (VariationalPULoss)").sum() == 2
+    assert grid.condition.nunique() == 10
+
+
 def test_split_overlap_and_configuration_mismatch_are_detected(miniature_campaign):
     settings, _ = miniature_campaign
     models, _ = campaign.inventory(settings)
@@ -510,6 +550,30 @@ def test_campaign_training_dynamics_routine_runs_end_to_end(miniature_campaign, 
     assert metadata["analysis"] == "campaign_training_dynamics"
     assert metadata["tasks"] == 2
     assert (output / "training_health.csv").is_file()
+
+
+def test_campaign_training_dynamics_does_not_require_cuda(monkeypatch, tmp_path):
+    """Manifest-only campaign diagnostics remain available before GPU inference."""
+    settings = {
+        "device": "cuda",
+        "analyses": {
+            "campaign_training_dynamics": {"output_directory": str(tmp_path / "results")},
+        },
+    }
+
+    def unexpected_cuda_resolution(*_args, **_kwargs):
+        raise AssertionError("Campaign diagnostics must not resolve a CUDA device.")
+
+    monkeypatch.setattr(cache, "resolve_device", unexpected_cuda_resolution)
+    monkeypatch.setitem(
+        cache.ROUTINES,
+        "campaign_training_dynamics",
+        lambda _settings: {"inventory": pd.DataFrame({"model_id": ["model"]}), "metadata": {}},
+    )
+
+    output = cache.precompute_analysis(settings, "campaign_training_dynamics")
+
+    assert (output / "inventory.csv").is_file()
 
 
 def test_campaign_training_dynamics_notebook_runs_end_to_end(miniature_campaign, monkeypatch, tmp_path):

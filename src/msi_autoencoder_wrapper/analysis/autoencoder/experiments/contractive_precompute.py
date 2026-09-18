@@ -70,14 +70,23 @@ def read_settings(path: Path | str) -> dict:
     :rtype: dict
     :raises FileNotFoundError: If the settings file does not exist.
     """
-    settings_path = Path(path)
+    settings_path = Path(path).resolve()
     if not settings_path.is_file():
         raise FileNotFoundError(f"No analysis settings at '{settings_path}'.")
+    root = next((parent for parent in settings_path.parents if (parent / "pyproject.toml").is_file()), None)
+    if root is None:
+        raise ValueError("Analysis settings must live inside the repository.")
     settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
     for key in ("workspace", "model_store", "decode_cache", "analysis_directory"):
         if settings.get(key):
-            settings[key] = Path(settings[key])
+            value = Path(settings[key])
+            settings[key] = value if value.is_absolute() else root / value
+    for configured in (settings.get("analyses") or {}).values():
+        if configured.get("output_directory"):
+            value = Path(configured["output_directory"])
+            configured["output_directory"] = str(value if value.is_absolute() else root / value)
     settings["settings_path"] = settings_path
+    settings["repository_root"] = str(root)
     return settings
 
 
@@ -190,6 +199,39 @@ def prepare_context(settings: dict, grid_frame: pd.DataFrame):
     :return: ``(wrapper, splits)`` with one materialized split per configured name.
     :rtype: tuple
     """
+    if grid_frame.empty:
+        raise ValueError("At least one completed model is required to prepare the analysis context.")
+    resources = settings.get("_precompute_resources")
+    if resources is None:
+        return _prepare_context_uncached(settings, grid_frame)
+
+    # All stages in one workflow use this configured dataset context and sampling
+    # contract. Their selected model rows may differ, but re-decoding is unnecessary.
+    key_payload = {
+        "workspace": str(settings["workspace"]),
+        "model_context": settings["model_context"],
+        "target_field": settings["target_field"],
+        "splits": settings.get("splits", ["train", "test"]),
+        "pixel_fraction": float(settings.get("pixel_fraction", 1.0)),
+        "sample_seed": int(settings.get("sample_seed", 42)),
+        "decode_cache": str(settings.get("decode_cache", "")),
+    }
+    key = "contractive_context:" + hashlib.sha256(
+        json.dumps(key_payload, sort_keys=True).encode()
+    ).hexdigest()
+    return resources.get_or_create(key, lambda: _prepare_context_uncached(settings, grid_frame))
+
+
+def _prepare_context_uncached(settings: dict, grid_frame: pd.DataFrame):
+    """Load the dataset context and decode requested splits without resource reuse.
+
+    :param settings: Effective contractive-analysis settings.
+    :type settings: dict
+    :param grid_frame: Completed model rows; the first one identifies the saved context.
+    :type grid_frame: pandas.DataFrame
+    :return: Wrapper and materialized split mapping.
+    :rtype: tuple
+    """
     from .... import MSIAutoEncoderWrapper
 
     workspace = Path(settings["workspace"])
@@ -215,6 +257,31 @@ def prepare_context(settings: dict, grid_frame: pd.DataFrame):
     for name, split in splits.items():
         logger.info("Split '%s': %s/%s pixel(s).", name, split.sampled, split.total)
     return wrapper, splits
+
+
+def load_model_resource(settings: dict, wrapper: Any, model_name: str):
+    """Load a contractive checkpoint through the common resource manager.
+
+    :param settings: Effective settings, optionally enriched by the common runner.
+    :type settings: dict
+    :param wrapper: Restored wrapper owning the model manager.
+    :type wrapper: typing.Any
+    :param model_name: Stable saved model identifier.
+    :type model_name: str
+    :return: Model active on the configured inference device.
+    :rtype: typing.Any
+    """
+    def factory():
+        return wrapper.models_manager.load_model(
+            img_name=settings["model_context"], model_name=model_name, strict=True
+        )
+
+    resources = settings.get("_precompute_resources")
+    if resources is None:
+        return factory()
+    key = f"contractive_checkpoint:{settings['model_store']}:{model_name}"
+    device = str(settings.get("_precompute_device", settings["device"]))
+    return resources.activate_model(key, factory, device)
 
 
 # --------------------------------------------------
@@ -245,9 +312,7 @@ def prediction_sweep(settings: dict) -> Dict[str, Any]:
     scopes = {evaluation.ALL_CLASSES_SCOPE: None, evaluation.FAIR_SCOPE: fair_mask}
 
     def load_model(model_name: str):
-        return wrapper.models_manager.load_model(
-            img_name=settings["model_context"], model_name=model_name, strict=True
-        )
+        return load_model_resource(settings, wrapper, model_name)
 
     ## Head metrics for every run, both splits, both scopes
     evaluated = evaluation.evaluate_campaign_models(
@@ -355,6 +420,7 @@ def precompute(settings: dict, analysis: str, *, allow_cpu: bool = False) -> Pat
     """
     effective = analysis_settings(settings, analysis)
     device = resolve_device(effective, allow_cpu=allow_cpu)
+    effective["_precompute_device"] = str(device)
     logger.info("Running '%s' on %s.", analysis, device)
 
     output = effective["output_directory"]
@@ -479,9 +545,7 @@ def latent_geometry_sweep(settings: dict) -> Dict[str, Any]:
     epsilons = tuple(settings.get("epsilons", (0.001, 0.003, 0.01, 0.03, 0.1)))
 
     def load_model(model_name: str):
-        return wrapper.models_manager.load_model(
-            img_name=settings["model_context"], model_name=model_name, strict=True
-        )
+        return load_model_resource(settings, wrapper, model_name)
 
     sensitivity_rng = np.random.default_rng(seed + 3)
     rsa_rng = np.random.default_rng(seed + 4)
@@ -634,9 +698,7 @@ def hinge_refinement(settings: dict) -> Dict[str, Any]:
     scopes = {evaluation.ALL_CLASSES_SCOPE: None, evaluation.FAIR_SCOPE: fair_mask}
 
     def load_model(model_name: str):
-        return wrapper.models_manager.load_model(
-            img_name=settings["model_context"], model_name=model_name, strict=True
-        )
+        return load_model_resource(settings, wrapper, model_name)
 
     ## Two of the latent statistics build an (N, N) matrix, so the row count is capped at
     ## the evaluation split's size; the larger training split is summarized on a
@@ -914,9 +976,7 @@ def perturbation_response(settings: dict) -> Dict[str, Any]:
     clean_spectra = test_split.spectra[selection].to(device)  # (N, M)
 
     def load_model(model_name: str):
-        return wrapper.models_manager.load_model(
-            img_name=settings["model_context"], model_name=model_name, strict=True
-        )
+        return load_model_resource(settings, wrapper, model_name)
 
     def canonical_directions(model, spectra: torch.Tensor) -> torch.Tensor:
         gamma, beta = geometry.encoder_layer_norm_parameters(model)
@@ -1056,9 +1116,7 @@ def spectrum_reconstruction(settings: dict) -> Dict[str, Any]:
 
     models = {}
     for label, cell_label in compared.items():
-        model = wrapper.models_manager.load_model(
-            img_name=settings["model_context"], model_name=model_name_by_cell[cell_label], strict=True
-        )
+        model = load_model_resource(settings, wrapper, model_name_by_cell[cell_label])
         model.eval()
         models[label] = model
 

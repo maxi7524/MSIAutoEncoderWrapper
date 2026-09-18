@@ -24,9 +24,15 @@ model_store: data/kidney_workspace/models/kidney
 # change, not a settings edit.
 experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_initial.yaml
 cache_directory: data/kidney_workspace/cache/predictive_heads_analysis
+
+precompute:
+  strategy: autoencoder.heads_general_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/14_09_predictive_expanded/precompute
+
 sources:
   - name: predictive_initial
     experiment_name: kidney-predictive-heads-initial
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_initial.yaml
     # Set the downloaded .../plan/status or .../execution/<campaign>/status path
     # if automatic discovery finds zero or multiple matching campaigns.
     status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-initial-20260908-01/plan/status
@@ -40,12 +46,14 @@ sources:
   # re-sync ever leaves either campaign partially downloaded.
   - name: predictive_expanded
     experiment_name: kidney-predictive-heads-expanded
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_expanded.yaml
     status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-expanded-20260926-01/plan/status
     required: true
     role: candidate
     enabled: true
   - name: predictive_expanded_jerm
     experiment_name: kidney-predictive-heads-expanded-jerm
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_expanded_jerm.yaml
     status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-expanded-jerm-20260926-01/plan/status
     required: true
     role: candidate
@@ -97,8 +105,12 @@ analyses:
     # source name) still applies correctly to `vpu` unmodified — revisit if a future
     # pick ever comes from `predictive_expanded`/`predictive_expanded_jerm` instead.
     compared:
-      vpu: "vpu (VariationalPULoss)"
-      baseline: "balanced_bce (ClassBalancedMultiLabelBCELoss)"
+      vpu:
+        source: predictive_initial
+        label: "vpu (VariationalPULoss)"
+      baseline:
+        source: historical_bce
+        label: "balanced_bce (ClassBalancedMultiLabelBCELoss)"
     repetition: 0
     sample_pixels: 2000
     cases_per_category: 2

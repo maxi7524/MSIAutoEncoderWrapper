@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 from ....utils.logger import get_custom_logger
+from ....runtime.planning.plan import build_plan
 from .entropy_status_reader import _resolve_artifact_directory
 
 logger = get_custom_logger(__name__)
@@ -56,24 +57,56 @@ def objective_identity(objective: dict) -> dict:
             "objective_json": json.dumps(objective, sort_keys=True)}
 
 
+def _task_objective(task: dict) -> dict:
+    """Return the complete objective recorded for one resolved task.
+
+    :param task: Resolved campaign task mapping from an entropy status manifest.
+    :type task: dict
+    :return: Complete criterion mapping, including reconstruction and contrastive terms.
+    :rtype: dict
+
+    The grid metadata may contain only the swept objective axis. The resolved training
+    parameters retain the complete objective that was actually materialized and saved
+    into the model artifact. The latter is required for reconstruction inference and
+    for exact manifest/configuration consistency checks.
+    """
+    resolved = task.get("parameters", {}).get("training", {}).get("phases", [])
+    if resolved:
+        criterions = resolved[-1].get("criterions")
+        if criterions is not None:
+            return criterions
+    objective = task.get("grid_parameters", {}).get("objectives")
+    if objective is None:
+        raise ValueError("Campaign task does not contain a resolved training objective.")
+    return objective
+
+
 def configured_grid(config_path: Path | str) -> pd.DataFrame:
-    """Audit declared cells, including exact duplicate objective/architecture pairs.
+    """Audit the materialized Cartesian grid, including exact duplicates.
 
     :param config_path: Campaign YAML.
     :return: One row per declared cell; duplicates point to the first cell index.
     :rtype: pandas.DataFrame
     """
-    config = yaml.safe_load(Path(config_path).read_text())
+    config_path = Path(config_path).resolve()
+    config = yaml.safe_load(config_path.read_text())
+    config["_config_path"] = str(config_path)
+    plan = build_plan(config)
     rows, first = [], {}
-    for architecture in config["grid"]["architectures"]["values"]:
-        for objective in config["grid"]["objectives"]["values"]:
-            identity = objective_identity(objective)
-            key = fingerprint([architecture, objective])
-            position = len(rows)
-            rows.append({"grid_position": position, "architecture": architecture["name"],
-                         **identity, "duplicate_of": first.get(key),
-                         "repetitions": config["runs"]["repetitions"]})
-            first.setdefault(key, position)
+    seen_grid_ids = set()
+    for task in plan.tasks:
+        if task.grid_id in seen_grid_ids:
+            continue
+        seen_grid_ids.add(task.grid_id)
+        objective = task.parameters["training"]["phases"][-1]["criterions"]
+        architecture = task.grid_parameters["architectures"]
+        identity = objective_identity(objective)
+        key = fingerprint([architecture, objective])
+        position = len(rows)
+        rows.append({"grid_position": position, "architecture": architecture["name"],
+                     **identity, "duplicate_of": first.get(key),
+                     "repetitions": config["runs"]["repetitions"]})
+        first.setdefault(key, position)
     return pd.DataFrame(rows)
 
 
@@ -93,8 +126,9 @@ def load_settings(path: Path | str) -> dict:
     for key in ("workspace", "model_store", "experiment_config", "cache_directory"):
         settings[key] = str((root / settings[key]).resolve())
     for source in settings["sources"]:
-        if source.get("status_directory"):
-            source["status_directory"] = str((root / source["status_directory"]).resolve())
+        for path_key in ("status_directory", "experiment_config"):
+            if source.get(path_key):
+                source[path_key] = str((root / source[path_key]).resolve())
     settings.setdefault("case_count", 6)
     settings.setdefault("shortlist", [])
     if settings["batch_size"] < 1 or settings["geometry_sample_size"] < 3:
@@ -213,6 +247,7 @@ def inventory(settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     for source in settings["sources"]:
         if not source.get("enabled", True):
             continue
+        included_labels = set(source.get("include_labels", []))
         status = _discover_status(settings, source)
         sources.append({"source": source["name"], "required": source.get("required", False),
                         "status_directory": str(status or ""), "available": status is not None})
@@ -229,10 +264,10 @@ def inventory(settings: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                     raise ValueError(f"Duplicate task record in {status}: {task_id}")
                 seen.add(task_id)
                 task = record["task"]
-                objective = task.get("grid_parameters", {}).get("objectives")
-                if objective is None:
-                    objective = task["parameters"]["training"]["phases"][-1]["criterions"]
+                objective = _task_objective(task)
                 identity = objective_identity(objective)
+                if included_labels and identity["label"] not in included_labels:
+                    continue
                 artifact = _resolve_artifact_directory(Path(settings["model_store"]), task.get("runtime", {}).get("model_name"), campaign_id, task_id)
                 # Local manifests can use a non-namespaced model_path.
                 if artifact is None:

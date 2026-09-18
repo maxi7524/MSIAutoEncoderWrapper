@@ -25,6 +25,10 @@ decode_cache: data/kidney_workspace/cache/materialized_splits
 # --allow-cpu is passed, because a CPU torch build silently turns minutes into hours.
 device: cuda
 
+precompute:
+  strategy: autoencoder.contractive_regularization_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/05_09_26_contractive_expaned/precompute
+
 target_field: molecule
 head: molecule_primary
 threshold: 0.5

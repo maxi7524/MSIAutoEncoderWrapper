@@ -68,7 +68,7 @@ def _routine(name: str) -> Callable:
 #: Settings that change the stored numbers. Anything outside this set is
 #: presentational (shortlists, expected seed counts, cache location) and must not
 #: invalidate hours of inference when a notebook's reporting choices change.
-INFERENCE_SETTINGS = ("workspace", "model_store", "experiment_config", "sources", "target_field",
+INFERENCE_SETTINGS = ("workspace", "model_store", "experiment_config", "sources", "models", "target_field",
                       "device", "batch_size", "pixel_fraction", "sample_seed", "geometry_sample_size",
                       "neighbours", "probe_penalty", "case_count", "evidence", "path_remap")
 
@@ -189,6 +189,39 @@ def resolve_device(settings: dict, allow_cpu: bool = False) -> torch.device:
     return torch.device(requested)
 
 
+def load_model_resource(settings: dict, row: dict, device: torch.device | str, *, model_loader=None) -> Any:
+    """Load one checkpoint through the strategy-level resource manager when present.
+
+    :param settings: Effective settings, optionally carrying ``_precompute_resources``.
+    :type settings: dict
+    :param row: Inventory record containing an artifact path and model identifier.
+    :type row: dict
+    :param device: Device on which this model must be active for the immediate pass.
+    :type device: torch.device | str
+    :param model_loader: Optional test loader returning a model object.
+    :type model_loader: collections.abc.Callable | None
+    :return: Loaded model in evaluation mode.
+    :rtype: typing.Any
+
+    The common runner keeps previously seen checkpoints resident on CPU and activates
+    only the currently requested one on the accelerator. Legacy single-routine calls
+    retain the original direct loader behavior.
+    """
+    def factory():
+        return model_loader(row["artifact"]) if model_loader else ModelLoader.load_artifact(
+            row["artifact"], strict=True
+        )[0]
+
+    resources = settings.get("_precompute_resources")
+    if resources is None:
+        model = factory()
+        model.to(device)
+        model.eval()
+        return model
+    key = f"checkpoint:{row['artifact']}"
+    return resources.activate_model(key, factory, str(device))
+
+
 def prepare_splits(models: pd.DataFrame, settings: dict) -> tuple[dict, IonCatalogue, np.ndarray]:
     """Restore the saved dataset once and materialize exact stored partitions.
 
@@ -198,10 +231,40 @@ def prepare_splits(models: pd.DataFrame, settings: dict) -> tuple[dict, IonCatal
     :rtype: tuple[dict, IonCatalogue, numpy.ndarray]
     :raises ValueError: If models use different data contracts or splits are empty.
     """
-    from msi_autoencoder_wrapper import MSIAutoEncoderWrapper
-
     if models.empty or models.data_contract.nunique() != 1:
         raise ValueError("Select ready models with exactly one identical data contract.")
+    resources = settings.get("_precompute_resources")
+    if resources is None:
+        return _prepare_splits_uncached(models, settings)
+
+    # The saved contract identifies the dataset configuration and split assignments.
+    # Sampling settings remain part of the key because they change the decoded rows.
+    key = "prepared_splits:" + fingerprint([
+        str(models.iloc[0].data_contract),
+        settings["target_field"],
+        settings["pixel_fraction"],
+        settings["sample_seed"],
+        settings["batch_size"],
+    ])
+    return resources.get_or_create(
+        key,
+        lambda: _prepare_splits_uncached(models, settings),
+    )
+
+
+def _prepare_splits_uncached(models: pd.DataFrame, settings: dict) -> tuple[dict, IonCatalogue, np.ndarray]:
+    """Materialize splits without the strategy-level resource cache.
+
+    :param models: Ready models sharing an identical saved data contract.
+    :type models: pandas.DataFrame
+    :param settings: Resolved analysis settings.
+    :type settings: dict
+    :return: Materialized splits, ion catalogue and physical m/z axis.
+    :rtype: tuple[dict, IonCatalogue, numpy.ndarray]
+    :raises ValueError: If models use different data contracts or splits are empty.
+    """
+    from msi_autoencoder_wrapper import MSIAutoEncoderWrapper
+
     config = json.loads((Path(models.iloc[0].artifact) / "config" / "config.json").read_text())
     local_config = relocated_data(config, settings["workspace"], settings.get("path_remap"))
     # Restore through the public loader using an ephemeral, relocated config copy.
@@ -381,8 +444,7 @@ def precompute(models: pd.DataFrame, settings: dict, *, prepared: tuple | None =
             continue
         model_dir.mkdir(parents=True, exist_ok=True)
         marker.unlink(missing_ok=True)
-        model = model_loader(row["artifact"]) if model_loader else ModelLoader.load_artifact(row["artifact"], strict=True)[0]
-        model.to(settings["device"])
+        model = load_model_resource(settings, row, settings["device"], model_loader=model_loader)
         gamma, beta = encoder_layer_norm_parameters(model)
         objective = json.loads(row["objective_json"])
         reconstruction_specs = list(objective.get("reconstruction", {}).values())
@@ -530,6 +592,25 @@ def load_table(settings: dict, table: str) -> pd.DataFrame:
 # Section: named analysis routines
 # --------------------------------------------------
 
+def resolved_inventory(settings: dict) -> pd.DataFrame:
+    """Return the catalog-selected inventory when a strategy has resolved aliases.
+
+    :param settings: Effective analysis settings, optionally enriched by the common
+        precompute runner with ``_resolved_model_catalog``.
+    :type settings: dict
+    :return: Ready model records with display labels assigned by the YAML catalog.
+    :rtype: pandas.DataFrame
+
+    The fallback preserves the standalone module CLI used by older notebook folders.
+    A strategy run never resolves models again here: its catalog has already rejected
+    ambiguous aliases before any GPU work begins.
+    """
+    catalog = settings.get("_resolved_model_catalog")
+    if isinstance(catalog, pd.DataFrame):
+        return catalog.copy()
+    models, _ = campaign.inventory(settings)
+    return models
+
 @_routine("campaign_training_dynamics")
 def campaign_training_dynamics(settings: dict) -> Dict[str, Any]:
     """Manifest coverage, per-epoch objectives and training health of every task.
@@ -545,11 +626,30 @@ def campaign_training_dynamics(settings: dict) -> Dict[str, Any]:
     :return: Tables keyed by file name, plus ``metadata``.
     :rtype: Dict[str, Any]
     """
+    # Campaign health is an audit of every configured training task.  It must not
+    # inherit the analysis catalog filter: a catalog deliberately selects a small
+    # set of models for costly inference, whereas coverage must still reveal a
+    # missing task in any cell of the underlying training campaign.
     models, sources = campaign.inventory(settings)
-    grid = campaign.configured_grid(settings["experiment_config"])
-    candidate_source = next(source["name"] for source in settings["sources"]
-                            if source.get("role", "candidate") != "baseline")
-    coverage = campaign.coverage_table(grid, models, source=candidate_source)
+    configured_sources = [source for source in settings["sources"]
+                          if source.get("enabled", True) and source.get("experiment_config")]
+    if configured_sources:
+        coverage_frames = []
+        for source in configured_sources:
+            grid = campaign.configured_grid(source["experiment_config"])
+            included_labels = set(source.get("include_labels", []))
+            if included_labels:
+                grid = grid[grid["label"].isin(included_labels)].copy()
+            source_coverage = campaign.coverage_table(grid, models, source=source["name"])
+            source_coverage.insert(0, "source", source["name"])
+            coverage_frames.append(source_coverage)
+        coverage = pd.concat(coverage_frames, ignore_index=True) if coverage_frames else pd.DataFrame()
+    else:
+        # Backward-compatible fallback for older settings with one global campaign YAML.
+        grid = campaign.configured_grid(settings["experiment_config"])
+        candidate_source = next(source["name"] for source in settings["sources"]
+                                if source.get("role", "candidate") != "baseline")
+        coverage = campaign.coverage_table(grid, models, source=candidate_source)
     history = campaign.history_components(campaign.training_history(models))
     planned_epochs = settings.get("planned_epochs")
     return {
@@ -567,7 +667,7 @@ def campaign_training_dynamics(settings: dict) -> Dict[str, Any]:
 
 @_routine("reconstruction_local")
 def reconstruction_local(settings: dict) -> Dict[str, Any]:
-    """Reconstructions, drift and prediction response of two models under perturbation.
+    """Reconstructions, drift and prediction response under perturbation.
 
     Ported from :func:`.contractive_precompute.spectrum_reconstruction`. The "exactly
     two models" convention is unchanged and enforced the same way: every figure loop
@@ -579,14 +679,11 @@ def reconstruction_local(settings: dict) -> Dict[str, Any]:
     forward pass, all three outputs) replaces the three separate single-purpose forward
     passes the contractive routine runs.
 
-    ``compared`` maps a display label to a condition ``label`` (as in the ``inventory``
-    table), not to a raw ``model_id``, mirroring how the contractive routine's
-    ``compared`` maps to a ``cell_label`` rather than a ``model_name``: a condition label
-    is what a settings file should name, a model id is an artifact of how many
-    repetitions happened to be downloaded. ``repetition`` disambiguates *within* the
-    swept `predictive_initial` grid; the historical baseline is a single run and is
-    matched on label alone, since it was not trained as part of that repetition-indexed
-    grid and its own ``repetition`` field carries no comparable meaning.
+    ``selected_models`` is the primary configuration: an ordered list of aliases from
+    the common YAML model catalog. Each alias has already resolved a deterministic
+    technical selector, so raw training labels never need to be unique. ``compared``
+    remains a backward-compatible fallback for older standalone settings files.
+    ``repetition`` selects one repeated task per alias.
 
     Unlike the other routines this one must persist spectra, not only summary
     statistics: the figures draw reconstructed spectra, and a spectrum cannot be
@@ -603,7 +700,6 @@ def reconstruction_local(settings: dict) -> Dict[str, Any]:
     from ..latent import perturbations as perturbation
     from ..latent.sensitivity import canonical_direction, paired_direction_angles
 
-    compared = dict(settings["compared"])            # display label -> condition label
     repetition = int(settings.get("repetition", 0))
     batch_size = int(settings.get("batch_size", 256))
     seed = int(settings.get("sample_seed", 42))
@@ -615,14 +711,68 @@ def reconstruction_local(settings: dict) -> Dict[str, Any]:
     perturbation_settings = perturbation.PerturbationSettings(**settings.get("perturbation", {}))
     device = resolve_device(settings, allow_cpu=True)
 
-    all_models, _ = campaign.inventory(settings)
-    ready = all_models[all_models.ready & all_models.label.isin(compared.values())]
-    ready = ready[(ready.source != "predictive_initial") | (ready.repetition == repetition)]
-    selected = ready.drop_duplicates("label").set_index("label")
-    missing = set(compared.values()) - set(selected.index)
-    if missing:
-        raise ValueError(f"'compared' names condition(s) absent from the ready inventory: {sorted(missing)}")
-
+    selected_aliases = settings.get("selected_models")
+    if selected_aliases is not None:
+        if not isinstance(selected_aliases, list) or not all(isinstance(alias, str) for alias in selected_aliases):
+            raise ValueError("'selected_models' must be an ordered list of YAML model aliases.")
+        catalog = settings.get("_resolved_model_catalog")
+        if not isinstance(catalog, pd.DataFrame):
+            raise ValueError("'selected_models' requires the common precompute model catalog.")
+        missing = sorted(set(selected_aliases) - set(catalog.model_alias))
+        if missing:
+            raise ValueError(f"Unknown selected model alias(es): {missing}.")
+        selected = catalog[(catalog.model_alias.isin(selected_aliases)) & (catalog.repetition == repetition)].copy()
+        counts = selected.groupby("model_alias").size()
+        invalid = [alias for alias in selected_aliases if counts.get(alias, 0) != 1]
+        if invalid:
+            raise ValueError(
+                f"Selected model alias(es) need exactly one ready model at repetition={repetition}: {invalid}."
+            )
+        labels = selected.set_index("model_alias").loc[selected_aliases, "display_label"].tolist()
+        if len(labels) != len(set(labels)):
+            raise ValueError("Selected model display labels must be unique within reconstruction_local.")
+        selected = selected.set_index("model_alias").loc[selected_aliases].copy()
+        selected.index = labels
+        selected["model_alias"] = selected_aliases
+        compared = dict(zip(labels, selected_aliases))
+        selectors = {label: {"model_alias": alias} for label, alias in compared.items()}
+    else:
+        compared = dict(settings["compared"])
+        selectors = {}
+        for display_label, selector in compared.items():
+            if isinstance(selector, str):
+                selectors[display_label] = {"label": selector}
+            elif isinstance(selector, dict) and isinstance(selector.get("label"), str):
+                selectors[display_label] = dict(selector)
+            else:
+                raise ValueError(
+                    "Each 'compared' entry must be a raw condition label or a mapping "
+                    "with a string 'label' and optional 'source'."
+                )
+        all_models = resolved_inventory(settings)
+        ready = all_models[all_models.ready]
+        selected_rows = {}
+        for display_label, selector in selectors.items():
+            matches = ready[ready.label == selector["label"]]
+            if selector.get("source"):
+                matches = matches[matches.source == selector["source"]]
+            repeated = matches[matches.repetition == repetition]
+            if not repeated.empty:
+                matches = repeated
+            if len(matches) == 0:
+                raise ValueError(
+                    "'compared' names condition(s) absent from the ready inventory: "
+                    f"[{display_label!r}]"
+                )
+            if len(matches) != 1:
+                scope = f"source={selector['source']!r}, " if selector.get("source") else ""
+                raise ValueError(
+                    f"'compared[{display_label}]' requires exactly one ready model for "
+                    f"{scope}label={selector['label']!r} at repetition={repetition}; "
+                    f"found {len(matches)}. Add a stable model selector in the YAML catalog."
+                )
+            selected_rows[display_label] = matches.iloc[0].to_dict()
+        selected = pd.DataFrame.from_dict(selected_rows, orient="index")
     splits, _, axis = prepare_splits(selected.reset_index(drop=True), settings)
     test_split = splits["test"]
 
@@ -631,18 +781,17 @@ def reconstruction_local(settings: dict) -> Dict[str, Any]:
                 if test_split.sampled > sample_pixels else np.arange(test_split.sampled))
     clean = test_split.spectra[selection]  # (N, M)
 
-    models, heads, canon_params = {}, {}, {}
-    for label, condition_label in compared.items():
-        row = selected.loc[condition_label]
-        model = ModelLoader.load_artifact(row["artifact"], strict=True)[0]
-        model.to(device)
-        model.eval()
-        models[label] = model
+    heads, canon_params, model_rows = {}, {}, {}
+    for label in compared:
+        row = selected.loc[label]
+        model = load_model_resource(settings, row.to_dict(), device)
+        model_rows[label] = row.to_dict()
         heads[label] = row["head"]
         canon_params[label] = encoder_layer_norm_parameters(model)
 
     def infer(label: str, spectra: torch.Tensor) -> dict[str, np.ndarray]:
-        return infer_model(models[label], spectra, heads[label], batch_size=batch_size)
+        model = load_model_resource(settings, model_rows[label], device)
+        return infer_model(model, spectra, heads[label], batch_size=batch_size)
 
     def direction(label: str, latent: np.ndarray) -> torch.Tensor:
         gamma, beta = canon_params[label]
@@ -767,11 +916,11 @@ def reconstruction_local(settings: dict) -> Dict[str, Any]:
         "displayed_spectra": pd.concat(spectra_rows, ignore_index=True),
         "amplitude_curves": pd.DataFrame(curve_rows),
         "response_distributions": pd.concat(distribution_rows, ignore_index=True),
-        "grid": selected.reset_index(),
+        "grid": selected.reset_index(drop=True),
         "analysed_spectra": pd.DataFrame({"dataset_index": test_split.indices[selection]}),
         "metadata": {**provenance(settings), "analysis": "reconstruction_local", "compared": compared,
-                    "compared_model_ids": {label: selected.loc[condition_label, "model_id"]
-                                           for label, condition_label in compared.items()},
+                    "comparison_selectors": selectors,
+                    "compared_model_ids": {label: selected.loc[label, "model_id"] for label in compared},
                     "compared_heads": heads, "repetition": repetition, "top_k": top_k,
                     "cases_per_category": cases_per_category, "display_amplitudes": list(display_amplitudes),
                     "curve_amplitudes": list(curve_amplitudes), "perturbation_settings": settings.get("perturbation", {}),
@@ -815,7 +964,7 @@ def reconstruction_global(settings: dict) -> Dict[str, Any]:
     """
     from ..latent import perturbations as perturbation
 
-    all_models, _ = campaign.inventory(settings)
+    all_models = resolved_inventory(settings)
     ready = all_models[all_models.ready].reset_index(drop=True)
     if ready.empty:
         raise ValueError("No ready models to aggregate.")
@@ -863,9 +1012,7 @@ def reconstruction_global(settings: dict) -> Dict[str, Any]:
 
     drift_rows = []
     for row in ready.to_dict("records"):
-        model = ModelLoader.load_artifact(row["artifact"], strict=True)[0]
-        model.to(device)
-        model.eval()
+        model = load_model_resource(settings, row, device)
         clean_reconstruction = infer_model(model, clean, row["head"], batch_size=batch_size)["reconstruction"]
         for name, target in targets.items():
             for amplitude in amplitudes:
@@ -926,7 +1073,7 @@ def latent_geometry(settings: dict) -> Dict[str, Any]:
     """
     from ..latent.sphere_geometry import angular_sensitivity_curve, structure_test
 
-    all_models, _ = campaign.inventory(settings)
+    all_models = resolved_inventory(settings)
     ready = all_models[all_models.ready].reset_index(drop=True)
     if ready.empty:
         raise ValueError("No ready models to encode.")
@@ -946,9 +1093,7 @@ def latent_geometry(settings: dict) -> Dict[str, Any]:
 
     sensitivity_rows, structure_rows, cos_rows = [], [], []
     for row in ready.to_dict("records"):
-        model = ModelLoader.load_artifact(row["artifact"], strict=True)[0]
-        model.to(device)
-        model.eval()
+        model = load_model_resource(settings, row, device)
         gamma, beta = encoder_layer_norm_parameters(model)
         latent = infer_model(model, evaluation_split.spectra, row["head"], batch_size=batch_size)["latent"]
         u = canonicalize(latent, gamma, beta)  # (N, D)
@@ -988,6 +1133,11 @@ def latent_geometry(settings: dict) -> Dict[str, Any]:
 # Section: running and loading named analysis routines
 # --------------------------------------------------
 
+# These routines consume only persisted manifests and training histories.  They are
+# intentionally runnable on a login node, so campaign completeness can be checked
+# before reserving an accelerator for the expensive inference stages.
+CPU_ONLY_ROUTINES = frozenset({"campaign_training_dynamics"})
+
 def analysis_settings(settings: dict, analysis: str) -> dict:
     """Merge the shared settings with one analysis routine's own overrides.
 
@@ -1023,7 +1173,11 @@ def precompute_analysis(settings: dict, analysis: str, *, allow_cpu: bool = Fals
     :rtype: pathlib.Path
     """
     effective = analysis_settings(settings, analysis)
-    device = resolve_device(effective, allow_cpu=allow_cpu)
+    device = (
+        torch.device("cpu")
+        if analysis in CPU_ONLY_ROUTINES
+        else resolve_device(effective, allow_cpu=allow_cpu)
+    )
     logger.info("Running analysis '%s' on %s.", analysis, device)
 
     output = effective["output_directory"]
