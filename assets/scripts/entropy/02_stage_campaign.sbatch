@@ -58,7 +58,8 @@ else
     RUN_DIRECTORY=${REPOSITORY_ROOT}/${RUN_DIRECTORY_INPUT%/}
 fi
 
-NODE_LOCAL_DIRECTORY=/tmp/${USER}/msi-wrapper/${CAMPAIGN_ID}
+STAGING_ROOT=${STAGING_ROOT:-/tmp/${USER}/msi-wrapper}
+NODE_LOCAL_DIRECTORY=${STAGING_ROOT%/}/${CAMPAIGN_ID}
 LOCAL_WORKSPACE=${NODE_LOCAL_DIRECTORY}/workspace
 CAMPAIGN_FILE=${RUN_DIRECTORY}/entropy-campaign.env
 
@@ -104,13 +105,15 @@ if not torch.cuda.is_available():
 print(f"Using GPU: {torch.cuda.get_device_name(0)}")
 PY
 
-# Single-copy node-local staging
-## Use local NVMe rather than tmpfs so the workspace does not consume the job RAM cgroup.
+# Single-copy staging
+## The default is node-local NVMe; a shared filesystem can be selected when the node
+## does not provide enough local capacity for the complete immutable workspace copy.
+mkdir -p "${STAGING_ROOT}"
 source_bytes=$(du -sb "${SOURCE_WORKSPACE}" | awk '{print $1}')
-available_bytes=$(df --block-size=1 --output=avail /tmp | awk 'NR == 2 {print $1}')
+available_bytes=$(df --block-size=1 --output=avail "${STAGING_ROOT}" | awk 'NR == 2 {print $1}')
 required_bytes=$((source_bytes + source_bytes / 10))
 if (( available_bytes < required_bytes )); then
-    echo "Insufficient /tmp capacity: need ${required_bytes} bytes, have ${available_bytes}." >&2
+    echo "Insufficient staging capacity at ${STAGING_ROOT}: need ${required_bytes} bytes, have ${available_bytes}." >&2
     exit 1
 fi
 
