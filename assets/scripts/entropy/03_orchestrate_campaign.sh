@@ -3,7 +3,7 @@
 # PARAMS 
 # These values must not exceed the Entropy QoS submission and GPU limits.
 # REMARK
-TASK_LIMIT=6
+TASK_LIMIT=12
 PARALLELISM=6
 TASK_WALLTIME=${TASK_WALLTIME:-01:00:00}
 
