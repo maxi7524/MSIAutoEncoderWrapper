@@ -1,0 +1,6 @@
+model_alias,display_label,display_order,color,line_style,marker,tags_json
+baseline,balanced BCE,0,#4D4D4D,solid,o,"{""contrastive"": false, ""family"": ""bce""}"
+bce_global_positive_penalty,BCE + global positive penalty,1,#999999,solid,s,"{""family"": ""bce"", ""positive_penalty"": ""global""}"
+bce_per_class_positive_penalty,BCE + per-class positive penalty,2,#737373,solid,^,"{""family"": ""bce"", ""positive_penalty"": ""per_class""}"
+vpu,VPU,3,#0072B2,solid,o,"{""alpha"": 1.0, ""beta"": 1.0, ""contrastive"": false, ""family"": ""vpu""}"
+vpu_contrastive,VPU + contrastive,4,#56B4E9,dashed,s,"{""alpha"": 1.0, ""beta"": 1.0, ""contrastive"": true, ""family"": ""vpu""}"

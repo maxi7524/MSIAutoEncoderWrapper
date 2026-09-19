@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from msi_autoencoder_wrapper.deconvolution import (
+from msi_autoencoder_wrapper.models.architectures.types.deconvolution import (
     GlobalCandidateDictionary,
     SyntheticDeconvolutionConfig,
     SyntheticDeconvolutionGenerator,

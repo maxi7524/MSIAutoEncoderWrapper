@@ -1,0 +1,13 @@
+{
+  "strategy": "autoencoder.contractive_regularization_analysis",
+  "model_type": "autoencoder",
+  "stages": [
+    "autoencoder.contractive.campaign_training_dynamics",
+    "autoencoder.contractive.prediction_sweep",
+    "autoencoder.contractive.latent_geometry_sweep",
+    "autoencoder.contractive.hinge_refinement",
+    "autoencoder.contractive.perturbation_anatomy",
+    "autoencoder.contractive.perturbation_response",
+    "autoencoder.contractive.spectrum_reconstruction"
+  ]
+}

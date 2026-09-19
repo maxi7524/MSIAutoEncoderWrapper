@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from msi_autoencoder_wrapper.analysis.precompute.core.artifacts import ArtifactStore
+from msi_autoencoder_wrapper.analysis.precompute.core.contracts import ArtifactSpec
 from msi_autoencoder_wrapper.analysis.precompute.core.context import AnalysisContext
 from msi_autoencoder_wrapper.analysis.precompute.core.planner import build_plan
 from msi_autoencoder_wrapper.analysis.precompute.core.resources import ResourceManager
@@ -15,6 +16,7 @@ from msi_autoencoder_wrapper.analysis.precompute.core.strategy_loader import loa
 from msi_autoencoder_wrapper.analysis.precompute.model_catalog.exports import write_catalog_artifacts
 from msi_autoencoder_wrapper.analysis.precompute.model_catalog.resolver import resolve_model_catalog
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments import contractive_precompute, predictive_precompute
+from msi_autoencoder_wrapper.analysis.autoencoder.evidence import precompute_plugin as evidence_plugin
 from msi_autoencoder_wrapper.visualization.analysis_catalog import (
     load_visualization_contract,
     model_style_map,
@@ -276,6 +278,83 @@ def test_heads_strategy_preserves_declared_dependency_safe_order(joint_inventory
         "autoencoder.heads.shared_inference",
         "autoencoder.reconstruction.local",
     ]
+
+
+def test_heads_strategy_adds_evidence_before_shared_inference_when_configured(joint_inventory, tmp_path):
+    """An evidence notebook cache is an explicit optional stage, not a cross-campaign input."""
+    catalog = resolve_model_catalog(
+        {"models": {"vpu": {"select": {"source": "vpu", "grid_id": "grid_0000"}}}},
+        joint_inventory,
+    )
+    settings = {
+        "annotation_evidence_cache": str(tmp_path / "evidence.npz"),
+        "analyses": {
+            "campaign_training_dynamics": {"output_directory": str(tmp_path / "part_0_results")},
+        },
+    }
+    context = AnalysisContext(settings, catalog, ArtifactStore(tmp_path / "precompute"), ResourceManager())
+
+    plan = build_plan(load_strategy("autoencoder.heads_general_analysis"), context)
+
+    assert [stage.name for stage in plan.stages] == [
+        "autoencoder.reconstruction.campaign_training_dynamics",
+        "autoencoder.evidence.annotation_population",
+        "autoencoder.heads.shared_inference",
+    ]
+
+
+def test_annotation_evidence_plugin_uses_campaign_threshold_boundary(joint_inventory, monkeypatch, tmp_path):
+    """A configured threshold is added exactly, rather than interpolated from an old cache."""
+    cache_path = tmp_path / "evidence.npz"
+    settings = {
+        "annotation_evidence_cache": str(cache_path),
+        "evidence": {"relative_threshold": 0.0119, "bin_radius": 1},
+        "experiment_config": str(tmp_path / "campaign.yaml"),
+        "target_field": "molecule",
+        "batch_size": 2048,
+        "device": "cuda",
+    }
+    catalog = resolve_model_catalog(
+        {"models": {"vpu": {"select": {"source": "vpu", "grid_id": "grid_0000"}}}},
+        joint_inventory,
+    )
+    context = AnalysisContext(settings, catalog, ArtifactStore(tmp_path / "precompute"), ResourceManager())
+    observed = {}
+
+    monkeypatch.setattr(evidence_plugin, "build_population_dataset", lambda _path: (object(), object()))
+    monkeypatch.setattr(evidence_plugin.predictive_precompute, "resolve_device", lambda *_args, **_kwargs: "cuda")
+
+    class Result:
+        def save(self, path):
+            Path(path).write_text("complete evidence cache")
+
+    class Precompute:
+        def __init__(self, _dataset, **kwargs):
+            observed.update(kwargs)
+
+        def run(self, *, progress):
+            assert progress is True
+            return Result()
+
+    monkeypatch.setattr(evidence_plugin, "EvidencePrecompute", Precompute)
+    plugin = evidence_plugin.annotation_evidence_plugin()
+    plugin.run(context)
+
+    assert cache_path.is_file()
+    assert observed["batch_size"] == 512
+    assert observed["bin_radii"] == (0, 1, 2)
+    assert 0.0119 in observed["candidate_relative_thresholds"]
+    assert (observed["grid"].relative_edges == 0.0119).any()
+    context.artifacts.verify(context, plugin.provides[0])
+
+
+def test_artifact_store_verifies_shared_file_artifact(tmp_path):
+    """A strategy contract can verify a shared artifact that is one file, not a directory."""
+    output = tmp_path / "artifact.npz"
+    output.write_text("complete")
+    context = AnalysisContext({"output": str(output)}, None, ArtifactStore(tmp_path), ResourceManager())
+
+    context.artifacts.verify(context, ArtifactSpec("archive", root_setting="output", path_kind="file"))
 
 
 def test_reconstruction_local_resolves_catalog_aliases_before_any_model_load(joint_inventory, monkeypatch):

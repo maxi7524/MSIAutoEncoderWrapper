@@ -1,0 +1,85 @@
+# Shared configuration for the first candidate-catalogue deconvolution checks.
+# The precompute module parses only the existing local provider snapshots and
+# writes a regenerable candidates.sqlite cache into the ignored results folder.
+precompute:
+  strategy: deconvolution.initial_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/annotation_model/19_09_deconvolution_inital/precompute
+
+catalogue:
+  source_cache_relative_path: assets/local/metabolite_databases
+  workspace_relative_path: part_0_1_metaspace_candidate_coverage_results/catalogue_workspace
+  dataset_id: annotation_base_initial
+  mz_min: 100.0
+  mz_max: 3000.0
+  adducts: [+H, +Na, -H]
+  providers:
+    lipidmaps: retrieved-2026-09-12
+    hmdb: '5.0'
+    chebi: '255'
+
+# The two axis ranges are the current pretraining campaign axes. Polarity and
+# m/z range are the candidate-universe conditions supplied by METASPACE-style
+# dataset metadata and candidate catalogues.
+metaspace_conditions:
+  - name: positive_200_900
+    filters:
+      polarity: Positive
+      mz_min: 200.0
+      mz_max: 900.0
+  - name: negative_200_900
+    filters:
+      polarity: Negative
+      mz_min: 200.0
+      mz_max: 900.0
+  - name: positive_100_3000
+    filters:
+      polarity: Positive
+      mz_min: 100.0
+      mz_max: 3000.0
+  - name: negative_100_3000
+    filters:
+      polarity: Negative
+      mz_min: 100.0
+      mz_max: 3000.0
+
+binner:
+  strategy: LinearBinning
+  parameters:
+    bin_step: 0.55
+    x_min: 200.0
+    x_max: 900.0
+    aggregation: sum
+
+synthetic:
+  min_components: 1
+  max_components: 4
+  abundance_log_mean: 0.0
+  abundance_log_std: 0.5
+  noise_std: 0.0
+  normalization: none
+
+baseline:
+  seed: 42
+  candidate_count: 100
+  batch_size: 32
+  iteration_counts: [1, 2, 4, 8, 16, 32, 64]
+  l1_weight: 0.0
+
+identifiability:
+  seed: 43
+  candidate_counts: [10, 50, 100]
+  repeats: 10
+  batch_size: 32
+  solver_iterations: 64
+
+# These named methods are the complete first feasibility workflow. The notebooks
+# only read their persisted tables and never construct the global dense matrix.
+analyses:
+  candidate_coverage:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/annotation_model/19_09_deconvolution_inital/part_0_1_metaspace_candidate_coverage_results
+  baseline:
+    condition: positive_200_900
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/annotation_model/19_09_deconvolution_inital/part_0_2_projected_gradient_baseline_results
+  identifiability:
+    condition: positive_200_900
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/annotation_model/19_09_deconvolution_inital/part_1_identifiability_small_dictionaries_results

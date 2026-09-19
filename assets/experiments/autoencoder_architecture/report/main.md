@@ -183,9 +183,9 @@ czyli taki trening trzeba puścić (#TODO - nasępne weekend)
 
 ### Notebooki
 
-- [Binning bez modelu — 13_08_26](../notebooks/13_08_26_architecture_and_binning/binning_analysis_no_model.ipynb)
-- [Rekonstrukcja i architektury — 13_08_26](../notebooks/13_08_26_architecture_and_binning/reconstruction_architecures_analysis.ipynb)
-- [Zbiór notebooków predykcyjnych — 23_08_26](../notebooks/23_08_26_architecture_predictive/)
+- [Binning bez modelu — 13_08_26](../notebooks/general_analysis/13_08_26_architecture_and_binning/binning_analysis_no_model.ipynb)
+- [Rekonstrukcja i architektury — 13_08_26](../notebooks/general_analysis/13_08_26_architecture_and_binning/reconstruction_architecures_analysis.ipynb)
+- [Zbiór notebooków predykcyjnych — 23_08_26](../notebooks/segmentation_model/23_08_26_architecture_predictive)
 
 ### Konfiguracje i materiały źródłowe
 

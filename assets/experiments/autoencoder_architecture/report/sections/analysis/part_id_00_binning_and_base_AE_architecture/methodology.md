@@ -38,8 +38,8 @@ Mapa globalna przypisuje wartość `wasserstein` pojedynczego modelu do współr
 
 #### Artefakty
 
-- [Konfiguracja kampanii](../../../../experiment_runs_configs/13_08_26_architecture_and_binning/architecture_binning_experiment.yaml)
-- [Notebook analizy rekonstrukcji](../../../../notebooks/13_08_26_architecture_and_binning/reconstruction_architecures_analysis.ipynb)
+- [Konfiguracja kampanii](../../../../experiment_runs_configs/general_analysis/13_08_26_architecture_and_binning/architecture_binning_experiment.yaml)
+- [Notebook analizy rekonstrukcji](../../../../notebooks/general_analysis/13_08_26_architecture_and_binning/reconstruction_architecures_analysis.ipynb)
 - [Implementacja analizy rekonstrukcji](../../../../../../../src/msi_autoencoder_wrapper/analysis/autoencoder/binning/model_reconstruction_analysis.py)
 - [Implementacja historii treningu](../../../../../../../src/msi_autoencoder_wrapper/analysis/autoencoder/reconstruction/training_dynamics_analysis.py)
 - [Teoria autoenkodera i rekonstrukcji](../../theory/part_id_01_autoencoder_reconstruction.md)

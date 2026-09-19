@@ -1,0 +1,2 @@
+model_id,source,grid_id,task_id,repetition,label,ready,model_alias,display_label,display_order,color,line_style,marker,tags_json
+nonnegative_projected_gradient,torch_synthetic,initial_feasibility,projected_gradient,0,Projected-gradient baseline,True,nonnegative_projected_gradient,Projected-gradient baseline,0,,solid,o,{}

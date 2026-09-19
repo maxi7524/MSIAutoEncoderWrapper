@@ -123,7 +123,15 @@ def load_settings(path: Path | str) -> dict:
     if root is None:
         raise ValueError("Analysis settings must live inside the repository.")
     settings = yaml.safe_load(path.read_text())
-    for key in ("workspace", "model_store", "experiment_config", "cache_directory"):
+    for key in (
+        "workspace",
+        "model_store",
+        "experiment_config",
+        "cache_directory",
+        "annotation_evidence_cache",
+    ):
+        if key not in settings:
+            continue
         settings[key] = str((root / settings[key]).resolve())
     for source in settings["sources"]:
         for path_key in ("status_directory", "experiment_config"):

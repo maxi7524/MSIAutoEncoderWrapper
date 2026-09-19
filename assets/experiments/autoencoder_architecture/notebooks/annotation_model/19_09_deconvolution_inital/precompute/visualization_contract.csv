@@ -1,0 +1,2 @@
+model_alias,display_label,display_order,color,line_style,marker,tags_json
+nonnegative_projected_gradient,Projected-gradient baseline,0,,solid,o,{}

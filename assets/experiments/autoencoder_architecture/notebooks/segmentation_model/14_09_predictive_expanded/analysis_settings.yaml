@@ -1,0 +1,144 @@
+# Paths are relative to the repository root; absolute paths are also accepted.
+#
+# This is the same kidney predictive-heads campaign analysed under
+# 07_09_26_predictive_expanded (the folder this notebook set replaces); only the
+# notebook/precompute organization changes here, not the underlying trained runs.
+workspace: data/kidney_workspace
+model_store: data/kidney_workspace/models/kidney
+# TODO: `experiment_config` names exactly ONE campaign YAML, but `sources` below now
+# lists THREE candidate campaigns built from three different YAMLs (`predictive_heads_
+# initial.yaml`, `predictive_heads_expanded.yaml`, `predictive_heads_expanded_jerm.yaml`
+# — all three under `experiment_runs_configs/07_09_26_predictive_expanded/`). This
+# field only feeds two things: (a) `provenance()`'s `experiment_sha256`, harmless to
+# pin to one file since it is only a cache-invalidation fingerprint, not a semantic
+# read; (b) `campaign_training_dynamics`'s `condition_coverage` table (part_0_0), which
+# calls `campaign.configured_grid(settings["experiment_config"])` against this single
+# file and reports coverage for only the FIRST non-baseline source in `sources`
+# (`predictive_precompute.py:526`, `next(... role != "baseline")`) — currently still
+# `predictive_initial`. The `expanded`/`expanded_jerm` sources ARE already covered by
+# every other table (`prediction`, `geometry`, `reconstruction_*`, since those iterate
+# every `ready` row from every enabled source uniformly) — only part_0_0's own
+# "declared vs. completed" grid-coverage figure is scoped to one campaign until this is
+# generalized (loop `configured_grid`/`coverage_table` over every candidate source,
+# each reading its own YAML, and concatenate). Not fixed here since it is a real code
+# change, not a settings edit.
+experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_initial.yaml
+cache_directory: data/kidney_workspace/cache/predictive_heads_analysis
+
+precompute:
+  strategy: autoencoder.heads_general_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/14_09_predictive_expanded/precompute
+
+sources:
+  - name: predictive_initial
+    experiment_name: kidney-predictive-heads-initial
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_initial.yaml
+    # Set the downloaded .../plan/status or .../execution/<campaign>/status path
+    # if automatic discovery finds zero or multiple matching campaigns.
+    status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-initial-20260908-01/plan/status
+    required: true
+    role: candidate
+    enabled: true
+  # Synced 2026-09-14 from entropy (predictive-heads-expanded-20260926-01,
+  # predictive-heads-expanded-jerm-20260926-01): 10 objective cells x 5 seeds (50
+  # tasks) and 1 JERM cell x 5 seeds (5 tasks), both fully `completed` per their status
+  # manifests as of the sync. `required: true` below will raise loudly if a future
+  # re-sync ever leaves either campaign partially downloaded.
+  - name: predictive_expanded
+    experiment_name: kidney-predictive-heads-expanded
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_expanded.yaml
+    status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-expanded-20260926-01/plan/status
+    required: true
+    role: candidate
+    enabled: true
+  - name: predictive_expanded_jerm
+    experiment_name: kidney-predictive-heads-expanded-jerm
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/07_09_26_predictive_expanded/predictive_heads_expanded_jerm.yaml
+    status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-expanded-jerm-20260926-01/plan/status
+    required: true
+    role: candidate
+    enabled: true
+  - name: historical_bce
+    experiment_name: kidney-contractive-baseline-bce
+    status_directory: data/kidney_workspace/configs/entropy-runs/bce-baseline-20260905-01/plan/status
+    required: true
+    role: baseline
+    enabled: true
+target_field: molecule
+device: cuda
+# Encoder input is 1273 bins, 3 tiny conv layers (channels 1/32/16/8, latent 10) —
+# negligible per-sample memory. Raised from 256 to use the GPU fully (2026-09-14,
+# GTX 1060 6GB): will lower this if a real run ever hits CUDA OOM.
+batch_size: 8192
+pixel_fraction: 1.0
+sample_seed: 42
+geometry_sample_size: 512
+neighbours: 10
+probe_penalty: 0.01
+expected_seeds: 5
+evidence:
+  absolute_threshold: 0.0
+  relative_threshold: 0.0119
+  bin_radius: 1
+# Optional old absolute directory prefix -> local directory prefix overrides.
+path_remap: {}
+
+# Configured epoch budget for the training-health check below; matches the campaign
+# config's own `epochs: 15` (predictive_heads_initial.yaml).
+planned_epochs: 15
+
+# Named analysis routines (predictive_precompute.py's ROUTINES registry), one entry
+# per notebook in this folder, mirroring 05_09_26_contractive_expaned's convention.
+analyses:
+  campaign_training_dynamics:
+    # part_0_0_campaign_training_dynamics.ipynb
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/14_09_predictive_expanded/part_0_0_campaign_training_dynamics_results
+  reconstruction_local:
+    # part_1_reconstruction_local.ipynb
+    # `compared` picked 2026-09-14 from the real, now fully precomputed `prediction`
+    # table: mean validation average_precision (split='validation',
+    # population='annotation_retrieval', scope='train_supported') ranked over all 20
+    # conditions. `vpu` is the single best candidate (0.6865, vs. the placeholder
+    # `pu_ranking`'s 0.4862 — one of the worst); `balanced_bce` (the fixed baseline)
+    # ranks 4th at 0.6817, close behind. Both come from `predictive_initial`, so the
+    # repetition filter below (`predictive_precompute.py:596`, hardcoded to that one
+    # source name) still applies correctly to `vpu` unmodified — revisit if a future
+    # pick ever comes from `predictive_expanded`/`predictive_expanded_jerm` instead.
+    compared:
+      vpu:
+        source: predictive_initial
+        label: "vpu (VariationalPULoss)"
+      baseline:
+        source: historical_bce
+        label: "balanced_bce (ClassBalancedMultiLabelBCELoss)"
+    repetition: 0
+    sample_pixels: 2000
+    cases_per_category: 2
+    top_k: 10
+    display_amplitudes: [0.0, 0.1, 0.5, 1.0]
+    curve_amplitudes: [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
+    perturbation:
+      shift_bins: 1
+      extra_width_sigma: 1.0
+      base_width_sigma: 0.42
+      lognormal_sigma: 0.05
+      noise_fraction: 0.02
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/14_09_predictive_expanded/part_1_reconstruction_local_results
+  reconstruction_global:
+    # part_2_reconstruction_global.ipynb
+    evaluation_split: test
+    global_perturbation_amplitudes: [0.0, 1.0]
+    global_perturbation_sample_pixels: 500
+    perturbation:
+      shift_bins: 1
+      extra_width_sigma: 1.0
+      base_width_sigma: 0.42
+      lognormal_sigma: 0.05
+      noise_fraction: 0.02
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/14_09_predictive_expanded/part_2_reconstruction_global_results
+  latent_geometry:
+    # part_3_latent_geometry.ipynb
+    evaluation_split: test
+    pair_count: 5000
+    epsilons: [0.001, 0.003, 0.01, 0.03, 0.1]
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/14_09_predictive_expanded/part_3_latent_geometry_results

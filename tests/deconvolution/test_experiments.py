@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from msi_autoencoder_wrapper.deconvolution import (
+from msi_autoencoder_wrapper.models.architectures.types.deconvolution import (
     GlobalCandidateDictionary,
     SyntheticDeconvolutionConfig,
     catalogue_condition_counts,
@@ -13,7 +13,7 @@ from msi_autoencoder_wrapper.deconvolution import (
     projected_gradient_gradcheck,
     sample_global_subdictionary,
 )
-from msi_autoencoder_wrapper.deconvolution.evaluation.catalogue_precompute import (
+from msi_autoencoder_wrapper.models.architectures.types.deconvolution.evaluation.catalogue_precompute import (
     catalogue_path,
     run_command,
 )

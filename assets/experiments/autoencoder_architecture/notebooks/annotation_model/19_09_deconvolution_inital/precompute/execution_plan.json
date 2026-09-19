@@ -1,0 +1,9 @@
+{
+  "strategy": "deconvolution.initial_analysis",
+  "model_type": "deconvolution",
+  "stages": [
+    "deconvolution.candidate_coverage",
+    "deconvolution.projected_gradient_baseline",
+    "deconvolution.identifiability"
+  ]
+}

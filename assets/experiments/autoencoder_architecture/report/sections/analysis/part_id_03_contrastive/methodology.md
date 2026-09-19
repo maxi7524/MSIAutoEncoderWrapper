@@ -60,6 +60,6 @@ Miary alignment i uniformity oraz krzywa selektywności kontrastywnej wymagają 
 
 #### Artefakty
 
-- [Konfiguracja kampanii](../../../../experiment_runs_configs/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml)
-- [Notebook geometrii wariantów BCE i kontrastywnych](../../../../notebooks/23_08_26_architecture_predictive/part_7_latent_bce_vs_all.ipynb)
+- [Konfiguracja kampanii](../../../../experiment_runs_configs/segmentation_model/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml)
+- [Notebook geometrii wariantów BCE i kontrastywnych](../../../../notebooks/segmentation_model/23_08_26_architecture_predictive/part_7_latent_bce_vs_all.ipynb)
 - [Teoria kontrastywności](../../theory/part_id_06_contrastive.md)

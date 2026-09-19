@@ -45,6 +45,12 @@ class ArtifactStore:
             directory = Path(context.settings[spec.root_setting])
         else:
             return
+        if spec.path_kind == "file":
+            if not directory.is_file():
+                raise FileNotFoundError(
+                    f"Plugin output '{spec.name}' is incomplete: expected '{directory}'."
+                )
+            return
         for name in spec.required_files:
             path = directory / name
             if not path.is_file():

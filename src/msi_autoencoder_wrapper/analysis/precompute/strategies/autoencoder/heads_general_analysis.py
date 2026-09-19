@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments import predictive_campaign
+from msi_autoencoder_wrapper.analysis.autoencoder.evidence.precompute_plugin import annotation_evidence_plugin
 from msi_autoencoder_wrapper.analysis.autoencoder.heads.precompute_plugin import shared_inference_plugin
 from msi_autoencoder_wrapper.analysis.autoencoder.latent.precompute_plugin import latent_geometry_plugin
 from msi_autoencoder_wrapper.analysis.autoencoder.reconstruction.precompute_plugin import (
@@ -22,6 +23,7 @@ def build_strategy() -> PrecomputeStrategy:
         model_type="autoencoder",
         stages=(
             campaign_training_dynamics_plugin(),
+            annotation_evidence_plugin(),
             shared_inference_plugin(),
             reconstruction_local_plugin(),
             reconstruction_global_plugin(),

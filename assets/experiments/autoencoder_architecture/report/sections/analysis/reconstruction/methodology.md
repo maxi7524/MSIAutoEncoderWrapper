@@ -40,6 +40,6 @@ oraz czas treningu. Wyniki i ich interpretacja należą wyłącznie do
 
 #### Artefakty
 
-- [Konfiguracja kampanii](../../../../experiment_runs_configs/13_08_26_architecture_and_binning/architecture_binning_experiment.yaml)
-- [Notebook rekonstrukcji i architektur](../../../../notebooks/13_08_26_architecture_and_binning/reconstruction_architecures_analysis.ipynb)
+- [Konfiguracja kampanii](../../../../experiment_runs_configs/general_analysis/13_08_26_architecture_and_binning/architecture_binning_experiment.yaml)
+- [Notebook rekonstrukcji i architektur](../../../../notebooks/general_analysis/13_08_26_architecture_and_binning/reconstruction_architecures_analysis.ipynb)
 - [Niezmieniony raport źródłowy](../../../source_material/13_08_26_architecture_and_binning/report_modele/reconstruction_methodology.md)

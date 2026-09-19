@@ -1,0 +1,127 @@
+# Paths are relative to the repository root; absolute paths are also accepted.
+#
+# Analysis settings for the final VPU precision sweep and the historical BCE
+# baseline. The VPU campaign contains five alpha values, with and without the
+# peak-permutation contrastive condition, and five repetitions per condition.
+workspace: data/kidney_workspace
+model_store: data/kidney_workspace/models/kidney
+experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/14_09_26_predictive_final/vpu_precision_sweep.yaml
+cache_directory: data/kidney_workspace/cache/metaspace_heads_vpu
+annotation_evidence_cache: data/kidney_workspace/cache/evidence/metaspace_heads_vpu_full.npz
+
+precompute:
+  strategy: autoencoder.heads_general_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/16_09_26_metaspace_heads_vpu/precompute
+
+sources:
+  - name: vpu_precision_sweep
+    experiment_name: kidney-vpu-precision-sweep
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/14_09_26_predictive_final/vpu_precision_sweep.yaml
+    status_directory: data/kidney_workspace/configs/entropy-runs/predictie-final-vpu-modifications-20260914-01/plan/status
+    required: true
+    role: candidate
+    enabled: true
+  - name: predictive_initial
+    experiment_name: kidney-predictive-heads-initial
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/07_09_26_predictive_expanded/predictive_heads_initial.yaml
+    status_directory: data/kidney_workspace/configs/entropy-runs/predictive-heads-initial-20260908-01/plan/status
+    include_labels:
+      - "bce_per_class_positive_penalty (PositiveWeightedMultiLabelBCELoss)"
+      - "bce_global_positive_penalty (PositiveWeightedMultiLabelBCELoss)"
+    required: true
+    role: candidate
+    enabled: true
+  - name: historical_bce
+    experiment_name: kidney-contractive-baseline-bce
+    status_directory: data/kidney_workspace/configs/entropy-runs/bce-baseline-20260905-01/plan/status
+    required: true
+    role: baseline
+    enabled: true
+
+# This replaces the former notebook-local condition selector. Each alias resolves a
+# deterministic campaign cell, while tags remain descriptive metadata only.
+models:
+  baseline:
+    display_label: "balanced BCE"
+    select: {source: historical_bce, grid_id: grid_0000}
+    tags: {family: bce, contrastive: false}
+    visualization: {order: 0, color: "#4D4D4D", marker: "o"}
+  bce_global_positive_penalty:
+    display_label: "BCE + global positive penalty"
+    select: {source: predictive_initial, grid_id: grid_0000}
+    tags: {family: bce, positive_penalty: global}
+    visualization: {order: 1, color: "#999999", marker: "s"}
+  bce_per_class_positive_penalty:
+    display_label: "BCE + per-class positive penalty"
+    select: {source: predictive_initial, grid_id: grid_0001}
+    tags: {family: bce, positive_penalty: per_class}
+    visualization: {order: 2, color: "#737373", marker: "^"}
+  vpu:
+    display_label: "VPU"
+    select: {source: vpu_precision_sweep, grid_id: grid_0000}
+    tags: {family: vpu, contrastive: false, alpha: 1.0, beta: 1.0}
+    visualization: {order: 3, color: "#0072B2", line_style: solid, marker: "o"}
+  vpu_contrastive:
+    display_label: "VPU + contrastive"
+    select: {source: vpu_precision_sweep, grid_id: grid_0005}
+    tags: {family: vpu, contrastive: true, alpha: 1.0, beta: 1.0}
+    visualization: {order: 4, color: "#56B4E9", line_style: dashed, marker: "s"}
+
+groups:
+  selected_vpu_controls:
+    - baseline
+    - bce_global_positive_penalty
+    - bce_per_class_positive_penalty
+    - vpu
+    - vpu_contrastive
+
+target_field: molecule
+device: cuda
+batch_size: 8192
+pixel_fraction: 1.0
+sample_seed: 42
+geometry_sample_size: 512
+neighbours: 10
+probe_penalty: 0.01
+expected_seeds: 5
+evidence:
+  absolute_threshold: 0.0
+  relative_threshold: 0.0119
+  bin_radius: 1
+path_remap: {}
+planned_epochs: 15
+
+analyses:
+  campaign_training_dynamics:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/16_09_26_metaspace_heads_vpu/part_0_0_campaign_training_dynamics_results
+  reconstruction_local:
+    selected_models: [vpu, baseline]
+    repetition: 0
+    sample_pixels: 2000
+    cases_per_category: 2
+    top_k: 10
+    display_amplitudes: [0.0, 0.1, 0.5, 1.0]
+    curve_amplitudes: [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
+    perturbation:
+      shift_bins: 1
+      extra_width_sigma: 1.0
+      base_width_sigma: 0.42
+      lognormal_sigma: 0.05
+      noise_fraction: 0.02
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/16_09_26_metaspace_heads_vpu/part_1_reconstruction_local_results
+  reconstruction_global:
+    evaluation_split: test
+    global_perturbation_amplitudes: [0.0, 1.0]
+    global_perturbation_sample_pixels: 500
+    perturbation:
+      shift_bins: 1
+      extra_width_sigma: 1.0
+      base_width_sigma: 0.42
+      lognormal_sigma: 0.05
+      noise_fraction: 0.02
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/16_09_26_metaspace_heads_vpu/part_2_reconstruction_global_results
+  latent_geometry:
+    evaluation_split: test
+    pair_count: 5000
+    epsilons: [0.001, 0.003, 0.01, 0.03, 0.1]
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/16_09_26_metaspace_heads_vpu/part_3_latent_geometry_results

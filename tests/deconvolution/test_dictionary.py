@@ -11,7 +11,9 @@ from msi_dataset_manager.annotations.candidates import (
     CandidateCompound,
     make_candidate_ions,
 )
-from msi_autoencoder_wrapper.deconvolution import GlobalCandidateDictionary
+from msi_autoencoder_wrapper.models.architectures.types.deconvolution import (
+    GlobalCandidateDictionary,
+)
 
 
 class FixtureBinner:
@@ -66,3 +68,25 @@ def test_dictionary_can_move_without_changing_candidate_provenance(tmp_path) -> 
 
     assert moved.matrix.device.type == "cpu"
     assert moved.candidate_ions == dictionary.candidate_ions
+
+
+def test_dictionary_can_select_a_seeded_subset_before_dense_materialization(tmp_path) -> None:
+    """Small feasibility runs do not allocate every catalogue ion on the axis."""
+    catalog = _catalog(tmp_path)
+
+    first = GlobalCandidateDictionary.from_candidate_catalog(
+        catalog,
+        FixtureBinner(),
+        candidate_limit=1,
+        selection_seed=17,
+    )
+    second = GlobalCandidateDictionary.from_candidate_catalog(
+        catalog,
+        FixtureBinner(),
+        candidate_limit=1,
+        selection_seed=17,
+    )
+
+    assert first.matrix.shape == (10, 1)
+    assert first.candidate_ions == second.candidate_ions
+    torch.testing.assert_close(first.matrix, second.matrix)

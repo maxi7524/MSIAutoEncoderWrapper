@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .context import AnalysisContext
@@ -21,15 +21,20 @@ class ArtifactSpec:
     :type analysis_name: str | None
     :param required_files: File names that must exist after a successful plugin run.
     :type required_files: tuple[str, ...]
-    :param root_setting: Settings key holding the directory for a shared artifact when
+    :param root_setting: Settings key holding the path for a shared artifact when
         ``analysis_name`` is ``None``.
     :type root_setting: str | None
+    :param path_kind: Whether ``root_setting`` identifies a directory or one output
+        file. Directory artifacts may declare ``required_files`` below their root;
+        file artifacts verify the configured path itself.
+    :type path_kind: typing.Literal["directory", "file"]
     """
 
     name: str
     analysis_name: str | None = None
     required_files: tuple[str, ...] = ()
     root_setting: str | None = None
+    path_kind: Literal["directory", "file"] = "directory"
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,9 @@ class AnalysisPlugin:
     :param enabled_when_configured: Skip the plugin when its analysis YAML section is
         absent. Shared plugins set this to ``False``.
     :type enabled_when_configured: bool
+    :param is_enabled_by: Optional strategy-level enablement predicate. This is used
+        for shared artifacts configured outside the ``analyses`` block.
+    :type is_enabled_by: collections.abc.Callable[[AnalysisContext], bool] | None
     """
 
     name: str
@@ -59,9 +67,12 @@ class AnalysisPlugin:
     provides: tuple[ArtifactSpec, ...]
     run: Callable[["AnalysisContext"], None]
     enabled_when_configured: bool = True
+    is_enabled_by: Callable[["AnalysisContext"], bool] | None = None
 
     def is_enabled(self, context: "AnalysisContext") -> bool:
         """Return whether this plugin is enabled by the current YAML settings."""
+        if self.is_enabled_by is not None:
+            return self.is_enabled_by(context)
         if not self.enabled_when_configured:
             return True
         return any(spec.analysis_name in context.settings.get("analyses", {}) for spec in self.provides)

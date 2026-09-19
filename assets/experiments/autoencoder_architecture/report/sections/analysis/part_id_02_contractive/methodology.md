@@ -60,8 +60,8 @@ Jeżeli skan wagi nadal prowadzi do wysokiego `cloud_asymmetry`, można dodać n
 
 #### Artefakty
 
-- [Konfiguracja kampanii predykcyjnej](../../../../experiment_runs_configs/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml)
-- [Notebook weryfikacji kontraktywności](../../../../notebooks/23_08_26_architecture_predictive/part_4_contractive_verification.ipynb)
+- [Konfiguracja kampanii predykcyjnej](../../../../experiment_runs_configs/segmentation_model/23_08_26_architecture_predictive/architecture_predictive_experiment.yaml)
+- [Notebook weryfikacji kontraktywności](../../../../notebooks/segmentation_model/23_08_26_architecture_predictive/part_4_contractive_verification.ipynb)
 - [Implementacja aktualnej kary kontraktywnej](../../../../../../../src/msi_autoencoder_wrapper/training/criterions/autoencoder/regularization/contractive_loss.py)
 - [Implementacja metryk geometrii](../../../../../../../src/msi_autoencoder_wrapper/analysis/autoencoder/latent/sphere_geometry.py)
 - [Część teoretyczna o kontraktywności](../../theory/part_id_05_contractive.md)

@@ -78,7 +78,7 @@ Dla do 20 000 losowych par tych samych pikseli liczony jest kąt w latencie oraz
 
 #### Artefakty
 
-- [Notebook rekonstrukcji baseline'u](../../../../notebooks/23_08_26_architecture_predictive/part_1_reconstruction_bce_vs_baseline.ipynb)
-- [Notebook metryk predykcji](../../../../notebooks/23_08_26_architecture_predictive/part_2_prediction_metrics_bce.ipynb)
-- [Notebook geometrii AE-only i BCE](../../../../notebooks/23_08_26_architecture_predictive/part_3_latent_ae_vs_bce.ipynb)
+- [Notebook rekonstrukcji baseline'u](../../../../notebooks/segmentation_model/23_08_26_architecture_predictive/part_1_reconstruction_bce_vs_baseline.ipynb)
+- [Notebook metryk predykcji](../../../../notebooks/segmentation_model/23_08_26_architecture_predictive/part_2_prediction_metrics_bce.ipynb)
+- [Notebook geometrii AE-only i BCE](../../../../notebooks/segmentation_model/23_08_26_architecture_predictive/part_3_latent_ae_vs_bce.ipynb)
 - [Implementacja metryk geometrii](../../../../../../../src/msi_autoencoder_wrapper/analysis/autoencoder/latent/sphere_geometry.py)
