@@ -1,0 +1,28 @@
+{
+  "all_label_count": 743,
+  "analysis_seconds": 0.8637982010004635,
+  "candidate_image_count": 15,
+  "dataset_root": "/home/max/repositories/MSIAutoEncoderWrapper/data/kidney_workspace/datasets",
+  "excluded_image_keys": [
+    "kidney"
+  ],
+  "git_commit": "7e8c70b13c405c55abf361d5b065f2721b840df3",
+  "heldout_count": 3,
+  "heldout_image_keys": [
+    "2024-02-20_01h45m20s",
+    "2024-02-20_01h46m58s",
+    "2024-02-20_01h54m41s"
+  ],
+  "mass_range": [
+    200.0,
+    900.0
+  ],
+  "middle_quantiles": [
+    0.2,
+    0.8
+  ],
+  "retained_label_count": 743,
+  "selection_score": 0.3660053117649238,
+  "settings_path": "/home/max/repositories/MSIAutoEncoderWrapper/assets/experiments/autoencoder_architecture/notebooks/segmentation_model/15_09_metaspace_pretrain/cohort_selection_settings.yaml",
+  "uncovered_label_count": 0
+}

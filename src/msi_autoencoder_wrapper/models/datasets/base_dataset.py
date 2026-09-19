@@ -126,6 +126,17 @@ class MSIBaseDataset(Dataset, ConfigurableComponent, ABC):
         """Return one split group through the public-to-source mapping."""
         return self._get_source_split_group(self._source_index(index), **parameters)
 
+    def get_split_spatial_block(self, index: int, **parameters: Any) -> Any:
+        """Return one spatial-block identity through the public index mapping.
+
+        This hook is used by the ``spatial_block`` split strategy. Concrete
+        spatial datasets map a source pixel to a stable block key.
+        """
+        return self._get_source_split_spatial_block(
+            self._source_index(index),
+            **parameters,
+        )
+
     # Source dataset hooks
     ## Concrete datasets implement these methods only with original source indices.
     @abstractmethod
@@ -164,6 +175,16 @@ class MSIBaseDataset(Dataset, ConfigurableComponent, ABC):
         """Reject grouped splitting when a dataset does not expose groups."""
         raise NotImplementedError(
             f"{type(self).__name__} does not expose split groups."
+        )
+
+    def _get_source_split_spatial_block(
+        self,
+        source_index: int,
+        **_: Any,
+    ) -> Any:
+        """Reject spatial splitting when a dataset has no pixel coordinates."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose spatial split blocks."
         )
 
     def _source_index(self, index: int) -> int:

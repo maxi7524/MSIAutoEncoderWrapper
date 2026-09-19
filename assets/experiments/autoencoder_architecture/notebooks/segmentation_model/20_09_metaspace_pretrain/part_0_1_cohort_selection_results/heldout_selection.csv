@@ -1,0 +1,4 @@
+image_key,dataset_name,pixel_count,annotation_records,unique_label_count,is_middle_candidate,is_heldout,pixel_count_percentile,annotation_records_percentile,unique_label_count_percentile
+2024-02-20_01h45m20s,d3-2023-2,10994,11,7,True,True,0.48,0.33,0.24
+2024-02-20_01h46m58s,d7-2020-2,9888,13,9,True,True,0.36,0.44,0.41
+2024-02-20_01h54m41s,d28-2006-2,8566,16,13,True,True,0.3,0.58,0.6

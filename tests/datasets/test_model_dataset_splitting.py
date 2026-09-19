@@ -89,6 +89,24 @@ class UnevenGroupedDataset(MSIBaseDataset):
         return self.groups[index]
 
 
+class SpatialSplitDataset(MSIBaseDataset):
+    """Six-by-six pixel grid with groups derived from native block coordinates."""
+
+    def _source_length(self):
+        return 36
+
+    def _get_source_item(self, index):
+        return index
+
+    def _get_source_sample_id(self, index):
+        return {"image_key": "fixture", "spectrum_id": index}
+
+    def _get_source_split_spatial_block(self, index, block_size=2, **kwargs):
+        del kwargs
+        x, y = index % 6, index // 6
+        return x // block_size, y // block_size, 0
+
+
 class MultiLabelSplitDataset(MSIBaseDataset):
     """Synthetic multi-label pixels distributed equally across source images."""
 
@@ -165,6 +183,35 @@ def test_grouped_split_balances_uneven_groups_by_requested_fraction() -> None:
     assert abs(sizes["train"] - 80) <= 4
     assert abs(sizes["validation"] - 10) <= 4
     assert abs(sizes["test"] - 10) <= 4
+
+
+def test_spatial_block_split_keeps_every_native_block_in_one_partition() -> None:
+    """Blocks prevent adjacent pixel regions from leaking across splits."""
+    dataset = SpatialSplitDataset()
+    config = {
+        "strategy": "spatial_block",
+        "seed": 42,
+        "fractions": {"train": 0.8, "validation": 0.1, "test": 0.1},
+        "parameters": {"block_size": 2},
+    }
+    first = DatasetSplitter.split(dataset, config)
+    second = DatasetSplitter.split(dataset, config)
+
+    assignments = {
+        split_name: {
+            sample_id["spectrum_id"]
+            for sample_id in sample_ids
+        }
+        for split_name, sample_ids in first.manifest.assignments.items()
+    }
+    block_locations = {}
+    for split_name, sample_ids in assignments.items():
+        for index in sample_ids:
+            x, y = index % 6, index // 6
+            block_locations.setdefault((x // 2, y // 2), set()).add(split_name)
+
+    assert all(len(locations) == 1 for locations in block_locations.values())
+    assert first.manifest.assignments == second.manifest.assignments
 
 
 def test_single_target_and_mask_stratification_preserve_both_classes() -> None:

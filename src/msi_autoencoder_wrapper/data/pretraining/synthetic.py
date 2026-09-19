@@ -449,16 +449,18 @@ def build_synthetic_partitions(dataset: Any, parameters: Mapping[str, Any]) -> d
         options["label_targets"] = False
     config = SyntheticSpectrumConfig(**options)
     catalogue = IonCatalogue.from_dataset(dataset)
-    axis = torch.as_tensor(dataset.active_context.binner.GetXAxis(), dtype=torch.float64)
+    context_getter = getattr(dataset, "get_synthetic_context", None)
+    context = context_getter() if callable(context_getter) else dataset.active_context
+    axis = torch.as_tensor(context.binner.GetXAxis(), dtype=torch.float64)
     schemas = dataset.get_target_schemas()
     chemistry = dataset.get_chemical_descriptions() if "chemical_class" in schemas else {}
     if peak_source_mode == "candidate_catalog":
-        candidate_catalog = dataset.active_context.candidate_catalog
+        candidate_catalog = context.candidate_catalog
         if candidate_catalog is None:
             raise ValueError("Candidate synthesis requires an active candidate catalogue.")
         peak_source = CandidateCatalogPeakSource(
             candidate_catalog,
-            dataset.active_context.binner,
+            context.binner,
             filters=candidate_filters,
             allowed_labels=(
                 schemas["molecule"].class_names if candidate_label_targets else None
@@ -477,7 +479,7 @@ def build_synthetic_partitions(dataset: Any, parameters: Mapping[str, Any]) -> d
         if peak_source_mode == "annotation"
         else None
     )
-    mapper = getattr(dataset.active_context.binner, "map_mass_values_to_bins", None)
+    mapper = getattr(context.binner, "map_mass_values_to_bins", None)
     # REMARK: Legacy peak-profile renderers operate only on bin indices.  An
     # isotope renderer receives the mapper when the active binner exposes it;
     # it validates the requirement when selected rather than making legacy

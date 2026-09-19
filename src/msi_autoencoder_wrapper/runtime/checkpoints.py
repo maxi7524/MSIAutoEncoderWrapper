@@ -21,6 +21,7 @@ def save_training_checkpoint(
     best_loss: float,
     patience_counter: int,
     task_fingerprint: str,
+    phase_snapshots: dict[str, dict[str, torch.Tensor]] | None = None,
 ) -> None:
     """Atomically save all state required to continue after one epoch."""
     payload = {
@@ -37,6 +38,7 @@ def save_training_checkpoint(
         "numpy_rng_state": np.random.get_state(),
         "torch_rng_state": torch.get_rng_state(),
         "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "phase_snapshots": phase_snapshots or {},
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")

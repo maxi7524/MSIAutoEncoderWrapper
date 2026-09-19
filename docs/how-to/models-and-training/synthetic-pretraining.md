@@ -148,6 +148,37 @@ negatives for the current molecular vocabulary.
 background component. Mixed examples therefore do not contribute to
 `ElementCountLoss`.
 
+## Reuse one pretraining state across real-data branches
+
+Use `save_model_state_as` at the end of pretraining and
+`restore_model_state_from` before each comparison branch. The trainer retains a
+detached CPU copy after restoring the phase's best checkpoint, so every branch
+starts from identical weights without regenerating or retraining pretraining.
+`evaluate_test: true` with `evaluation_data: real` evaluates a synthetic phase
+against the real dataset test partition.
+
+```yaml
+phases:
+  - phase_name: synthetic_bce
+    pretraining: {samples: 4096, validation_samples: 512, seed: 42}
+    criterions:
+      heads:
+        molecule_vpu:
+          bce: {target: MultiLabelBCELoss}
+    save_model_state_as: synthetic_bce
+    evaluate_test: true
+    evaluation_data: real
+
+  - phase_name: real_frozen_head
+    restore_model_state_from: synthetic_bce
+    freeze: [heads.molecule_vpu]
+    criterions: {heads: {molecule_vpu: {vpu: {target: VariationalPULoss}}}}
+
+  - phase_name: real_unfrozen_head
+    restore_model_state_from: synthetic_bce
+    criterions: {heads: {molecule_vpu: {vpu: {target: VariationalPULoss}}}}
+```
+
 ## Use available strategies
 
 The current strategies are `single_random`, `single_annotated`, `random`,

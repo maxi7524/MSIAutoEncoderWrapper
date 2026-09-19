@@ -87,6 +87,9 @@ class AnnotationPopulation:
         :return: Pixel/bin records grouped from the train split only.
         :rtype: AnnotationPopulation
         """
+        member_getter = getattr(dataset, "get_annotation_member_datasets", None)
+        if callable(member_getter):
+            return cls._from_cohort(dataset, target_field)
         train_partition = dataset.create_partitions().train
         spectrum_ids = _source_indices(train_partition)
         index = dataset.get_mapped_annotation_index()
@@ -114,6 +117,50 @@ class AnnotationPopulation:
         return cls(
             feature_count=len(index.coordinate_axis),
             spectrum_ids=spectrum_ids,
+            records=records,
+        )
+
+    @classmethod
+    def _from_cohort(cls, dataset: Any, target_field: str) -> "AnnotationPopulation":
+        """Merge train-only pixel/bin records while retaining global source IDs."""
+        train_partition = dataset.create_partitions().train
+        source_ids = set(_source_indices(train_partition))
+        target_names = dataset.get_target_schemas()[target_field].class_names
+        target_indices = {name: position for position, name in enumerate(target_names)}
+        records: list[AnnotationPeakRecord] = []
+        feature_count = len(dataset.get_synthetic_context().binner.GetXAxis())
+        for offset, member_dataset in dataset.get_annotation_member_datasets():
+            index = member_dataset.get_mapped_annotation_index()
+            if len(index.coordinate_axis) != feature_count:
+                raise ValueError("Cohort annotation axes do not match the shared binner.")
+            local_source_ids = {
+                source_id - offset
+                for source_id in source_ids
+                if offset <= source_id < offset + member_dataset._source_length()
+            }
+            for local_source_id in local_source_ids:
+                entry_slice = index.entry_slice(local_source_id)
+                grouped: dict[int, set[int]] = defaultdict(set)
+                for annotation_index, coordinate in zip(
+                    index.annotation_indices[entry_slice],
+                    index.coordinate_indices[entry_slice],
+                    strict=True,
+                ):
+                    identity = "|".join(index.annotation_identities[int(annotation_index)])
+                    target_index = target_indices.get(identity)
+                    if target_index is not None:
+                        grouped[int(coordinate)].add(target_index)
+                records.extend(
+                    AnnotationPeakRecord(
+                        offset + local_source_id,
+                        coordinate,
+                        tuple(sorted(labels)),
+                    )
+                    for coordinate, labels in grouped.items()
+                )
+        return cls(
+            feature_count=feature_count,
+            spectrum_ids=source_ids,
             records=records,
         )
 

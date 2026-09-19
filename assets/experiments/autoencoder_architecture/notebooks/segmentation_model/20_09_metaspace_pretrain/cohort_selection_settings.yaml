@@ -1,0 +1,10 @@
+# Cohort preflight.  The legacy merged `kidney` directory is not an individual image.
+# Results are deliberately kept beside the notebook for auditable experiment selection.
+dataset_root: ../../../../../../data/kidney_workspace/datasets
+output_directory: part_0_1_cohort_selection_results
+excluded_image_keys:
+  - kidney
+heldout_count: 3
+middle_quantiles: [0.2, 0.8]
+# Only labels that can map onto the 200--900 m/z training axis participate.
+mass_range: [200.0, 900.0]

@@ -30,6 +30,38 @@ from ....data.simulated_negatives import SimulatedNegativeManager, SimulatedNega
 logger = get_custom_logger(__name__)
 
 
+def _resolve_spatial_block_size(value: Any) -> tuple[int, int, int]:
+    """Normalize a two- or three-dimensional spatial block declaration."""
+    if isinstance(value, bool):
+        raise_validation_error("PixelDataset", "spatial block_size must be positive.")
+    if isinstance(value, int):
+        dimensions = (value, value, 1)
+    elif isinstance(value, (tuple, list)):
+        if len(value) == 2:
+            dimensions = (value[0], value[1], 1)
+        elif len(value) == 3:
+            dimensions = tuple(value)
+        else:
+            raise_validation_error(
+                "PixelDataset",
+                "spatial block_size must be one integer or two/three integers.",
+            )
+    else:
+        raise_validation_error(
+            "PixelDataset",
+            "spatial block_size must be one integer or two/three integers.",
+        )
+    if any(
+        isinstance(item, bool) or not isinstance(item, int) or item < 1
+        for item in dimensions
+    ):
+        raise_validation_error(
+            "PixelDataset",
+            "spatial block dimensions must be positive integers.",
+        )
+    return tuple(int(item) for item in dimensions)
+
+
 @DatasetManager.register_dataset("PixelDataset")
 class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
     """
@@ -187,6 +219,37 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         if any(value is None or value == "" for value in values):
             return ("__ungrouped__", self._get_source_sample_id(idx))
         return values
+
+    def _get_source_split_spatial_block(
+        self,
+        idx: int,
+        block_size: Any = 16,
+        **_: Any,
+    ) -> tuple[int, int, int]:
+        """Return the deterministic native-coordinate block containing one pixel.
+
+        :param idx: Source spectrum index.
+        :type idx: int
+        :param block_size: Positive scalar or two/three positive coordinate
+            widths. A scalar applies to ``x`` and ``y`` and keeps every ``z``
+            plane separate.
+        :type block_size: int | collections.abc.Sequence[int]
+        :return: Integer ``(x_block, y_block, z_block)`` identity.
+        :rtype: tuple[int, int, int]
+        :raises ValidationError: If block dimensions are invalid.
+        """
+        dimensions = _resolve_spatial_block_size(block_size)
+        reader = self.active_context.get_data_reader(self.source)
+        coordinate = reader.GetSpectrumPosition(idx)
+        if len(coordinate) != 3:
+            raise_validation_error(
+                "PixelDataset",
+                "Reader spatial positions must contain x, y, and z coordinates.",
+            )
+        return tuple(
+            int(value) // size
+            for value, size in zip(coordinate, dimensions, strict=True)
+        )
 
     def _source_subset_groups(self, indices: range, **parameters: Any) -> list[Any]:
         """Return subset strata through a reader-level bulk metadata API."""

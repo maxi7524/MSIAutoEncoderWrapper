@@ -138,6 +138,12 @@ class MSIPyTorchTrainer(ConfigurableComponent):
         phases_list: List[Dict[str, Any]] = training_config.get("phases", [])
         transient_cache = getattr(self._wrapper.models_manager, "_training_transient_cache", {})
         real_dataset_partitions = dataset_partitions
+        phase_snapshots = dict(
+            runtime_checkpoint.get("phase_snapshots", {})
+            if runtime_checkpoint is not None
+            else {}
+        )
+        self._phase_snapshots = phase_snapshots
 
         # Heading 1 (Sequential Phase Processing Framework)
         for current_step, phase_config in enumerate(phases_list):
@@ -176,6 +182,28 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                 )
             model.to(compute_device)
             logger.info("Initiating sequential training loop phase: %s (%s/%s)", phase_name, current_step + 1, len(phases_list))
+
+            # Phase-branch state restoration
+            ## Branches start from a common completed phase without rerunning it.
+            restore_snapshot = phase_config.get("restore_model_state_from")
+            if restore_snapshot is not None:
+                if not isinstance(restore_snapshot, str) or not restore_snapshot:
+                    raise_validation_error(
+                        "Trainer",
+                        "restore_model_state_from must be a nonempty snapshot name.",
+                    )
+                snapshot = phase_snapshots.get(restore_snapshot)
+                if snapshot is None:
+                    raise_validation_error(
+                        "Trainer",
+                        f"Unknown phase snapshot '{restore_snapshot}'.",
+                    )
+                model.load_state_dict(snapshot)
+                logger.info(
+                    "Restored phase snapshot '%s' before phase '%s'.",
+                    restore_snapshot,
+                    phase_name,
+                )
 
             ## Heading 2 (Gradient Lock Adjustments)
             ### Adjust layer weight modifications status dynamically by traversing model child boundaries
@@ -578,6 +606,7 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                         best_loss=self.best_loss,
                         patience_counter=self.patience_counter,
                         task_fingerprint=runtime_config["task_fingerprint"],
+                        phase_snapshots=phase_snapshots,
                     )
                     update_progress(
                         Path(runtime_config["progress_path"]),
@@ -609,8 +638,42 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     phase_name,
                 )
 
-            test_dataset = dataset_partitions.get("test")
-            if current_step == len(phases_list) - 1 and test_dataset is not None and len(test_dataset) > 0:
+            # Completed-phase snapshot
+            ## Snapshot after checkpoint restoration so all branches receive the
+            ## selected, rather than the final-epoch, state of their parent.
+            save_snapshot = phase_config.get("save_model_state_as")
+            if save_snapshot is not None:
+                if not isinstance(save_snapshot, str) or not save_snapshot:
+                    raise_validation_error(
+                        "Trainer",
+                        "save_model_state_as must be a nonempty snapshot name.",
+                    )
+                phase_snapshots[save_snapshot] = self._clone_model_state(model)
+                logger.info(
+                    "Stored completed phase '%s' as snapshot '%s'.",
+                    phase_name,
+                    save_snapshot,
+                )
+
+            evaluate_test = phase_config.get(
+                "evaluate_test",
+                current_step == len(phases_list) - 1,
+            )
+            if not isinstance(evaluate_test, bool):
+                raise_validation_error("Trainer", "evaluate_test must be a boolean.")
+            evaluation_data = phase_config.get("evaluation_data", "phase")
+            if evaluation_data not in {"phase", "real"}:
+                raise_validation_error(
+                    "Trainer",
+                    "evaluation_data must be 'phase' or 'real'.",
+                )
+            evaluation_partitions = (
+                real_dataset_partitions
+                if evaluation_data == "real"
+                else dataset_partitions
+            )
+            test_dataset = evaluation_partitions.get("test")
+            if evaluate_test and test_dataset is not None and len(test_dataset) > 0:
                 test_phase = dict(phase_config)
                 test_phase["dataloader"] = {
                     **phase_config.get("dataloader", {}),
@@ -639,6 +702,20 @@ class MSIPyTorchTrainer(ConfigurableComponent):
 
         logger.info("All configured sequential multi-phase training loops successfully completed.")
         return global_history
+
+    @staticmethod
+    def _clone_model_state(model: nn.Module) -> dict[str, torch.Tensor]:
+        """Copy one model state to CPU for deterministic in-process branching.
+
+        :param model: Fully initialized model after a completed training phase.
+        :type model: torch.nn.Module
+        :return: Detached CPU tensors keyed as ``state_dict`` entries.
+        :rtype: dict[str, torch.Tensor]
+        """
+        return {
+            name: value.detach().cpu().clone()
+            for name, value in model.state_dict().items()
+        }
 
     @staticmethod
     def _apply_freeze_configuration(

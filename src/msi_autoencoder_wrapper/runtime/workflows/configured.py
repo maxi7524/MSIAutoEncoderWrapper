@@ -161,6 +161,36 @@ def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoder
     return wrapper
 
 
+def build_cohort_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoderWrapper:
+    """Build one shared-axis autoencoder over configured cohort training images.
+
+    :param parameters: Cohort member definitions, shared data settings and resolved
+        model/split artifacts produced by :func:`resolve_cohort_campaign`.
+    :type parameters: dict[str, typing.Any]
+    :return: Wrapper with an active ``CohortPixelDataset`` and model.
+    :rtype: MSIAutoEncoderWrapper
+    """
+    resolved = parameters.get("resolved")
+    if not isinstance(resolved, dict):
+        raise ValueError("Training tasks require resolved component artifacts.")
+    split_manifest = _read_yaml(Path(resolved["split_manifest"]))
+    wrapper, _ = _build_cohort_pipeline(
+        parameters,
+        split_seed=int(split_manifest["seed"]),
+        predefined_assignments=split_manifest["assignments"],
+    )
+    model, model_type, model_name = ModelLoader.build(
+        _read_yaml(Path(resolved["model_config"]))
+    )
+    wrapper.models_manager.attach_model(
+        model,
+        model_type=model_type,
+        model_name=model_name,
+        trained=False,
+    )
+    return wrapper
+
+
 def resolve_single_image_campaign(
     tasks: list[dict[str, Any]],
     directory: Path,
@@ -347,6 +377,85 @@ def resolve_single_image_campaign(
     return resolved_parameters
 
 
+def resolve_cohort_campaign(
+    tasks: list[dict[str, Any]],
+    directory: Path,
+) -> list[dict[str, Any]]:
+    """Materialize one shared-axis cohort dataset, split and model per grid cell.
+
+    The cohort list is deliberately part of the immutable dataset key.  Thus an
+    external-test image cannot enter a later repetition by cache reuse.
+
+    :param tasks: Grid-expanded runtime tasks.
+    :type tasks: list[dict[str, typing.Any]]
+    :param directory: Campaign directory receiving resolved artifacts.
+    :type directory: pathlib.Path
+    :return: Task parameters with portable resolved model and split paths.
+    :rtype: list[dict[str, typing.Any]]
+    """
+    artifact_root = directory / "resolved"
+    model_root = artifact_root / "models"
+    split_root = artifact_root / "splits"
+    model_root.mkdir(parents=True, exist_ok=True)
+    split_root.mkdir(parents=True, exist_ok=True)
+    pipelines: dict[Any, tuple[MSIAutoEncoderWrapper, Any]] = {}
+    model_paths: dict[Any, Path] = {}
+    split_paths: dict[Any, Path] = {}
+    resolved_parameters: list[dict[str, Any]] = []
+
+    for task in tasks:
+        parameters = deepcopy(task["parameters"])
+        factory_parameters = parameters["factory_parameters"]
+        split_seed = int(task["reproducibility"]["common_seeds"]["split"])
+        dataset_key = (
+            _freeze(_resolve_cohort_images(factory_parameters, Path(factory_parameters["project_path"]))),
+            _freeze(factory_parameters.get("binning", {})),
+            _freeze(factory_parameters.get("dataset", {})),
+            split_seed,
+        )
+        if dataset_key not in pipelines:
+            pipelines[dataset_key] = _build_cohort_pipeline(
+                factory_parameters,
+                split_seed=split_seed,
+            )
+        wrapper, dataset = pipelines[dataset_key]
+        variant = factory_parameters["variant"]
+        predictive = factory_parameters.get("predictive", {})
+        model_key = (dataset_key, _freeze(variant), _freeze(predictive))
+        if model_key not in model_paths:
+            ArchitecturesManager.discover_architectures()
+            preset = ArchitecturesManager._PRESET_REGISTRY["autoencoder"][variant["preset"]]
+            layout = preset(wrapper.active_context, **deepcopy(variant.get("parameters", {})))
+            layout, model_parameters = _attach_predictive_components(layout, predictive, dataset)
+            model_path = model_root / f"model-{len(model_paths):04d}.yaml"
+            _write_yaml(
+                model_path,
+                {
+                    "model": {
+                        "name": variant["name"],
+                        "type": "autoencoder",
+                        "parameters": model_parameters,
+                        "components": {
+                            category: _portable_component_descriptor(descriptor)
+                            for category, descriptor in layout.items()
+                        },
+                    }
+                },
+            )
+            model_paths[model_key] = model_path
+        if dataset_key not in split_paths:
+            manifest = dataset.create_partitions().manifest.get_config()
+            split_path = split_root / f"split-{len(split_paths):04d}.yaml"
+            _write_yaml(split_path, manifest)
+            split_paths[dataset_key] = split_path
+        parameters["resolved"] = {
+            "model_config": str(model_paths[model_key].resolve()),
+            "split_manifest": str(split_paths[dataset_key].resolve()),
+        }
+        resolved_parameters.append(parameters)
+    return resolved_parameters
+
+
 def _build_planning_pipeline(
     parameters: dict[str, Any],
     *,
@@ -396,6 +505,123 @@ def _build_planning_pipeline(
         }
     )
     return wrapper, dataset
+
+
+def _build_cohort_pipeline(
+    parameters: dict[str, Any],
+    *,
+    split_seed: int,
+    predefined_assignments: dict[str, Any] | None = None,
+) -> tuple[MSIAutoEncoderWrapper, Any]:
+    """Initialize local member contexts and one common-target cohort dataset."""
+    project_path = Path(parameters["project_path"]).resolve()
+    wrapper = MSIAutoEncoderWrapper(
+        project_path=str(project_path),
+        device=parameters.get("device"),
+        dtype=parameters.get("dtype", "float32"),
+    )
+    images = _resolve_cohort_images(parameters, project_path)
+    image_keys: list[str] = []
+    for image in images:
+        if not isinstance(image, dict) or not image.get("image_key") or not image.get("image_path"):
+            raise ValueError("Every cohort image requires image_key and image_path.")
+        image_key = str(image["image_key"])
+        image_path = Path(image["image_path"])
+        if not image_path.is_absolute():
+            image_path = (project_path / image_path).resolve()
+        if image_key != image_path.stem:
+            raise ValueError(
+                "cohort image_key must equal the imzML filename stem; "
+                f"got '{image_key}' for '{image_path.name}'."
+            )
+        _get_or_create_reader(
+            wrapper,
+            image_path=image_path,
+            definition=image.get("reader", parameters.get("reader", {})),
+        )
+        _attach_annotation_reader(
+            wrapper,
+            image_path=image_path,
+            definition=image.get("annotations", parameters.get("annotations")),
+        )
+        binning = parameters.get("binning", {})
+        wrapper.context_manager.load_binner(
+            {
+                "type": binning.get("strategy", "LinearBinning"),
+                "parameters": deepcopy(binning.get("parameters", {})),
+            },
+            str(image_path),
+        )
+        wrapper.workspace.set_active_image(str(image_path))
+        image_keys.append(image_key)
+
+    wrapper.cohorts.create(str(parameters.get("cohort_name", "training")))
+    cohort_context = wrapper.cohorts.set_images(image_keys, name=str(parameters.get("cohort_name", "training")))
+    wrapper.cohorts.activate(cohort_context.name)
+    dataset_definition = parameters["dataset"]
+    dataset_parameters = deepcopy(dataset_definition["parameters"])
+    _resolve_chemistry_path(dataset_parameters, project_path)
+    _inject_cohort_class_mapping(dataset_parameters, project_path)
+    dataset_parameters["split"] = {
+        "strategy": "predefined" if predefined_assignments is not None else dataset_parameters["split"]["strategy"],
+        "seed": split_seed,
+        "assignments": predefined_assignments,
+        "fractions": dataset_parameters["split"].get("fractions"),
+        "parameters": dataset_parameters["split"].get("parameters", {}),
+    }
+    dataset = DatasetManager.load_config(
+        {"type": dataset_definition.get("strategy", "CohortPixelDataset"), "parameters": dataset_parameters},
+        cohort_context=cohort_context,
+    )
+    wrapper.active_dataset = dataset
+    return wrapper, dataset
+
+
+def _resolve_cohort_images(parameters: dict[str, Any], project_path: Path) -> list[dict[str, Any]]:
+    """Resolve explicit training members or the persisted held-out selection table."""
+    images = parameters.get("images")
+    if isinstance(images, list) and images:
+        return deepcopy(images)
+    selection_path = parameters.get("cohort_selection_path")
+    if selection_path is None:
+        raise ValueError("Cohort training requires images or cohort_selection_path.")
+    path = Path(selection_path)
+    if not path.is_absolute():
+        path = (project_path / path).resolve()
+    import pandas as pd
+
+    selected = pd.read_csv(path, usecols=["image_key", "is_heldout"])
+    training_keys = selected.loc[~selected["is_heldout"], "image_key"].astype(str).tolist()
+    if not training_keys:
+        raise ValueError("Cohort selection does not leave any training images.")
+    return [
+        {
+            "image_key": image_key,
+            "image_path": f"datasets/{image_key}/{image_key}.imzML",
+        }
+        for image_key in training_keys
+    ]
+
+
+def _inject_cohort_class_mapping(parameters: dict[str, Any], project_path: Path) -> None:
+    """Inject the canonical training-only molecular vocabulary into member datasets."""
+    catalogue_path = parameters.pop("annotation_catalogue_path", None)
+    if catalogue_path is None:
+        return
+    path = Path(catalogue_path)
+    if not path.is_absolute():
+        path = (project_path / path).resolve()
+    import pandas as pd
+
+    labels = pd.read_csv(path, usecols=["label", "training_image_count"])
+    labels = labels.loc[labels["training_image_count"] > 0, "label"].astype(str).sort_values()
+    if labels.empty:
+        raise ValueError("Cohort annotation catalogue contains no training labels.")
+    target_specs = parameters.setdefault("target_specs", {})
+    molecule_spec = target_specs.setdefault("molecule", {"type": "multi_label"})
+    molecule_spec["class_mapping"] = {
+        label: index for index, label in enumerate(labels.tolist())
+    }
 
 
 def _resolve_chemistry_path(parameters: dict[str, Any], project_path: Path) -> None:

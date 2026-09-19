@@ -48,6 +48,9 @@ class IonCatalogue:
         :return: Catalogue aligned exactly with the target columns.
         :raises ValueError: If an identity has no mapped spectral coordinate.
         """
+        member_getter = getattr(dataset, "get_annotation_member_datasets", None)
+        if callable(member_getter):
+            return cls._from_cohort(dataset, target_field)
         index = dataset.get_mapped_annotation_index()
         if index.coordinate_system != "binner":
             raise ValueError("Ion evidence requires annotation mapping to binner coordinates.")
@@ -62,6 +65,34 @@ class IonCatalogue:
             raise ValueError("Every ion target must have at least one mapped coordinate.")
         logger.info("Resolved signal evidence catalogue for %s ions.", len(names))
         return cls(tuple(names), bins, len(index.coordinate_axis))
+
+    @classmethod
+    def _from_cohort(cls, dataset: Any, target_field: str) -> "IonCatalogue":
+        """Merge member annotation coordinates onto a shared cohort axis."""
+        context = dataset.get_synthetic_context()
+        feature_count = len(context.binner.GetXAxis())
+        names = dataset.get_target_schemas()[target_field].class_names
+        coordinates: dict[str, set[int]] = {name: set() for name in names}
+        for _, member_dataset in dataset.get_annotation_member_datasets():
+            index = member_dataset.get_mapped_annotation_index()
+            if len(index.coordinate_axis) != feature_count:
+                raise ValueError("Cohort annotation axes do not match the shared binner.")
+            for annotation_index, identity in enumerate(index.annotation_identities):
+                name = "|".join(identity)
+                if name in coordinates:
+                    coordinates[name].update(
+                        int(value)
+                        for value in np.unique(
+                            index.coordinate_indices[
+                                index.annotation_indices == annotation_index
+                            ]
+                        )
+                    )
+        bins = tuple(tuple(sorted(coordinates[name])) for name in names)
+        if any(not values for values in bins):
+            raise ValueError("Every cohort ion target needs a mapped spectral coordinate.")
+        logger.info("Resolved cohort signal evidence catalogue for %s ions.", len(names))
+        return cls(tuple(names), bins, feature_count)
 
 
 @dataclass(frozen=True)

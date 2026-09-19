@@ -77,6 +77,14 @@ eligible molecular targets from positive, available labels in the real training
 partition. This prevents validation and test labels from determining synthetic
 positive-ion eligibility.
 
+Phase snapshots make a synthetic pretrain reusable inside one trainer run.
+`save_model_state_as` captures the post-phase state after optional best-checkpoint
+restoration. `restore_model_state_from` loads that immutable state before freeze
+configuration and optimizer construction for a later phase. This supports paired
+frozen- and unfrozen-head branches without repeating pretraining. Runtime
+continuation checkpoints persist these snapshots together with model and
+optimizer state.
+
 ## Sampling and reproducibility
 
 Each dataset item creates a local random stream from synthetic seed, epoch, and

@@ -58,7 +58,11 @@ class DatasetSplitter:
     def _groups(cls, dataset: Dataset, config: SplitConfig) -> List[List[int]]:
         if config.strategy == "random":
             return [[index] for index in range(len(dataset))]
-        selector_name = "get_split_group"
+        selector_name = (
+            "get_split_spatial_block"
+            if config.strategy == "spatial_block"
+            else "get_split_group"
+        )
         selector = getattr(dataset, selector_name, None)
         if not callable(selector):
             raise_validation_error(

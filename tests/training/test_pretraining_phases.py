@@ -115,3 +115,94 @@ def test_pretraining_then_real_adaptation_preserves_model_and_split(contrastive)
     assert wrapper.active_model is model and wrapper.active_dataset is dataset
     assert model.seen[0].shape == (4, 10)
     assert not bool(model.seen[0][:, [1, 8]].any())
+
+
+def test_phase_snapshot_reuses_one_pretrain_for_isolated_real_branches():
+    """Real branches restore identical post-pretrain weights without rerunning BCE."""
+    torch.manual_seed(42)
+    dataset, model = PhaseDataset(), PhaseModel()
+    wrapper = SimpleNamespace(
+        active_context=SimpleNamespace(reader=object(), _instantiated_image_key="fixture"),
+        active_model=model,
+        active_dataset=dataset,
+        device="cpu",
+        models_manager=SimpleNamespace(active_model_type="autoencoder"),
+        workspace=SimpleNamespace(active_img_name="fixture"),
+    )
+    common = {
+        "batch_size": 4,
+        "dataloader": {"shuffle": False},
+        "optimizer": {"type": "SGD", "params": {"lr": 0.01}},
+    }
+    trainer = MSIPyTorchTrainer(wrapper)
+    history = trainer.fit(
+        {
+            "seed": 42,
+            "test_mode": True,
+            "checkpoint": {"enabled": False},
+            "phases": [
+                {
+                    **common,
+                    "phase_name": "synthetic_bce",
+                    "epochs": 1,
+                    "pretraining": {
+                        "samples": 8,
+                        "validation_samples": 4,
+                        "sampling_plan": [
+                            {"strategy": "single_annotated", "count": 8}
+                        ],
+                    },
+                    "criterions": {
+                        "heads": {
+                            "ion": {"bce": {"target": "MultiLabelBCELoss"}}
+                        }
+                    },
+                    "save_model_state_as": "synthetic_bce",
+                    "evaluate_test": True,
+                    "evaluation_data": "real",
+                },
+                {
+                    **common,
+                    "phase_name": "real_frozen_head",
+                    "epochs": 1,
+                    "restore_model_state_from": "synthetic_bce",
+                    "freeze": ["heads.ion"],
+                    "criterions": {
+                        "reconstruction": {"mse": {"target": "MSELoss"}}
+                    },
+                    "save_model_state_as": "frozen_branch",
+                    "evaluate_test": True,
+                },
+                {
+                    **common,
+                    "phase_name": "pretrain_only_evaluation",
+                    "epochs": 0,
+                    "restore_model_state_from": "synthetic_bce",
+                    "criterions": {
+                        "heads": {
+                            "ion": {"bce": {"target": "MultiLabelBCELoss"}}
+                        }
+                    },
+                    "save_model_state_as": "restored_pretrain",
+                    "evaluate_test": True,
+                    "evaluation_data": "real",
+                },
+            ],
+        }
+    )
+
+    snapshots = trainer._phase_snapshots
+    assert set(snapshots) == {"synthetic_bce", "frozen_branch", "restored_pretrain"}
+    assert all(
+        torch.equal(snapshots["synthetic_bce"][name], snapshots["restored_pretrain"][name])
+        for name in snapshots["synthetic_bce"]
+    )
+    assert any(
+        not torch.equal(snapshots["synthetic_bce"][name], snapshots["frozen_branch"][name])
+        for name in snapshots["synthetic_bce"]
+    )
+    assert [entry["phase"] for entry in history if entry.get("split") == "test"] == [
+        "synthetic_bce",
+        "real_frozen_head",
+        "pretrain_only_evaluation",
+    ]

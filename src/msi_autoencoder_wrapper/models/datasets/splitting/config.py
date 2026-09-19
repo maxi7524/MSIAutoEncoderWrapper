@@ -30,6 +30,7 @@ class SplitConfig:
             "target_stratified",
             "mask_stratified",
             "proportional_multilabel",
+            "spatial_block",
             "predefined",
         }:
             raise_validation_error(

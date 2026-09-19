@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from itertools import accumulate
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple
 
+import numpy as np
+
 from ..base_dataset import RawMSIBaseDataset
 from ..dataset_manager import DatasetManager
 from ....core.mixins.cohort.context import CohortContext, CohortMember
@@ -53,9 +55,16 @@ class CohortDataset(RawMSIBaseDataset):
         split: Optional[Mapping[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(active_context=None, split=split, **kwargs)
         if not cohort_context.members:
             raise_validation_error("CohortDataset", "The cohort has no members.")
+        # Shared preprocessing needs a binner even though each raw sample retains
+        # its own reader. The cohort contract validates the axes before synthetic
+        # generation, and campaign construction gives every member the same binner.
+        super().__init__(
+            active_context=_MemberContext(cohort_context.members[0]),
+            split=split,
+            **kwargs,
+        )
         self.cohort_context = cohort_context
         self.source = source
         specs = dict(target_specs or {})
@@ -119,6 +128,37 @@ class CohortDataset(RawMSIBaseDataset):
                 )
         return schemas
 
+    def get_annotation_member_datasets(self) -> tuple[tuple[int, PixelDataset], ...]:
+        """Return immutable member datasets with their global source offsets.
+
+        :return: ``(global_offset, member_dataset)`` pairs in cohort order.
+        :rtype: tuple[tuple[int, PixelDataset], ...]
+        """
+        starts = (0, *self._offsets[:-1])
+        return tuple(zip(starts, self._datasets, strict=True))
+
+    def get_synthetic_context(self) -> _MemberContext:
+        """Return the common binner context used by annotation pretraining.
+
+        All members must have an identical model axis.  The check is performed
+        here, at the boundary where synthetic peaks lose member identity, rather
+        than silently using the first image's axis.
+
+        :return: Representative local context with the common binner.
+        :rtype: _MemberContext
+        :raises ValidationError: If the member binning axes differ.
+        """
+        context = self._datasets[0].active_context
+        reference_axis = np.asarray(context.binner.GetXAxis(), dtype=np.float64)
+        for dataset in self._datasets[1:]:
+            axis = np.asarray(dataset.active_context.binner.GetXAxis(), dtype=np.float64)
+            if reference_axis.shape != axis.shape or not np.array_equal(reference_axis, axis):
+                raise_validation_error(
+                    "CohortDataset",
+                    "Synthetic pretraining requires one identical binner axis across members.",
+                )
+        return context
+
     def _get_source_split_target(self, idx: int, **parameters: Any) -> Any:
         member, local = self._resolve_index(idx)
         return self._datasets[member]._get_source_split_target(local, **parameters)
@@ -133,6 +173,19 @@ class CohortDataset(RawMSIBaseDataset):
         if group_fields == "image_key" or group_fields == ["image_key"]:
             return self.cohort_context.members[member].image_key
         return self._datasets[member]._get_source_split_group(local, **parameters)
+
+    def _get_source_split_spatial_block(
+        self,
+        idx: int,
+        **parameters: Any,
+    ) -> tuple[str, int, int, int]:
+        """Return an image-scoped spatial block for one cohort pixel."""
+        member, local = self._resolve_index(idx)
+        block = self._datasets[member]._get_source_split_spatial_block(
+            local,
+            **parameters,
+        )
+        return self.cohort_context.members[member].image_key, *block
 
     def _source_subset_groups(self, source_indices: range, **parameters: Any) -> list[Any]:
         """Stratify cohort sampling by source image unless overridden."""
