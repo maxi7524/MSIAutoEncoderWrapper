@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# PARAMS 
+# These values must not exceed the Entropy QoS submission and GPU limits.
+# REMARK
+TASK_LIMIT=6
+PARALLELISM=6
+TASK_WALLTIME=${TASK_WALLTIME:-01:00:00}
+
 # Submit bounded Slurm batches sequentially and finalize one staged campaign.
 set -euo pipefail
 
@@ -57,10 +64,8 @@ TASK_COUNT_FILE=${RUN_DIRECTORY}/task-count
 NEXT_TASK_FILE=${RUN_DIRECTORY}/next-task-index
 TASK_JOB_HISTORY=${RUN_DIRECTORY}/task-array-job-ids
 FINALIZER_JOB_FILE=${RUN_DIRECTORY}/finalizer-job-id
-# These values must not exceed the Entropy QoS submission and GPU limits.
-TASK_LIMIT=6
-PARALLELISM=3
-TASK_WALLTIME=${TASK_WALLTIME:-01:00:00}
+
+# Entropy run 
 
 if [[ ! "${TASK_WALLTIME}" =~ ^[0-9]{1,2}:[0-5][0-9]:[0-5][0-9]$ ]]; then
     echo "Campaign settings contain an invalid task walltime: ${TASK_WALLTIME}" >&2
