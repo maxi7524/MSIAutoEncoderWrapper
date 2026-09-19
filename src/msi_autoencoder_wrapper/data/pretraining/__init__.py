@@ -11,6 +11,15 @@ from .sampling import (
     register_sampling_strategy,
     sampling_strategy_names,
 )
+from .annotation_population import AnnotationPeakRecord, AnnotationPopulation
+from .representations import (
+    SyntheticRepresentationContext,
+    SyntheticRepresentationManager,
+    SyntheticRepresentationSpec,
+    SyntheticRepresentationStrategy,
+    get_representation_strategy,
+    register_representation_strategy,
+)
 from .sources import (
     CandidateCatalogPeakSource,
     CandidateCatalogPeakSourceError,
@@ -25,6 +34,8 @@ from .synthetic import (
 )
 
 __all__ = [
+    "AnnotationPeakRecord",
+    "AnnotationPopulation",
     "CataloguePeakSource",
     "CandidateCatalogPeakSource",
     "CandidateCatalogPeakSourceError",
@@ -35,11 +46,17 @@ __all__ = [
     "SyntheticSamplingManager",
     "SyntheticSamplingPlanEntry",
     "SyntheticSamplingStrategy",
+    "SyntheticRepresentationContext",
+    "SyntheticRepresentationManager",
+    "SyntheticRepresentationSpec",
+    "SyntheticRepresentationStrategy",
     "SyntheticSpectrumConfig",
     "SyntheticSpectrumDataset",
     "SyntheticSpectrumSample",
     "build_synthetic_partitions",
     "get_sampling_strategy",
+    "get_representation_strategy",
+    "register_representation_strategy",
     "register_sampling_strategy",
     "sampling_strategy_names",
 ]

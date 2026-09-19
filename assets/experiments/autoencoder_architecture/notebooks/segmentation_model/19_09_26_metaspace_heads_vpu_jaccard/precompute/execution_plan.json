@@ -1,0 +1,12 @@
+{
+  "strategy": "autoencoder.heads_general_analysis",
+  "model_type": "autoencoder",
+  "stages": [
+    "autoencoder.reconstruction.campaign_training_dynamics",
+    "autoencoder.evidence.annotation_population",
+    "autoencoder.heads.shared_inference",
+    "autoencoder.reconstruction.local",
+    "autoencoder.reconstruction.global",
+    "autoencoder.latent.geometry"
+  ]
+}

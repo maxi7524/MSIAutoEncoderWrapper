@@ -23,6 +23,7 @@ __pycache__
 
 # notebooks
 *.ipynb diff=jupyternotebook
+**/*reconstruction_local.ipynb
 
 # analysis precompute artifacts
 # Every notebook writes its numerical tables to a sibling `<notebook>_results/`

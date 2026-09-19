@@ -148,6 +148,7 @@ def load_settings(path: Path | str) -> dict:
     if not isinstance(settings["shortlist"], list):
         raise ValueError("shortlist must be a list of condition labels.")
     settings["repository_root"] = str(root)
+    settings["settings_path"] = str(path)
     return settings
 
 

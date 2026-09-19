@@ -27,6 +27,7 @@ dependencies = [
     "statsmodels",
     "tabulate",
     "tqdm",
+    "isospecpy>=2.4.0",
 ]
 
 [project.scripts]

@@ -1,0 +1,229 @@
+# Paths are relative to the repository root; absolute paths are also accepted.
+#
+# Analysis settings for the Jaccard-weighted contrastive negative-weighting
+# comparison. Four VPU objectives, previously selected from the expanded
+# contrastive sweep, are each re-run with three multilabel-Jaccard negative
+# weights (0.1 / 0.25 / 0.5); the matching no-Jaccard baseline for every
+# objective is loaded from the expanded sweep for direct comparison.
+workspace: data/kidney_workspace
+model_store: data/kidney_workspace/models/kidney
+experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/14_09_26_predictive_final/vpu_contractive_interaction.yaml
+cache_directory: data/kidney_workspace/cache/metaspace_heads_vpu_jaccard
+annotation_evidence_cache: data/kidney_workspace/cache/evidence/metaspace_heads_vpu_contractive_full.npz
+
+precompute:
+  strategy: autoencoder.heads_general_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/19_09_26_metaspace_heads_vpu_jaccard/precompute
+
+sources:
+  - name: vpu_contractive_interaction_expanded
+    experiment_name: kidney-vpu-contractive-interaction-expanded
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/14_09_26_predictive_final/vpu_contractive_interaction_expanded.yaml
+    status_directory: data/kidney_workspace/configs/entropy-runs/vpu-contractive-interaction-expanded-20260917-01/plan/status
+    required: true
+    role: baseline
+    enabled: true
+  - name: vpu_jaccard_shortlist
+    experiment_name: kidney-vpu-jaccard-shortlist
+    experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/14_09_26_predictive_final/vpu_jaccard_shortlist.yaml
+    status_directory: data/kidney_workspace/configs/entropy-runs/vpu-jaccard-20260919-01/plan/status
+    required: true
+    role: candidate
+    enabled: true
+
+# Stable analysis aliases are resolved against the joint inventory of every source.
+# ``grid_id`` is the deterministic campaign cell identity; the campaign is only the
+# locator needed to distinguish two independent runs with the same grid numbering.
+# Tags are arbitrary analytical metadata, not conditions interpreted by precompute.
+models:
+  # Objective 1: VPU + contrastive, T=0.30, w=0.01.
+  vpu_contrastive_t030_w10m:
+    display_label: "VPU + contrastive (T=0.30, w=0.01)"
+    select: {source: vpu_contractive_interaction_expanded, grid_id: grid_0018}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.30, weight: 0.01}
+    visualization: {order: 0, color: "#D55E00", line_style: solid, marker: "s"}
+  vpu_contrastive_t030_w10m_j10:
+    display_label: "VPU + contrastive (T=0.30, w=0.01, j=0.1)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0000}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.30, weight: 0.01, jaccard_weight: 0.1}
+    visualization: {order: 1, color: "#D55E00", line_style: solid, marker: "o"}
+  vpu_contrastive_t030_w10m_j25:
+    display_label: "VPU + contrastive (T=0.30, w=0.01, j=0.25)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0001}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.30, weight: 0.01, jaccard_weight: 0.25}
+    visualization: {order: 2, color: "#D55E00", line_style: solid, marker: "s"}
+  vpu_contrastive_t030_w10m_j50:
+    display_label: "VPU + contrastive (T=0.30, w=0.01, j=0.5)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0002}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.30, weight: 0.01, jaccard_weight: 0.5}
+    visualization: {order: 3, color: "#D55E00", line_style: solid, marker: "^"}
+
+  # Objective 2: VPU + contrastive, T=0.07, w=0.01.
+  vpu_contrastive_t007_w10m:
+    display_label: "VPU + contrastive (T=0.07, w=0.01)"
+    select: {source: vpu_contractive_interaction_expanded, grid_id: grid_0006}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.07, weight: 0.01}
+    visualization: {order: 4, color: "#0072B2", line_style: solid, marker: "s"}
+  vpu_contrastive_t007_w10m_j10:
+    display_label: "VPU + contrastive (T=0.07, w=0.01, j=0.1)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0003}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.07, weight: 0.01, jaccard_weight: 0.1}
+    visualization: {order: 5, color: "#0072B2", line_style: solid, marker: "o"}
+  vpu_contrastive_t007_w10m_j25:
+    display_label: "VPU + contrastive (T=0.07, w=0.01, j=0.25)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0004}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.07, weight: 0.01, jaccard_weight: 0.25}
+    visualization: {order: 6, color: "#0072B2", line_style: solid, marker: "s"}
+  vpu_contrastive_t007_w10m_j50:
+    display_label: "VPU + contrastive (T=0.07, w=0.01, j=0.5)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0005}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.07, weight: 0.01, jaccard_weight: 0.5}
+    visualization: {order: 7, color: "#0072B2", line_style: solid, marker: "^"}
+
+  # Objective 3: VPU + contrastive, T=0.01, w=0.001.
+  vpu_contrastive_t001_w1m:
+    display_label: "VPU + contrastive (T=0.01, w=0.001)"
+    select: {source: vpu_contractive_interaction_expanded, grid_id: grid_0004}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.01, weight: 0.001}
+    visualization: {order: 8, color: "#009E73", line_style: solid, marker: "^"}
+  vpu_contrastive_t001_w1m_j10:
+    display_label: "VPU + contrastive (T=0.01, w=0.001, j=0.1)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0006}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.01, weight: 0.001, jaccard_weight: 0.1}
+    visualization: {order: 9, color: "#009E73", line_style: solid, marker: "o"}
+  vpu_contrastive_t001_w1m_j25:
+    display_label: "VPU + contrastive (T=0.01, w=0.001, j=0.25)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0007}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.01, weight: 0.001, jaccard_weight: 0.25}
+    visualization: {order: 10, color: "#009E73", line_style: solid, marker: "s"}
+  vpu_contrastive_t001_w1m_j50:
+    display_label: "VPU + contrastive (T=0.01, w=0.001, j=0.5)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0008}
+    tags: {family: vpu, contrastive: true, contractive: false, temperature: 0.01, weight: 0.001, jaccard_weight: 0.5}
+    visualization: {order: 11, color: "#009E73", line_style: solid, marker: "^"}
+
+  # Objective 4: VPU + contractive + contrastive, T=0.07, w=0.001.
+  vpu_contractive_contrastive_t007_w1m:
+    display_label: "VPU + contractive + contrastive (T=0.07, w=0.001)"
+    select: {source: vpu_contractive_interaction_expanded, grid_id: grid_0009}
+    tags: {family: vpu, contrastive: true, contractive: true, temperature: 0.07, weight: 0.001}
+    visualization: {order: 12, color: "#0072B2", line_style: dashed, marker: "^"}
+  vpu_contractive_contrastive_t007_w1m_j10:
+    display_label: "VPU + contractive + contrastive (T=0.07, w=0.001, j=0.1)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0009}
+    tags: {family: vpu, contrastive: true, contractive: true, temperature: 0.07, weight: 0.001, jaccard_weight: 0.1}
+    visualization: {order: 13, color: "#0072B2", line_style: dashed, marker: "o"}
+  vpu_contractive_contrastive_t007_w1m_j25:
+    display_label: "VPU + contractive + contrastive (T=0.07, w=0.001, j=0.25)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0010}
+    tags: {family: vpu, contrastive: true, contractive: true, temperature: 0.07, weight: 0.001, jaccard_weight: 0.25}
+    visualization: {order: 14, color: "#0072B2", line_style: dashed, marker: "s"}
+  vpu_contractive_contrastive_t007_w1m_j50:
+    display_label: "VPU + contractive + contrastive (T=0.07, w=0.001, j=0.5)"
+    select: {source: vpu_jaccard_shortlist, grid_id: grid_0011}
+    tags: {family: vpu, contrastive: true, contractive: true, temperature: 0.07, weight: 0.001, jaccard_weight: 0.5}
+    visualization: {order: 15, color: "#0072B2", line_style: dashed, marker: "^"}
+
+groups:
+  vpu_jaccard_baseline:
+    - vpu_contrastive_t030_w10m
+    - vpu_contrastive_t007_w10m
+    - vpu_contrastive_t001_w1m
+    - vpu_contractive_contrastive_t007_w1m
+  vpu_jaccard_sweep:
+    - vpu_contrastive_t030_w10m_j10
+    - vpu_contrastive_t030_w10m_j25
+    - vpu_contrastive_t030_w10m_j50
+    - vpu_contrastive_t007_w10m_j10
+    - vpu_contrastive_t007_w10m_j25
+    - vpu_contrastive_t007_w10m_j50
+    - vpu_contrastive_t001_w1m_j10
+    - vpu_contrastive_t001_w1m_j25
+    - vpu_contrastive_t001_w1m_j50
+    - vpu_contractive_contrastive_t007_w1m_j10
+    - vpu_contractive_contrastive_t007_w1m_j25
+    - vpu_contractive_contrastive_t007_w1m_j50
+  vpu_jaccard_shortlist:
+    - vpu_contrastive_t030_w10m
+    - vpu_contrastive_t030_w10m_j10
+    - vpu_contrastive_t030_w10m_j25
+    - vpu_contrastive_t030_w10m_j50
+    - vpu_contrastive_t007_w10m
+    - vpu_contrastive_t007_w10m_j10
+    - vpu_contrastive_t007_w10m_j25
+    - vpu_contrastive_t007_w10m_j50
+    - vpu_contrastive_t001_w1m
+    - vpu_contrastive_t001_w1m_j10
+    - vpu_contrastive_t001_w1m_j25
+    - vpu_contrastive_t001_w1m_j50
+    - vpu_contractive_contrastive_t007_w1m
+    - vpu_contractive_contrastive_t007_w1m_j10
+    - vpu_contractive_contrastive_t007_w1m_j25
+    - vpu_contractive_contrastive_t007_w1m_j50
+
+target_field: molecule
+device: cuda
+batch_size: 2000
+pixel_fraction: 1.0
+sample_seed: 42
+geometry_sample_size: 512
+neighbours: 10
+probe_penalty: 0.01
+expected_seeds: 5
+evidence:
+  absolute_threshold: 0.0
+  relative_threshold: 0.0119
+  bin_radius: 1
+path_remap: {}
+planned_epochs: 15
+
+analyses:
+  campaign_training_dynamics:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/19_09_26_metaspace_heads_vpu_jaccard/part_0_0_campaign_training_dynamics_results
+  reconstruction_local:
+    selected_models:
+      # - vpu_contrastive_t030_w10m
+      # - vpu_contrastive_t030_w10m_j10
+      # - vpu_contrastive_t030_w10m_j25
+      # - vpu_contrastive_t030_w10m_j50
+      # - vpu_contrastive_t007_w10m
+      # - vpu_contrastive_t007_w10m_j10
+      # - vpu_contrastive_t007_w10m_j25
+      # - vpu_contrastive_t007_w10m_j50
+      # - vpu_contrastive_t001_w1m
+      # - vpu_contrastive_t001_w1m_j10
+      # - vpu_contrastive_t001_w1m_j25
+      # - vpu_contrastive_t001_w1m_j50
+      - vpu_contractive_contrastive_t007_w1m
+      # - vpu_contractive_contrastive_t007_w1m_j10
+      # - vpu_contractive_contrastive_t007_w1m_j25
+      - vpu_contractive_contrastive_t007_w1m_j50
+    repetition: 0
+    sample_pixels: 2000
+    cases_per_category: 2
+    top_k: 10
+    display_amplitudes: [0.0, 0.1, 0.5, 1.0]
+    curve_amplitudes: [0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
+    perturbation:
+      shift_bins: 1
+      extra_width_sigma: 1.0
+      base_width_sigma: 0.42
+      lognormal_sigma: 0.05
+      noise_fraction: 0.02
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/19_09_26_metaspace_heads_vpu_jaccard/part_1_reconstruction_local_results
+  reconstruction_global:
+    evaluation_split: test
+    global_perturbation_amplitudes: [0.0, 1.0]
+    global_perturbation_sample_pixels: 500
+    perturbation:
+      shift_bins: 1
+      extra_width_sigma: 1.0
+      base_width_sigma: 0.42
+      lognormal_sigma: 0.05
+      noise_fraction: 0.02
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/19_09_26_metaspace_heads_vpu_jaccard/part_2_reconstruction_global_results
+  latent_geometry:
+    evaluation_split: test
+    pair_count: 5000
+    epsilons: [0.001, 0.003, 0.01, 0.03, 0.1]
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/19_09_26_metaspace_heads_vpu_jaccard/part_3_latent_geometry_results

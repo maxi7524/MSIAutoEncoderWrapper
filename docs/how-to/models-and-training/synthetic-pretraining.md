@@ -81,6 +81,58 @@ counts must sum to `samples`. For `candidate_permuted`, the generated count is
 `count * parameters.permutations`. Validation retains the same strategy
 proportions; the counts are deterministically scaled to `validation_samples`.
 
+Every phase uses a registered `representation` to convert declared components
+into spectra. The default `triangular_peak` preserves historic behaviour. A
+sampling-plan entry may override it, allowing composition sampling and spectrum
+rendering to vary independently:
+
+```yaml
+pretraining:
+  representation:
+    strategy: triangular_peak
+    parameters:
+      peak_radius: 1
+  sampling_plan:
+    - strategy: annotation_uniform_mixture
+      count: 4096
+      representation:
+        strategy: triangular_peak
+        parameters:
+          peak_radius: 2
+```
+
+`isospec_envelope` is an alternative renderer for components that declare a
+`formula|adduct` molecular identity (or equivalent source metadata). It uses
+IsoSpec to enumerate a natural isotope envelope, applies the final ionic charge
+correction, maps all fine-structure lines with the active binner, and sums the
+result before normalisation. Relative abundances of molecular components are
+drawn from a Dirichlet occupancy and log-normal response model.
+
+Use the renderer only for strategies that generate declared molecular
+components. Keep unlabelled/background coverage on `triangular_peak` (or a
+future background renderer), because an unlabelled bin has no formula from
+which an isotope envelope can be derived.
+
+```yaml
+pretraining:
+  representation:
+    strategy: isospec_envelope
+    parameters:
+      probability_coverage: 0.999
+      max_isotopologues: 4096
+      occupancy_alpha: 1.0
+      intensity_log_sigma: 0.5
+  sampling_plan:
+    - strategy: annotation_axis_coverage
+      count: 1024
+      label_targets: true
+      representation:
+        strategy: triangular_peak
+    - strategy: annotation_uniform_mixture
+      count: 3072
+      parameters: {min_peaks: 15, max_peaks: 30}
+```
+
 ## Select objectives and labels
 
 Reconstruction criteria consume every generated spectrum. A head criterion
@@ -103,6 +155,14 @@ The current strategies are `single_random`, `single_annotated`, `random`,
 `candidate_convolved`. `random`, `annotated`, and `mixed` accept `min_peaks`
 and `max_peaks`. Candidate strategies accept molecule-count, class-selection,
 occupancy, and intensity parameters inside their `parameters` mapping.
+
+Pixel-aware train-annotation strategies are `annotation_axis_coverage`,
+`annotation_uniform_mixture`, `annotation_overlap_mixture`, and
+`annotation_rare_class_mixture`. They retain the source pixel and complete
+local annotation set for every selected bin. `annotation_axis_coverage` uses a
+count divisible by the binned-axis width, giving identical bin coverage across
+the strategy population. The remaining strategies generate mixtures of 15--30
+components by default and use train-only annotation records.
 
 ## Generate spectra from the candidate catalog
 

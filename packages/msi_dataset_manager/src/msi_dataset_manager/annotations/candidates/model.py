@@ -140,17 +140,46 @@ def calculate_theoretical_mz(
     :raises ValueError: If the formula contains an unsupported mass element, an
         adduct is unknown, or the charge is zero or inconsistent.
     """
-    composition = parse_formula(formula)
+    composition, resolved_charge = resolve_ionic_composition(formula, adduct, charge)
+    mass = _composition_mass(composition)
+    ion_mass = mass - resolved_charge * ELECTRON_MASS
+    return ion_mass / abs(resolved_charge), resolved_charge
+
+
+def resolve_ionic_composition(
+    formula: str,
+    adduct: str,
+    charge: int | None = None,
+) -> tuple[dict[str, int], int]:
+    """Return elemental ion composition after a METASPACE-style adduct change.
+
+    :param formula: Neutral elemental formula.
+    :type formula: str
+    :param adduct: METASPACE adduct notation, for example ``+H`` or ``-H``.
+    :type adduct: str
+    :param charge: Optional final charge agreeing with the adduct convention.
+    :type charge: int | None
+    :return: Positive elemental counts of the ion and its signed charge.
+    :rtype: tuple[dict[str, int], int]
+    :raises ValueError: If the adduct is unsupported, charge is inconsistent,
+        or the adduct would create a negative elemental count.
+    """
+    composition = dict(parse_formula(formula))
     delta, inferred_charge = _ADDUCTS.get(str(adduct), ({}, 0))
     if not inferred_charge:
         raise ValueError(f"Unsupported METASPACE adduct '{adduct}'.")
     resolved_charge = inferred_charge if charge is None else int(charge)
     if resolved_charge == 0 or resolved_charge != inferred_charge:
         raise ValueError("The explicit charge must match the selected adduct.")
-    mass = _composition_mass(composition)
-    mass += _composition_mass(delta)
-    ion_mass = mass - resolved_charge * ELECTRON_MASS
-    return ion_mass / abs(resolved_charge), resolved_charge
+    for element, count in delta.items():
+        composition[element] = composition.get(element, 0) + count
+        if composition[element] < 0:
+            raise ValueError(
+                f"Adduct '{adduct}' removes more {element} atoms than formula '{formula}' contains."
+            )
+        if composition[element] == 0:
+            del composition[element]
+    return composition, resolved_charge
 
 
 def make_candidate_ions(

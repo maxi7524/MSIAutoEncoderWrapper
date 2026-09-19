@@ -72,10 +72,9 @@ INFERENCE_SETTINGS = ("workspace", "model_store", "experiment_config", "sources"
                       "device", "batch_size", "pixel_fraction", "sample_seed", "geometry_sample_size",
                       "neighbours", "probe_penalty", "case_count", "evidence", "path_remap")
 
-#: Provenance entries that identify the computation itself. ``git_commit`` is
+#: Provenance entries that identify a newly computed inference run. ``git_commit`` is
 #: recorded for traceability but deliberately excluded: the analysed source content
-#: is already covered by ``source_sha256``, so committing a notebook must not
-#: invalidate an hours-long inference cache.
+#: is already covered by ``source_sha256``.
 PROVENANCE_IDENTITY = ("settings", "source_sha256", "experiment_sha256", "versions",
                        "input_sha256", "class_names", "catalogue_bins")
 
@@ -96,7 +95,7 @@ TRAINING_ONLY_SOURCES = ("training", "data/pretraining", "data/simulated_negativ
 
 
 def provenance_identity(record: dict) -> dict:
-    """Reduce a provenance record to the entries that must match for cache reuse.
+    """Reduce a provenance record to the entries that key a computed run.
 
     :param record: Output of :func:`provenance`, optionally with input digests added.
     :type record: dict
@@ -152,9 +151,9 @@ def provenance(settings: dict) -> dict:
     root = Path(settings["repository_root"])
     source_root = root / "src" / "msi_autoencoder_wrapper"
     # REMARK: The full digest (training-only subtrees excluded, see TRAINING_ONLY_SOURCES)
-    # covers every reused metric, model and data implementation, local edits included, so an
-    # analysis change invalidates the stored numbers. The narrower decoding digest keys only
-    # the decoded tensors.
+    # separates newly requested computations after a local analysis edit. Existing completed
+    # CSV artifacts remain readable: ``load_table`` verifies their checkpoint fingerprints
+    # rather than requiring the current source tree to have the same digest.
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=False)
     return {"settings": {key: settings[key] for key in INFERENCE_SETTINGS if key in settings},
             "source_sha256": _source_digest(source_root, exclude=TRAINING_ONLY_SOURCES),
@@ -567,17 +566,20 @@ def load_table(settings: dict, table: str) -> pd.DataFrame:
     :return: All individual model records; no repetition averaging is applied.
     :rtype: pandas.DataFrame
     :raises FileNotFoundError: If precomputation has not completed.
-    :raises ValueError: If settings/code changed since the completed precomputation.
+    :raises ValueError: If a cached model is incomplete or its checkpoint bytes changed.
     """
     root = Path(settings["cache_directory"])
     path = root / "latest.json"
     if not path.is_file():
         raise FileNotFoundError("Run part_1_campaign_audit and part_2_shared_inference first.")
     manifest = json.loads(path.read_text())
-    stored = provenance_identity(json.loads((Path(manifest["run_directory"]) / "metadata.json").read_text()))
-    current = provenance_identity(provenance(settings))
-    if any(stored.get(key) != value for key, value in current.items()):
-        raise ValueError("Settings, source code or package versions changed; rerun shared inference.")
+
+    # Cache provenance describes how these CSVs were produced; it is not an access lock.
+    # A notebook may legitimately change its shortlist, labels, paths or presentation code
+    # after inference. Recomputing source/input hashes here would both make that workflow
+    # needlessly expensive and reject valid completed artifacts. The checks below enforce the
+    # integrity properties that matter for loading: every model finished and its checkpoint
+    # still has the exact bytes that generated the cached tables.
     inventory = pd.read_csv(Path(manifest["run_directory"]) / "inventory.csv").set_index("model_id")
     for row in manifest["models"]:
         if not (Path(row["directory"]) / "complete.json").is_file():

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Type
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Type
 
 import numpy as np
 
@@ -12,6 +12,10 @@ from .sources import SyntheticPeakSource
 from ...utils.module_search import discover_modules
 from ...utils.printing import extract_component_signatures
 from ...utils.validators import resolve_component, validate_subclass
+
+if TYPE_CHECKING:
+    from .annotation_population import AnnotationPopulation
+    from .representations import SyntheticRepresentationSpec
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,7 @@ class SyntheticSamplingPlanEntry:
     count: int
     parameters: Mapping[str, Any] = field(default_factory=dict)
     label_targets: bool | None = None
+    representation: "SyntheticRepresentationSpec | Mapping[str, Any] | None" = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, str) or not self.strategy:
@@ -74,18 +79,38 @@ class SyntheticSamplingPlanEntry:
         count = raw.pop("count", None)
         parameters = raw.pop("parameters", {})
         label_targets = raw.pop("label_targets", None)
+        representation = raw.pop("representation", None)
         if raw:
             raise ValueError(f"Unsupported sampling_plan keys: {sorted(raw)}.")
-        return cls(strategy=strategy, count=count, parameters=parameters, label_targets=label_targets)
+        return cls(
+            strategy=strategy,
+            count=count,
+            parameters=parameters,
+            label_targets=label_targets,
+            representation=representation,
+        )
 
 
 @dataclass(frozen=True)
 class SyntheticComponent:
-    """One generated peak with an optional target-column identity and weight."""
+    """One generated peak with complete source-local labels and weight.
+
+    ``label_index`` remains for compatibility with legacy strategies. New
+    annotation strategies use ``label_indices`` to retain all labels assigned
+    to one source pixel/bin coordinate.
+    """
 
     center: int
-    label_index: int | None
+    label_index: int | None = None
     intensity_weight: float = 1.0
+    label_indices: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Normalize legacy and complete multi-label component declarations."""
+        labels = tuple(sorted({int(value) for value in self.label_indices}))
+        if self.label_index is not None:
+            labels = tuple(sorted({*labels, int(self.label_index)}))
+        object.__setattr__(self, "label_indices", labels)
 
 
 @dataclass(frozen=True)
@@ -105,6 +130,12 @@ class SyntheticSamplingContext:
     eligible_labels: tuple[int, ...]
     background_bins: np.ndarray
     default_max_peaks: int
+    annotation_population: "AnnotationPopulation | None" = None
+    sample_index: int = 0
+    entry_index: int = 0
+    entry_count: int = 1
+    epoch: int = 0
+    requested_labels: tuple[int, ...] = ()
 
 
 class SyntheticSamplingStrategy(ABC):

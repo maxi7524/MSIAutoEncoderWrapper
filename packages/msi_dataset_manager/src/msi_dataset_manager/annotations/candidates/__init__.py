@@ -10,6 +10,7 @@ from .model import (
     CandidateCompound,
     CandidateIon,
     calculate_theoretical_mz,
+    resolve_ionic_composition,
     make_candidate_ions,
 )
 from .providers import (
@@ -31,6 +32,7 @@ __all__ = [
     "LIPIDMAPSCandidateProvider",
     "build_candidate_catalog",
     "calculate_theoretical_mz",
+    "resolve_ionic_composition",
     "materialize_candidate_sources",
     "make_candidate_ions",
 ]

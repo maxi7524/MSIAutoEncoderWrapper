@@ -6,11 +6,11 @@ pretraining. The module flow is described in
 
 ## Add an annotation-coordinate strategy
 
-Place another annotation-coordinate strategy in
-`src/msi_autoencoder_wrapper/data/pretraining/strategies/with_annotations.py`
-while the implementations remain small and share the same helper functions.
-Create a separate module only when the strategy family has distinct inputs or
-shared helpers.
+Place each new pixel-aware annotation strategy in its own module below
+`src/msi_autoencoder_wrapper/data/pretraining/strategies/annotations/`.
+Shared record selection and validation belongs in `annotations/common.py`.
+Legacy coordinate-only strategies remain in `with_annotations.py` for
+compatibility; do not add new pixel-aware behavior there.
 
 Inherit `SyntheticSamplingStrategy` and register the implementation with a
 stable configuration key:
@@ -50,8 +50,11 @@ random state. Return bin coordinates within `context.source.feature_count` and
 use a target-column index only when it is aligned with
 `context.source.class_names`. Preserve `label_targets` in the returned
 definition. Do not render intensities, normalize spectra, or construct Torch
-targets inside a strategy; those responsibilities belong to
-`SyntheticSpectrumDataset`.
+targets inside a strategy; those responsibilities belong to a registered
+synthetic representation and `SyntheticSpectrumDataset`. A strategy may select
+a renderer per `sampling_plan` entry with `representation.strategy` and
+`representation.parameters`; otherwise the phase-level `representation` is
+used.
 
 Constructor parameters are passed by `sampling_plan[*].parameters`. Validate
 static configuration in the constructor. Validate constraints requiring the

@@ -19,6 +19,7 @@ from msi_dataset_manager.annotations.candidates import (
     build_candidate_catalog,
     calculate_theoretical_mz,
     materialize_candidate_sources,
+    resolve_ionic_composition,
 )
 from msi_dataset_manager.cli import build_parser
 from msi_dataset_manager.metadata import (
@@ -37,6 +38,20 @@ def test_metaspace_formula_adduct_mass_matches_known_glucose_annotation() -> Non
 
     assert charge == 1
     assert mz == pytest.approx(181.07066457, abs=2e-8)
+
+
+def test_ionic_composition_retains_adduct_atoms_for_isotope_calculation() -> None:
+    """The isotope adapter receives the elemental composition of the final ion."""
+    composition, charge = resolve_ionic_composition("C6H12O6", "+H")
+
+    assert composition == {"C": 6, "H": 13, "O": 6}
+    assert charge == 1
+
+
+def test_ionic_composition_rejects_an_adduct_removing_missing_atoms() -> None:
+    """Invalid formula/adduct pairs must not reach isotope enumeration."""
+    with pytest.raises(ValueError, match="removes more H"):
+        resolve_ionic_composition("C2", "-H")
 
 
 def test_lipidmaps_provider_normalizes_public_tsv(monkeypatch: pytest.MonkeyPatch) -> None:

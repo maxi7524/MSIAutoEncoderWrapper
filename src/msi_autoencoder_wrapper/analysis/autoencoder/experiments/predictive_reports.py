@@ -49,6 +49,11 @@ def paired_comparisons(units: pd.DataFrame, groups: list[str]) -> tuple[pd.DataF
     :rtype: tuple[pandas.DataFrame, pandas.DataFrame]
     """
     differences, summaries = [], []
+    summary_columns = [
+        "left", "right", "left_source", "right_source", "left_condition", "right_condition",
+        *groups,
+        "pairs", "mean_difference", "median_difference", "positive_pairs", "ci_low", "ci_high", "reason",
+    ]
     conditions = units[["source", "condition", "label"]].drop_duplicates().to_dict("records")
     for left, right in combinations(conditions, 2):
         a = units[(units.source == left["source"]) & (units.condition == left["condition"])]
@@ -74,7 +79,11 @@ def paired_comparisons(units: pd.DataFrame, groups: list[str]) -> tuple[pd.DataF
                               "mean_difference": mean, "median_difference": np.median(values) if n else np.nan,
                               "positive_pairs": int((values > 0).sum()), "ci_low": mean - half_width,
                               "ci_high": mean + half_width, "reason": "Exploratory unadjusted interval across seeds"})
-    return pd.DataFrame(differences), pd.DataFrame(summaries)
+    # REMARK: A campaign comparison can legitimately have no common paired seeds or
+    # contracts. Keep every requested grouping column in that case, with missing
+    # values, so result consumers can filter a stable schema and inspect ``reason``
+    # instead of failing on a missing column.
+    return pd.DataFrame(differences), pd.DataFrame(summaries, columns=summary_columns)
 
 
 def condition_order(inventory: pd.DataFrame) -> list[str]:

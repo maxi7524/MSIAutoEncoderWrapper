@@ -14,11 +14,21 @@ from msi_dataset_manager.annotations.candidates import (
 from msi_autoencoder_wrapper.data import TargetSchema
 from msi_autoencoder_wrapper.data.annotation_evidence import IonCatalogue
 from msi_autoencoder_wrapper.data.pretraining import (
+    AnnotationPeakRecord,
+    AnnotationPopulation,
     SyntheticPeakSource,
     CandidateCatalogPeakSource,
     SyntheticSpectrumConfig,
     SyntheticSpectrumDataset,
     SyntheticSamplingManager,
+)
+from msi_autoencoder_wrapper.data.pretraining.representations import (
+    SyntheticRepresentationContext,
+    get_representation_strategy,
+)
+from msi_autoencoder_wrapper.data.pretraining.sampling import (
+    SyntheticComponent,
+    SyntheticSampleDefinition,
 )
 from msi_autoencoder_wrapper.data.supervision_masks import simulated_negative_mask_key
 from msi_autoencoder_wrapper.training.criterions.autoencoder.pretraining.element_count_loss import ElementCountLoss
@@ -158,6 +168,198 @@ def test_sampling_strategies_are_discoverable_with_constructor_configuration():
     assert "annotated" in available
     assert available["annotated"]["parameters"] == {"min_peaks": 1, "max_peaks": None}
     assert "labelled mixture" in available["annotated"]["docstring"]
+
+
+def _annotation_population():
+    return AnnotationPopulation(
+        feature_count=10,
+        spectrum_ids=(17, 18),
+        records=(
+            AnnotationPeakRecord(17, 1, (0, 1)),
+            AnnotationPeakRecord(18, 8, (1,)),
+        ),
+    )
+
+
+def test_pixel_aware_annotation_mixture_preserves_complete_local_labels():
+    catalogue = IonCatalogue(("C2H4|+H", "C3H6|+H"), ((1,), (8,)), 10)
+    dataset = SyntheticSpectrumDataset(
+        catalogue,
+        torch.linspace(100, 3000, 10),
+        {"molecule": TargetSchema("molecule", "multi_label", catalogue.class_names)},
+        SyntheticSpectrumConfig(
+            samples=1,
+            sampling_plan=(
+                {
+                    "strategy": "annotation_uniform_mixture",
+                    "count": 1,
+                    "parameters": {"min_peaks": 1, "max_peaks": 1},
+                },
+            ),
+        ),
+        annotation_population=_annotation_population(),
+    )
+
+    sample = dataset[0]
+    assert sample[2]["molecule"].tolist() == [1.0, 1.0]
+    assert bool(sample[3]["molecule"].all())
+    assert sample.metadata["generator"] == "annotation_uniform_mixture"
+
+
+def test_annotation_mixture_schedules_requested_classes_uniformly_per_epoch():
+    catalogue = IonCatalogue(("C2H4|+H", "C3H6|+H"), ((1,), (8,)), 10)
+    dataset = SyntheticSpectrumDataset(
+        catalogue,
+        torch.linspace(100, 3000, 10),
+        {"molecule": TargetSchema("molecule", "multi_label", catalogue.class_names)},
+        SyntheticSpectrumConfig(
+            samples=4,
+            sampling_plan=(
+                {
+                    "strategy": "annotation_uniform_mixture",
+                    "count": 4,
+                    "parameters": {"min_peaks": 1, "max_peaks": 1},
+                },
+            ),
+        ),
+        annotation_population=_annotation_population(),
+    )
+
+    requested = [dataset[index].metadata["requested_labels"][0] for index in range(4)]
+    assert requested.count(0) == requested.count(1) == 2
+    dataset.set_epoch(3)
+    epoch_three = [dataset[index].metadata["requested_labels"] for index in range(4)]
+    dataset.set_epoch(4)
+    dataset.set_epoch(3)
+    assert [dataset[index].metadata["requested_labels"] for index in range(4)] == epoch_three
+
+
+def test_axis_coverage_requires_an_integer_number_of_full_axis_passes():
+    catalogue = IonCatalogue(("C2H4|+H", "C3H6|+H"), ((1,), (8,)), 10)
+    dataset = SyntheticSpectrumDataset(
+        catalogue,
+        torch.linspace(100, 3000, 10),
+        {"molecule": TargetSchema("molecule", "multi_label", catalogue.class_names)},
+        SyntheticSpectrumConfig(
+            samples=3,
+            sampling_plan=({"strategy": "annotation_axis_coverage", "count": 3},),
+        ),
+        annotation_population=_annotation_population(),
+    )
+
+    with pytest.raises(ValueError, match="divisible"):
+        dataset[0]
+
+
+def test_plan_entry_can_override_the_phase_representation(synthetic_factory):
+    dataset = synthetic_factory(
+        (),
+        samples=1,
+        peak_radius=0,
+        sampling_plan=(
+            {
+                "strategy": "single_annotated",
+                "count": 1,
+                "representation": {
+                    "strategy": "triangular_peak",
+                    "parameters": {"peak_radius": 2},
+                },
+            },
+        ),
+    )
+    spectrum = dataset[0][1]
+    assert int((spectrum > 0).sum()) == 4
+
+
+class IsotopeEnvelopePeakSource(SyntheticPeakSource):
+    """Two molecular ions sufficiently separated on a dense m/z axis."""
+
+    feature_count = 2_501
+    class_names = ("C2H4|+H", "C6H12O6|+H")
+    bins = ((290,), (1810,))
+
+
+def _isospec_mass_to_bin(masses):
+    """Map a 0.1 m/z test axis with out-of-range values rejected."""
+    values = np.asarray(masses, dtype=np.float64)
+    indices = np.rint(values * 10).astype(np.int64)
+    return np.where((indices >= 0) & (indices <= 2_500), indices, -1)
+
+
+def test_isospec_representation_renders_adduct_envelopes_and_sums_mixtures():
+    """Fine isotope lines are binned through the active binner before mixing."""
+    source = IsotopeEnvelopePeakSource()
+    context = SyntheticRepresentationContext(
+        source=source,
+        feature_count=source.feature_count,
+        mass_axis=np.arange(source.feature_count, dtype=np.float64) / 10,
+        mass_to_bin=_isospec_mass_to_bin,
+    )
+    definition = SyntheticSampleDefinition(
+        components=(
+            SyntheticComponent(center=290, label_indices=(0,), intensity_weight=1.0),
+            SyntheticComponent(center=1811, label_indices=(1,), intensity_weight=1.0),
+        ),
+        label_targets=True,
+        metadata={},
+    )
+
+    renderer = get_representation_strategy(
+        "isospec_envelope",
+        probability_coverage=0.999,
+    )
+    spectrum = renderer.render(np.random.default_rng(42), context, definition)
+
+    assert spectrum.shape == (source.feature_count,)
+    assert np.isfinite(spectrum).all()
+    assert np.all(spectrum >= 0)
+    assert spectrum.sum() > 0
+    assert spectrum[290] > 0
+    assert spectrum[1811] > 0
+
+
+def test_isospec_representation_requires_declared_molecular_components():
+    """A non-molecular reconstruction sample cannot invent an isotope envelope."""
+    source = IsotopeEnvelopePeakSource()
+    context = SyntheticRepresentationContext(
+        source=source,
+        feature_count=source.feature_count,
+        mass_axis=np.arange(source.feature_count, dtype=np.float64) / 10,
+    )
+    definition = SyntheticSampleDefinition(
+        components=(SyntheticComponent(center=100, intensity_weight=1.0),),
+        label_targets=False,
+        metadata={},
+    )
+
+    with pytest.raises(ValueError, match="declared molecular components"):
+        get_representation_strategy("isospec_envelope").render(
+            np.random.default_rng(42), context, definition
+        )
+
+
+def test_dataset_selects_isospec_representation_from_its_sampling_plan():
+    """The phase configuration reaches the registered molecular renderer."""
+    source = IsotopeEnvelopePeakSource()
+    dataset = SyntheticSpectrumDataset(
+        None,
+        torch.arange(source.feature_count, dtype=torch.float64) / 10,
+        {"molecule": TargetSchema("molecule", "multi_label", source.class_names)},
+        SyntheticSpectrumConfig(
+            samples=1,
+            representation={"strategy": "isospec_envelope"},
+            sampling_plan=({"strategy": "single_annotated", "count": 1},),
+        ),
+        peak_source=source,
+        mass_to_bin=_isospec_mass_to_bin,
+    )
+
+    _, spectrum, values, masks = dataset[0]
+    assert spectrum.shape == (source.feature_count,)
+    assert torch.isfinite(spectrum).all()
+    assert spectrum.sum() == pytest.approx(1.0)
+    assert values["molecule"].sum() == 1
+    assert bool(masks["molecule"].all())
 
 
 class CandidateBinner:
