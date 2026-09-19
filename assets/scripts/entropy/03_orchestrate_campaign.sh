@@ -5,7 +5,7 @@
 # REMARK
 TASK_LIMIT=12
 PARALLELISM=6
-TASK_WALLTIME=${TASK_WALLTIME:-01:00:00}
+TASK_WALLTIME=${TASK_WALLTIME:-06:00:00}
 
 # Submit bounded Slurm batches sequentially and finalize one staged campaign.
 set -euo pipefail
