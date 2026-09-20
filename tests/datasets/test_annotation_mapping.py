@@ -119,6 +119,85 @@ def test_pixel_dataset_excludes_spectra_without_retained_annotations() -> None:
     assert [dataset.get_sample_id(index) for index in range(len(dataset))] == [0, 1]
 
 
+def test_source_population_excludes_held_out_rows_and_train_mapping() -> None:
+    """Held-out merged rows cannot define dataset columns or train labels."""
+
+    class Reader:
+        @staticmethod
+        def GetNumberOfSpectra():
+            return 4
+
+        @staticmethod
+        def GetSpectrum(spectrum_id):
+            return np.array([200.1]), np.array([float(spectrum_id + 1)])
+
+    class AnnotationReader:
+        received_ranges = None
+
+        @staticmethod
+        def get_dataset_metadata():
+            return {}
+
+        @staticmethod
+        def get_annotations():
+            return [
+                {"formula": "A", "adduct": "+H"},
+                {"formula": "B", "adduct": "+H"},
+                {"formula": "TEST", "adduct": "+H"},
+            ]
+
+        @classmethod
+        def get_spectrum_annotation_index(cls, _spectrum_ids, *, spectrum_ranges=None):
+            cls.received_ranges = spectrum_ranges
+            entries = {
+                0: [(("A", "+H"), 200.1)],
+                1: [(("B", "+H"), 200.1)],
+                2: [(("TEST", "+H"), 200.1)],
+                3: [(("TEST", "+H"), 200.1)],
+            }
+            retained = range(4)
+            if spectrum_ranges is not None:
+                retained = [
+                    index
+                    for start, stop in spectrum_ranges
+                    for index in range(start, stop)
+                ]
+            return build_annotation_index(
+                spectrum_ids=list(retained),
+                entries={index: entries[index] for index in retained},
+            )
+
+    class Context:
+        annotation_reader = AnnotationReader()
+        binner = LinearBinning(bin_step=0.5, x_min=200.0, x_max=201.0)
+
+        @staticmethod
+        def get_data_reader(_source):
+            return Reader()
+
+    dataset = PixelDataset(
+        active_context=Context(),
+        normalization="none",
+        source_population={"spectrum_ranges": [[0, 2]]},
+        target_specs={"molecule": {"type": "multi_label"}},
+        annotation_settings={"mapping": {"x_mapping": "binner"}},
+        split={
+            "strategy": "predefined",
+            "fractions": {"train": 0.5, "validation": 0.0, "test": 0.5},
+            "assignments": {"train": [0], "validation": [], "test": [1]},
+        },
+    )
+
+    assert [dataset.get_sample_id(index) for index in range(len(dataset))] == [0, 1]
+    assert AnnotationReader.received_ranges == ((0, 2),)
+    assert dataset.configure_molecule_class_mapping([0]) == {"A|+H": 0}
+    assert dataset.get_class_mappings()["molecule"] == {"A|+H": 0}
+    assert torch.equal(
+        dataset.get_target_batch([1]).values["molecule"],
+        torch.tensor([[0.0]]),
+    )
+
+
 def test_pixel_dataset_masks_only_deterministic_train_positive_entries() -> None:
     """Configured positive masking leaves validation and test labels unchanged."""
 

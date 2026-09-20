@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -30,7 +30,12 @@ class DatasetAnnotationManager:
     including removal of annotations outside that coordinate system.
     """
 
-    def __init__(self, dataset: Any, settings: Mapping[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        dataset: Any,
+        settings: Mapping[str, Any] | None = None,
+        source_population: Mapping[str, Any] | None = None,
+    ) -> None:
         """Initialize a manager without accessing the annotation reader.
 
         :param dataset: Dataset exposing an active context and, for binner
@@ -38,9 +43,14 @@ class DatasetAnnotationManager:
         :type dataset: Any
         :param settings: Declarative annotation mapping configuration.
         :type settings: Mapping[str, Any] | None
+        :param source_population: Optional compact source-spectrum population.
+            The supported ``spectrum_ranges`` field contains half-open source
+            intervals evaluated before annotation sampling and splitting.
+        :type source_population: Mapping[str, Any] | None
         """
         self._dataset = dataset
         self._settings = AnnotationSettings.from_config(settings)
+        self._source_ranges = _resolve_source_ranges(source_population)
         self._mapped_index: MappedSpectrumAnnotationIndex | None = None
         self._selected_source_indices: np.ndarray | None = None
 
@@ -132,6 +142,15 @@ class DatasetAnnotationManager:
             self._selected_source_indices = self._select_source_indices(source_length)
         return self._selected_source_indices
 
+    def get_source_ranges(self) -> tuple[tuple[int, int], ...]:
+        """Return compact source intervals configured for this dataset.
+
+        :return: Sorted, non-overlapping half-open source intervals. An empty
+            tuple denotes the complete native source population.
+        :rtype: tuple[tuple[int, int], ...]
+        """
+        return self._source_ranges
+
     # Sparse mapping
     ## The reader remains independent of bins, models, and training policies.
     def _build_mapped_index(self) -> MappedSpectrumAnnotationIndex:
@@ -143,7 +162,18 @@ class DatasetAnnotationManager:
                 "DatasetAnnotationManager",
                 "Annotation mapping requires get_spectrum_annotation_index() on the reader.",
             )
-        raw_index = raw_getter(None)
+        if self._source_ranges:
+            try:
+                raw_index = raw_getter(None, spectrum_ranges=self._source_ranges)
+            except TypeError as error:
+                raise_validation_error(
+                    "DatasetAnnotationManager",
+                    "A compact source population requires an annotation reader "
+                    "supporting get_spectrum_annotation_index(..., spectrum_ranges=...).",
+                )
+                raise error  # pragma: no cover
+        else:
+            raw_index = raw_getter(None)
         cache_key = self._mapped_index_cache_key(raw_index)
         cached = _MAPPED_INDEX_CACHE.get(cache_key)
         if cached is not None:
@@ -220,6 +250,7 @@ class DatasetAnnotationManager:
             id(raw_index),
             self._settings.x_mapping,
             binner_config,
+            self._source_ranges,
         )
 
     def _map_coordinates(self, mz_values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -250,12 +281,14 @@ class DatasetAnnotationManager:
         if source_length < 0:
             raise_validation_error("DatasetAnnotationManager", "source_length cannot be negative.")
         index = self.get_mapped_index()
+        candidate_indices = self._candidate_source_indices(source_length)
         annotated = index.spectrum_ids[
             (index.spectrum_ids >= 0) & (index.spectrum_ids < source_length)
         ]
+        if self._source_ranges:
+            annotated = np.intersect1d(annotated, candidate_indices, assume_unique=True)
         annotated = np.unique(annotated.astype(np.int64, copy=False))
-        all_indices = np.arange(source_length, dtype=np.int64)
-        unannotated = np.setdiff1d(all_indices, annotated, assume_unique=True)
+        unannotated = np.setdiff1d(candidate_indices, annotated, assume_unique=True)
         target = self.get_target_settings("molecule")
         if target.empty_spectrum_policy == "exclude":
             selected = self._sample_indices(annotated, self._settings.annotated_fraction)
@@ -275,9 +308,33 @@ class DatasetAnnotationManager:
         logger.info(
             "Selected %s/%s source spectra after annotation policies.",
             selected.size,
-            source_length,
+            candidate_indices.size,
         )
         return selected
+
+    def _candidate_source_indices(self, source_length: int) -> np.ndarray:
+        """Materialize only the configured population for public indexing.
+
+        The range representation remains compact in YAML, task descriptors,
+        and annotation queries. The indexed PyTorch dataset ultimately needs a
+        deterministic source-ID vector, so it is materialized once per worker.
+        """
+        if not self._source_ranges:
+            return np.arange(source_length, dtype=np.int64)
+        if self._source_ranges[-1][1] > source_length:
+            raise_validation_error(
+                "DatasetAnnotationManager",
+                "Configured source population extends beyond the native reader length.",
+            )
+        values = np.concatenate(
+            [np.arange(start, stop, dtype=np.int64) for start, stop in self._source_ranges]
+        )
+        if values.size == 0:
+            raise_validation_error(
+                "DatasetAnnotationManager",
+                "Configured source population is empty.",
+            )
+        return values
 
     def _sample_indices(self, indices: np.ndarray, fraction: float, offset: int = 0) -> np.ndarray:
         """Deterministically sample a fraction while retaining sorted source IDs."""
@@ -297,3 +354,64 @@ def _freeze_config(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return tuple(_freeze_config(item) for item in value)
     return value
+
+
+def _resolve_source_ranges(
+    source_population: Mapping[str, Any] | None,
+) -> tuple[tuple[int, int], ...]:
+    """Validate the compact source-population declaration.
+
+    :param source_population: Optional mapping produced by a workflow-level
+        cohort-selection strategy.
+    :type source_population: Mapping[str, Any] | None
+    :return: Sorted, coalesced half-open source ranges.
+    :rtype: tuple[tuple[int, int], ...]
+    :raises ValidationError: If the declaration is malformed or overlapping.
+    """
+    if source_population is None:
+        return ()
+    if not isinstance(source_population, Mapping):
+        raise_validation_error(
+            "DatasetAnnotationManager", "source_population must be a mapping or null."
+        )
+    unknown = set(source_population) - {"spectrum_ranges"}
+    if unknown:
+        raise_validation_error(
+            "DatasetAnnotationManager",
+            f"Unsupported source_population fields: {sorted(unknown)}.",
+        )
+    ranges = source_population.get("spectrum_ranges")
+    if not isinstance(ranges, Sequence) or isinstance(ranges, (str, bytes)) or not ranges:
+        raise_validation_error(
+            "DatasetAnnotationManager",
+            "source_population.spectrum_ranges must be a nonempty sequence.",
+        )
+    normalized: list[tuple[int, int]] = []
+    for item in ranges:
+        if not isinstance(item, Sequence) or isinstance(item, (str, bytes)) or len(item) != 2:
+            raise_validation_error(
+                "DatasetAnnotationManager",
+                "Each source_population spectrum range must contain start and stop.",
+            )
+        start, stop = item
+        if (
+            isinstance(start, bool)
+            or isinstance(stop, bool)
+            or not isinstance(start, int)
+            or not isinstance(stop, int)
+            or start < 0
+            or stop <= start
+        ):
+            raise_validation_error(
+                "DatasetAnnotationManager",
+                "Source population ranges must be nonempty non-negative integer intervals.",
+            )
+        normalized.append((int(start), int(stop)))
+    normalized.sort()
+    merged: list[tuple[int, int]] = []
+    for start, stop in normalized:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return tuple(merged)

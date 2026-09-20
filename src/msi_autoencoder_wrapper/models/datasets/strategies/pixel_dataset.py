@@ -76,6 +76,7 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         normalization_epsilon: float = 1e-12,
         target_specs: Optional[Mapping[str, Mapping[str, Any]]] = None,
         annotation_settings: Optional[Mapping[str, Any]] = None,
+        source_population: Optional[Mapping[str, Any]] = None,
         chemistry: Optional[Mapping[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
@@ -98,6 +99,10 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         :param annotation_settings: Mapping, selection, and target policies for
             reader-derived molecular annotations.
         :type annotation_settings: Mapping[str, Any] | None
+        :param source_population: Optional compact source-spectrum population.
+            It is resolved before annotation selection, subset selection, and
+            train/validation/test partitioning.
+        :type source_population: Mapping[str, Any] | None
         :param chemistry: Optional local chemical snapshot with path, provider,
             and version. Required by the ``chemical_class`` target.
         :type chemistry: Mapping[str, Any] | None
@@ -135,6 +140,7 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
         self._initialize_annotation_support(
             annotation_settings,
             enabled="molecule" in self.target_specs,
+            source_population=source_population,
         )
         self._config = {
             "source": source,
@@ -143,6 +149,9 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             "target_specs": self.target_specs,
             "chemistry": self.chemistry,
             "annotation_settings": self.get_annotation_settings().get_config(),
+            "source_population": (
+                None if source_population is None else dict(source_population)
+            ),
             "split": self.get_split_config(),
         }
 
@@ -540,6 +549,54 @@ class PixelDataset(AnnotationAwareDatasetMixin, RawMSIBaseDataset):
             }
         self._resolved_class_mappings = mappings
         return mappings
+
+    def configure_molecule_class_mapping(
+        self,
+        source_indices: Sequence[int],
+    ) -> Dict[str, int]:
+        """Freeze molecule columns to identities observed in selected sources.
+
+        This is used by campaign planning after the split is known. The mapped
+        annotation index remains available for validation and test targets, but
+        the predictive head receives columns only for molecules observed in the
+        selected training source spectra.
+
+        :param source_indices: Stable source spectrum IDs belonging to the
+            training partition.
+        :type source_indices: Sequence[int]
+        :return: Deterministic molecule identity-to-column mapping.
+        :rtype: Dict[str, int]
+        :raises ValidationError: If molecular targets are not configured or no
+            selected source contains an in-range molecular annotation.
+        """
+        molecule_spec = self.target_specs.get("molecule")
+        if molecule_spec is None:
+            raise_validation_error(
+                "PixelDataset",
+                "Cannot configure a train-only mapping without a molecule target.",
+            )
+        mapped_index = self.get_mapped_annotation_index()
+        identities = {
+            "|".join(identity)
+            for source_index in source_indices
+            for identity in mapped_index.identities_for_spectrum(int(source_index))
+        }
+        if not identities:
+            raise_validation_error(
+                "PixelDataset",
+                "The training partition contains no in-range molecular annotations.",
+            )
+        mapping = build_class_mapping(identities)
+        molecule_spec["class_mapping"] = mapping
+        self._resolved_class_mappings = None
+        self._chemical_class_columns = {}
+        self._config["target_specs"] = self.target_specs
+        logger.info(
+            "Configured %s molecule head columns from %s training source spectra.",
+            len(mapping),
+            len(source_indices),
+        )
+        return mapping
 
     def get_chemical_descriptions(self) -> dict[str, Any]:
         """Read the configured frozen chemistry snapshot once, without network access.

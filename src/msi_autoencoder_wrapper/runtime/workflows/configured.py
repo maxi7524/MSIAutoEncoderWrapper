@@ -105,6 +105,100 @@ def _attach_annotation_reader(
     )
 
 
+def _resolve_cohort_source_population(
+    parameters: dict[str, Any],
+    wrapper: MSIAutoEncoderWrapper,
+) -> dict[str, list[list[int]]] | None:
+    """Resolve one compact merged-image cohort population from YAML.
+
+    ``merged_exclusion`` operates exclusively on the active merged annotation
+    store. It obtains half-open source ranges from ``pixel_segments`` and does
+    not open any individual source imzML file. ``materialized_cohort`` remains
+    reserved for a future workflow that creates a new merged dataset artifact.
+
+    :param parameters: Factory parameters containing ``cohort_selection``.
+    :type parameters: dict[str, typing.Any]
+    :param wrapper: Wrapper with an active merged annotation reader.
+    :type wrapper: MSIAutoEncoderWrapper
+    :return: Dataset ``source_population`` descriptor, or ``None`` when no
+        cohort selection is configured.
+    :rtype: dict[str, list[list[int]]] | None
+    :raises ValueError: If the strategy declaration is invalid or unsupported.
+    """
+    definition = parameters.get("cohort_selection")
+    if definition is None:
+        return None
+    if not isinstance(definition, dict):
+        raise ValueError("cohort_selection must be a mapping or null.")
+    strategy = str(definition.get("strategy", "merged_exclusion"))
+    strategy_parameters = definition.get("parameters", {})
+    if not isinstance(strategy_parameters, dict):
+        raise ValueError("cohort_selection.parameters must be a mapping.")
+    if strategy == "materialized_cohort":
+        raise NotImplementedError(
+            "cohort_selection.strategy='materialized_cohort' requires a "
+            "materialized merged artifact and is not implemented yet."
+        )
+    if strategy != "merged_exclusion":
+        raise ValueError(
+            "Unsupported cohort_selection strategy %r; use 'merged_exclusion'."
+            % strategy
+        )
+    excluded_dataset_ids = strategy_parameters.get("excluded_dataset_ids", [])
+    if not isinstance(excluded_dataset_ids, list) or not all(
+        isinstance(value, str) and value for value in excluded_dataset_ids
+    ):
+        raise ValueError(
+            "merged_exclusion.excluded_dataset_ids must be a list of nonempty strings."
+        )
+    if len(set(excluded_dataset_ids)) != len(excluded_dataset_ids):
+        raise ValueError("merged_exclusion.excluded_dataset_ids must not contain duplicates.")
+    annotation_reader = getattr(wrapper.active_context, "annotation_reader", None)
+    range_getter = getattr(annotation_reader, "get_merged_spectrum_ranges", None)
+    if not callable(range_getter):
+        raise ValueError(
+            "merged_exclusion requires an annotation reader exposing "
+            "get_merged_spectrum_ranges()."
+        )
+    ranges = range_getter(excluded_dataset_ids=excluded_dataset_ids)
+    allowed_count = sum(stop - start for start, stop in ranges)
+    logger.info(
+        "Resolved merged cohort exclusion: excluded_datasets=%s allowed_ranges=%s allowed_spectra=%s.",
+        len(excluded_dataset_ids),
+        len(ranges),
+        allowed_count,
+    )
+    return {"spectrum_ranges": [list(value) for value in ranges]}
+
+
+def _configure_train_only_molecule_mapping(
+    dataset: Any,
+    assignments: dict[str, Any],
+) -> dict[str, int] | None:
+    """Derive predictive molecule columns solely from train sample IDs.
+
+    :param dataset: Planning dataset with a completed split manifest.
+    :type dataset: typing.Any
+    :param assignments: Stable train, validation, and test sample IDs.
+    :type assignments: dict[str, typing.Any]
+    :return: Explicit molecule mapping, or ``None`` without a molecule target.
+    :rtype: dict[str, int] | None
+    """
+    target_specs = getattr(dataset, "target_specs", {})
+    if "molecule" not in target_specs:
+        return None
+    configurator = getattr(dataset, "configure_molecule_class_mapping", None)
+    if not callable(configurator):
+        raise ValueError(
+            "Train-only molecular class mapping requires "
+            "configure_molecule_class_mapping() on the planning dataset."
+        )
+    train_ids = assignments.get("train", [])
+    if not isinstance(train_ids, list):
+        raise ValueError("Split manifest train assignments must be a list.")
+    return configurator([int(value) for value in train_ids])
+
+
 def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoderWrapper:
     """Build one autoencoder pipeline with optional predictive components.
 
@@ -146,6 +240,9 @@ def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoder
     dataset = parameters["dataset"]
     dataset_parameters = deepcopy(dataset["parameters"])
     _resolve_chemistry_path(dataset_parameters, project_path)
+    source_population = _resolve_cohort_source_population(parameters, wrapper)
+    if source_population is not None:
+        dataset_parameters["source_population"] = source_population
     dataset_parameters["split"] = {
         "strategy": "predefined",
         "seed": int(split_manifest["seed"]),
@@ -222,8 +319,9 @@ def resolve_single_image_campaign(
     datasets_by_binning: dict[Any, Any] = {}
     planning_pipelines: dict[Any, tuple[MSIAutoEncoderWrapper, Any]] = {}
     jerm_precomputes: set[Any] = set()
-    split_paths: dict[int, Path] = {}
-    split_dataset: Any = None
+    split_paths: dict[Any, Path] = {}
+    split_manifests: dict[Any, dict[str, Any]] = {}
+    molecule_mappings: dict[Any, dict[str, int] | None] = {}
     resolved_parameters: list[dict[str, Any]] = []
     reference_selections: dict[Any, Any] = {}
 
@@ -232,9 +330,11 @@ def resolve_single_image_campaign(
         factory_parameters = parameters["factory_parameters"]
         # Freeze the real population on a reference axis for paired range comparisons
         reference_binning = factory_parameters.get("split_reference_binning")
+        reference_selection_key: Any | None = None
         if reference_binning is not None:
             reference_key = (_freeze(reference_binning), _freeze(factory_parameters["dataset"]),
                              int(task["reproducibility"]["common_seeds"]["split"]))
+            reference_selection_key = reference_key
             if reference_key not in reference_selections:
                 reference_parameters = deepcopy(factory_parameters)
                 reference_parameters["binning"] = deepcopy(reference_binning)
@@ -250,8 +350,6 @@ def resolve_single_image_campaign(
             factory_parameters["dataset"]["parameters"]["subset"] = {
                 "method": "source_indices", "indices": source_indices,
             }
-            if split_dataset is None:
-                split_dataset = reference_dataset
         binning = factory_parameters["binning"]
         variant = factory_parameters["variant"]
         predictive = factory_parameters.get("predictive", {})
@@ -278,6 +376,42 @@ def resolve_single_image_campaign(
                 )
             planning_pipelines[dataset_key] = (wrapper, dataset)
         wrapper, dataset = planning_pipelines[dataset_key]
+
+        # Partition before resolving predictive dimensions
+        ## The molecule head must contain only classes observed in the final
+        ## train partition, never classes confined to validation or test rows.
+        split_population_key = (
+            reference_selection_key if reference_selection_key is not None else dataset_key
+        )
+        split_key = (
+            split_population_key,
+            int(task["reproducibility"]["common_seeds"]["split"]),
+        )
+        if split_key not in split_paths:
+            split = deepcopy(dataset._split_config)
+            split["seed"] = split_key[-1]
+            dataset._split_config = split
+            dataset._partitions = None
+            manifest = dataset.create_partitions().manifest.get_config()
+            split_path = split_root / f"split-{len(split_paths):04d}.yaml"
+            _write_yaml(split_path, manifest)
+            split_paths[split_key] = split_path
+            split_manifests[split_key] = manifest
+        manifest = split_manifests[split_key]
+        molecule_mapping_key = (dataset_key, split_key[-1])
+        if molecule_mapping_key not in molecule_mappings:
+            molecule_mappings[molecule_mapping_key] = _configure_train_only_molecule_mapping(
+                dataset,
+                manifest["assignments"],
+            )
+        molecule_mapping = molecule_mappings[molecule_mapping_key]
+        if molecule_mapping is not None:
+            target_specs = factory_parameters["dataset"]["parameters"].setdefault(
+                "target_specs", {}
+            )
+            molecule_spec = target_specs.setdefault("molecule", {"type": "multi_label"})
+            molecule_spec["class_mapping"] = deepcopy(molecule_mapping)
+
         if (
             _requires_criterion(
                 parameters.get("training", {}), "JERMLoss"
@@ -314,8 +448,6 @@ def resolve_single_image_campaign(
             _write_yaml(model_path, model_config)
             model_paths[model_key] = model_path
             datasets_by_binning.setdefault(binning_key, dataset)
-            if split_dataset is None:
-                split_dataset = dataset
 
             if binning_key not in binner_paths:
                 binner_path = binner_root / f"binner-{len(binner_paths):04d}.yaml"
@@ -349,19 +481,6 @@ def resolve_single_image_campaign(
                 context_path = context_root / f"context-{len(context_paths):04d}.yaml"
                 _write_yaml(context_path, wrapper.context_manager.get_context_config())
                 context_paths[binning_key] = context_path
-
-        # Split manifests depend on the dataset and seed, not on bin width or model
-        split_key = int(task["reproducibility"]["common_seeds"]["split"])
-        if split_key not in split_paths:
-            dataset = split_dataset
-            split = deepcopy(dataset._split_config)
-            split["seed"] = split_key
-            dataset._split_config = split
-            dataset._partitions = None
-            manifest = dataset.create_partitions().manifest.get_config()
-            split_path = split_root / f"split-{len(split_paths):04d}.yaml"
-            _write_yaml(split_path, manifest)
-            split_paths[split_key] = split_path
 
         parameters["resolved"] = {
             "model_config": str(model_paths[model_key].resolve()),
@@ -497,6 +616,9 @@ def _build_planning_pipeline(
     dataset_definition = parameters.get("dataset", {})
     dataset_parameters = deepcopy(dataset_definition.get("parameters", {}))
     _resolve_chemistry_path(dataset_parameters, project_path)
+    source_population = _resolve_cohort_source_population(parameters, wrapper)
+    if source_population is not None:
+        dataset_parameters["source_population"] = source_population
     dataset_parameters["split"]["seed"] = split_seed
     dataset = wrapper.models_manager.load_dataset_config(
         {

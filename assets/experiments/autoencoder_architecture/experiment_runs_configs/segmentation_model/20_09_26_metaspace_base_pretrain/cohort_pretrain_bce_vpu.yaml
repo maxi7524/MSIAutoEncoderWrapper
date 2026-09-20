@@ -1,5 +1,8 @@
-# Cohort experiment: held-out images are selected by the adjacent metadata analysis.
-# The selected images are excluded before construction of the 90/5/5 spatial split.
+# Cohort experiment on one merged kidney image. Held-out source datasets are
+# excluded through merged SQLite pixel segments; individual source imzML files
+# are never opened. The future `materialized_cohort` strategy will create a
+# separate merged artifact, but this campaign intentionally uses
+# `merged_exclusion` to avoid data duplication.
 # TODO: Replace the provisional CNN preset with each selected final architecture.
 schema_version: 1
 
@@ -10,28 +13,33 @@ task:
   entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
   preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
   test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
-  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_cohort_campaign
+  plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
   parameters:
-    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_cohort_autoencoder
+    factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
     factory_parameters:
       project_path: data/kidney_workspace
       project_path_anchor: repository
       dtype: float32
       device: null
-      cohort_name: kidney_pretrain_training
-      # The table contains the three external images and is the canonical exclusion gate.
-      cohort_selection_path: ../../assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_1_cohort_selection_results/cohort_image_summary.csv
+      image_path: datasets/kidney/kidney.imzML
+      cohort_selection:
+        strategy: merged_exclusion
+        parameters:
+          # Median-size images selected by the cohort analysis. These datasets
+          # are entirely external: no pixel and no test-only molecule enters training.
+          excluded_dataset_ids:
+            - 2024-02-20_01h45m20s
+            - 2024-02-20_01h46m58s
+            - 2024-02-20_01h54m41s
       reader: {strategy: PyImzMLReader, parameters: {}}
       annotations: {strategy: auto, parameters: {}}
       # Paired input axes: unmeasured regions remain zero after binning.
       binning: {grid: axes}
       dataset:
-        strategy: CohortPixelDataset
+        strategy: PixelDataset
         parameters:
           source: image
           normalization: tic
-          # This generated, training-only catalogue freezes target-column order for every member.
-          annotation_catalogue_path: ../../assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_1_cohort_selection_results/training_label_coverage.csv
           target_specs:
             molecule: {type: multi_label}
           annotation_settings:
@@ -44,18 +52,23 @@ task:
             targets:
               molecule:
                 empty_spectrum_policy: exclude
-                unobserved_label_policy: assume_negative
+                unobserved_label_policy: unlabelled
                 add_annotation_presence_target: false
-          # Keep a reproducible 20% of the real cohort, stratified by image.
+          # Keep a reproducible 20% while retaining source-image proportions
+          # and at least three examples of each class before the 90/5/5 split.
           subset:
             fraction: 0.2
             seed: 42
-            method: stratified_random
-            parameters: {group_fields: image_key}
+            method: proportional_multilabel
+            parameters: {group_fields: dataset_id, minimum_positive_count: 3}
           split:
-            strategy: spatial_block
+            strategy: proportional_multilabel
             fractions: {train: 0.9, validation: 0.05, test: 0.05}
-            parameters: {block_size: 16}
+            parameters: {group_fields: dataset_id, minimum_positive_per_split: 1}
+      # Both binned axes use exactly this real-pixel subset and split manifest.
+      split_reference_binning:
+        strategy: LinearBinning
+        parameters: {bin_step: 0.55, x_min: 200.0, x_max: 900.0, aggregation: sum}
       variant: {grid: architectures}
       predictive:
         projector:

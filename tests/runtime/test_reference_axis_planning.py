@@ -3,12 +3,45 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from msi_autoencoder_wrapper.binners.binners_strategies.linear_binner import LinearBinning
 from msi_autoencoder_wrapper.data import TargetSchema
 from msi_autoencoder_wrapper.models.datasets.splitting.partitions import SplitManifest
 from msi_autoencoder_wrapper.runtime.workflows import configured
+
+
+def test_merged_exclusion_resolves_compact_ranges_from_active_annotation_reader():
+    """Workflow selection delegates exclusion to the merged-store range API."""
+
+    class AnnotationReader:
+        received = None
+
+        @classmethod
+        def get_merged_spectrum_ranges(cls, *, excluded_dataset_ids):
+            cls.received = excluded_dataset_ids
+            return ((0, 10), (15, 20))
+
+    wrapper = SimpleNamespace(
+        active_context=SimpleNamespace(annotation_reader=AnnotationReader())
+    )
+    parameters = {
+        "cohort_selection": {
+            "strategy": "merged_exclusion",
+            "parameters": {"excluded_dataset_ids": ["test-a", "test-b"]},
+        }
+    }
+
+    assert configured._resolve_cohort_source_population(parameters, wrapper) == {
+        "spectrum_ranges": [[0, 10], [15, 20]]
+    }
+    assert AnnotationReader.received == ["test-a", "test-b"]
+
+    with pytest.raises(NotImplementedError, match="materialized merged artifact"):
+        configured._resolve_cohort_source_population(
+            {"cohort_selection": {"strategy": "materialized_cohort"}}, wrapper
+        )
 
 
 def test_range_planning_freezes_population_and_split_before_expanding_axis(tmp_path, monkeypatch):
@@ -20,8 +53,10 @@ def test_range_planning_freezes_population_and_split_before_expanding_axis(tmp_p
         binner = LinearBinning(**parameters["binning"]["parameters"])
         dataset = SimpleNamespace(
             _split_config={"seed": split_seed},
+            target_specs={"molecule": {"type": "multi_label"}},
             create_partitions=lambda: SimpleNamespace(manifest=SplitManifest("fixture", split_seed, assignments)),
             get_target_schemas=lambda: {"molecule": TargetSchema("molecule", "multi_label", ("C2H4|+H",))},
+            configure_molecule_class_mapping=lambda source_ids: {"C2H4|+H": 0},
         )
         wrapper = SimpleNamespace(active_context=SimpleNamespace(binner=binner),
                                   context_manager=SimpleNamespace(get_context_config=lambda: {}))
@@ -47,5 +82,9 @@ def test_range_planning_freezes_population_and_split_before_expanding_axis(tmp_p
     assert tasks[0]["parameters"]["factory_parameters"]["dataset"]["parameters"]["subset"] == {"fraction": .1, "seed": 42}
     assert resolved[0]["resolved"]["split_manifest"] == resolved[1]["resolved"]["split_manifest"]
     assert resolved[0]["resolved"]["model_config"] != resolved[1]["resolved"]["model_config"]
+    for item in resolved:
+        assert item["factory_parameters"]["dataset"]["parameters"]["target_specs"][
+            "molecule"
+        ]["class_mapping"] == {"C2H4|+H": 0}
     with open(resolved[1]["resolved"]["split_manifest"]) as stream:
         assert yaml.safe_load(stream)["assignments"] == {k: list(v) for k, v in assignments.items()}

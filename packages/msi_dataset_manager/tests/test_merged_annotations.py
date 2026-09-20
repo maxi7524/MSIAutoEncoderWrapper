@@ -134,6 +134,7 @@ def test_writer_and_reader_preserve_classes_references_and_segments(
     assert reader.get_spectrum_metadata(1)["source_spectrum_id"] == 2
     assert reader.get_spectrum_metadata(2)["dataset_id"] == "b"
     assert reader.get_spectrum_groups([0, 1, 2]) == [("a",), ("a",), ("b",)]
+    assert reader.get_merged_spectrum_ranges(excluded_dataset_ids=["b"]) == ((0, 2),)
     reference = reader.get_spectrum_annotations(2)[0]
     assert reference["mz"] == 181.0711
     assert reference["database_name"] == "Core"
@@ -158,6 +159,16 @@ def test_writer_and_reader_preserve_classes_references_and_segments(
         [0, 1, 2, 3], filters={"max_fdr": 0.05}
     )
     assert strict_index.identities_for_spectrum(2) == ()
+
+    training_index = reader.get_spectrum_annotation_index(
+        None,
+        spectrum_ranges=((0, 2),),
+    )
+    assert training_index.spectrum_ids.tolist() == [0, 1]
+    assert training_index.annotation_identities == (
+        ("C2H4O2", "-H"),
+        ("C6H12O6", "+H"),
+    )
 
     with sqlite3.connect(store) as connection:
         tables = {

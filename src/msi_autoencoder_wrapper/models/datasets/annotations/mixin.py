@@ -25,6 +25,7 @@ class AnnotationAwareDatasetMixin:
         self,
         annotation_settings: Mapping[str, Any] | None,
         enabled: bool,
+        source_population: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize the reusable manager after dataset-specific validation.
 
@@ -32,8 +33,16 @@ class AnnotationAwareDatasetMixin:
         :type annotation_settings: Mapping[str, Any] | None
         :param enabled: Whether this dataset exposes annotation-derived targets.
         :type enabled: bool
+        :param source_population: Optional compact source-spectrum population
+            applied before annotation availability sampling, subsetting, and
+            train/validation/test splitting.
+        :type source_population: Mapping[str, Any] | None
         """
-        self._annotation_manager = DatasetAnnotationManager(self, annotation_settings)
+        self._annotation_manager = DatasetAnnotationManager(
+            self,
+            annotation_settings,
+            source_population=source_population,
+        )
         self._annotation_support_enabled = bool(enabled)
 
     def configure_annotations(self, settings: Mapping[str, Any] | None) -> None:

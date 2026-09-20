@@ -8,7 +8,7 @@ import math
 from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence
 
 from ...utils.exceptions import raise_validation_error
 from ..blobs import decode_pixel_indices
@@ -139,6 +139,8 @@ class MergedAnnotationReader:
         self,
         spectrum_ids: Any,
         filters: Optional[Mapping[str, Any]] = None,
+        *,
+        spectrum_ranges: Sequence[Sequence[int]] | None = None,
     ) -> SpectrumAnnotationIndex:
         """Return source-specific molecular m/z evidence in one bulk read.
 
@@ -151,6 +153,9 @@ class MergedAnnotationReader:
         :type spectrum_ids: Iterable[int] | None
         :param filters: Optional class and source-reference filters.
         :type filters: Mapping[str, Any] | None
+        :param spectrum_ranges: Optional half-open merged-spectrum ranges. They
+            are evaluated without expanding every range into individual IDs.
+        :type spectrum_ranges: Sequence[Sequence[int]] | None
         :return: Cached CSR spectrum annotation index.
         :rtype: SpectrumAnnotationIndex
         """
@@ -159,9 +164,10 @@ class MergedAnnotationReader:
             if spectrum_ids is None
             else tuple(sorted({int(value) for value in spectrum_ids}))
         )
+        ranges = _normalize_spectrum_ranges(spectrum_ranges)
         effective = {**self.default_filters, **dict(filters or {})}
         filter_key = tuple(sorted((str(key), repr(value)) for key, value in effective.items()))
-        cache_key = (selected, filter_key)
+        cache_key = (selected, ranges, filter_key)
         cached = self._spectrum_annotation_indices.get(cache_key)
         if cached is not None:
             return cached
@@ -177,6 +183,16 @@ class MergedAnnotationReader:
                 ORDER BY merged_pixel_start
                 """
             ).fetchall()
+            if ranges:
+                segments = [
+                    segment
+                    for segment in segments
+                    if _range_overlaps(
+                        int(segment["merged_pixel_start"]),
+                        int(segment["merged_pixel_start"]) + int(segment["segment_length"]),
+                        ranges,
+                    )
+                ]
             class_rows = connection.execute(
                 """
                 SELECT merged_annotation_id, formula, adduct, charge,
@@ -223,6 +239,8 @@ class MergedAnnotationReader:
             for pixel in record["spectrum_ids"]:
                 if selected_set is not None and pixel not in selected_set:
                     continue
+                if ranges and not _spectrum_id_in_ranges(pixel, ranges):
+                    continue
                 position = bisect_right(starts, pixel) - 1
                 segment = segments[position] if position >= 0 else None
                 if segment is None or pixel >= (
@@ -240,6 +258,66 @@ class MergedAnnotationReader:
         index = build_annotation_index(represented_ids, entries)
         self._spectrum_annotation_indices[cache_key] = index
         return index
+
+    def get_merged_spectrum_ranges(
+        self,
+        *,
+        excluded_dataset_ids: Sequence[str] = (),
+    ) -> tuple[tuple[int, int], ...]:
+        """Return compact merged-spectrum ranges after source exclusion.
+
+        The result contains sorted, non-overlapping half-open intervals
+        ``(start, stop)``. The query reads only ``pixel_segments`` and
+        ``datasets_metadata``; it never opens source imzML files and never
+        materializes every individual pixel index.
+
+        :param excluded_dataset_ids: Source dataset IDs withheld from the
+            merged population.
+        :type excluded_dataset_ids: Sequence[str]
+        :return: Allowed half-open merged-spectrum intervals.
+        :rtype: tuple[tuple[int, int], ...]
+        :raises ValidationError: If an excluded ID is absent or every segment
+            would be removed.
+        """
+        if isinstance(excluded_dataset_ids, (str, bytes)):
+            raise_validation_error(
+                "MergedAnnotationReader",
+                "excluded_dataset_ids must be a sequence of dataset IDs, not a string.",
+            )
+        excluded = {str(value) for value in excluded_dataset_ids}
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT datasets_metadata.source_dataset_id,
+                       pixel_segments.merged_pixel_start,
+                       pixel_segments.segment_length
+                FROM pixel_segments
+                JOIN datasets_metadata USING (dataset_index)
+                ORDER BY pixel_segments.merged_pixel_start
+                """
+            ).fetchall()
+        known = {str(row["source_dataset_id"]) for row in rows}
+        missing = sorted(excluded - known)
+        if missing:
+            raise_validation_error(
+                "MergedAnnotationReader",
+                f"Excluded dataset IDs are absent from the merged store: {missing}.",
+            )
+        ranges = [
+            (
+                int(row["merged_pixel_start"]),
+                int(row["merged_pixel_start"]) + int(row["segment_length"]),
+            )
+            for row in rows
+            if str(row["source_dataset_id"]) not in excluded
+        ]
+        normalized = _normalize_spectrum_ranges(ranges)
+        if not normalized:
+            raise_validation_error(
+                "MergedAnnotationReader",
+                "Source exclusion removed every merged spectrum segment.",
+            )
+        return normalized
 
     def get_spectrum_metadata(self, spectrum_id: int) -> Dict[str, Any]:
         """Return source dataset metadata and source index for one merged pixel."""
@@ -470,3 +548,61 @@ def _matches_reference_filters(
         if key in record and record.get(key) != value:
             return False
     return True
+
+
+def _normalize_spectrum_ranges(
+    ranges: Sequence[Sequence[int]] | None,
+) -> tuple[tuple[int, int], ...]:
+    """Validate and merge half-open merged-spectrum intervals."""
+    if ranges is None:
+        return ()
+    normalized: list[tuple[int, int]] = []
+    for value in ranges:
+        if isinstance(value, (str, bytes)) or len(value) != 2:
+            raise_validation_error(
+                "MergedAnnotationReader",
+                "Every spectrum range must contain exactly start and stop indices.",
+            )
+        start, stop = value
+        if (
+            isinstance(start, bool)
+            or isinstance(stop, bool)
+            or not isinstance(start, int)
+            or not isinstance(stop, int)
+            or start < 0
+            or stop <= start
+        ):
+            raise_validation_error(
+                "MergedAnnotationReader",
+                "Spectrum ranges must be non-empty non-negative integer intervals.",
+            )
+        normalized.append((int(start), int(stop)))
+    merged: list[tuple[int, int]] = []
+    for start, stop in sorted(normalized):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return tuple(merged)
+
+
+def _spectrum_id_in_ranges(
+    spectrum_id: int,
+    ranges: Sequence[tuple[int, int]],
+) -> bool:
+    """Return whether one merged spectrum belongs to a half-open interval."""
+    starts = [start for start, _ in ranges]
+    position = bisect_right(starts, int(spectrum_id)) - 1
+    return position >= 0 and int(spectrum_id) < ranges[position][1]
+
+
+def _range_overlaps(
+    start: int,
+    stop: int,
+    ranges: Sequence[tuple[int, int]],
+) -> bool:
+    """Return whether one interval intersects any normalized selection range."""
+    return any(
+        start < selected_stop and selected_start < stop
+        for selected_start, selected_stop in ranges
+    )
