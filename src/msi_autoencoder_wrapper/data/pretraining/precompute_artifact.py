@@ -19,9 +19,10 @@ from ...utils.logger import get_custom_logger
 
 logger = get_custom_logger(__name__)
 
-# REMARK: Version 2 invalidates provisional artifacts created before the
-# persistent cache and batch-rendering contract were finalized.
-ARTIFACT_SCHEMA_VERSION = 2
+# REMARK: Version 3 adds slot-aligned blank components, quota provenance, and
+# per-row Dirichlet concentrations. Version 2 artifacts cannot represent more
+# than one unannotated peak in a mixture and are therefore intentionally stale.
+ARTIFACT_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -30,16 +31,48 @@ class SyntheticManifest:
 
     component_ids: np.ndarray
     blank_centers: np.ndarray
+    requested_target_indices: np.ndarray
+    component_kinds: np.ndarray
     anchor_bins: np.ndarray
+    annotated_concentrations: np.ndarray
+    blank_concentrations: np.ndarray
 
     def __post_init__(self) -> None:
         if self.component_ids.ndim != 2:
             raise ValueError("Manifest component IDs must have shape (N, K).")
-        sample_count = self.component_ids.shape[0]
-        if self.blank_centers.shape != (sample_count,):
-            raise ValueError("Manifest blank centers must have shape (N,).")
+        sample_count, slot_count = self.component_ids.shape
+        slot_shape = (sample_count, slot_count)
+        for name, values in (
+            ("blank centers", self.blank_centers),
+            ("requested target indices", self.requested_target_indices),
+            ("component kinds", self.component_kinds),
+        ):
+            if values.shape != slot_shape:
+                raise ValueError(f"Manifest {name} must have shape (N, K).")
         if self.anchor_bins.shape != (sample_count,):
             raise ValueError("Manifest anchor bins must have shape (N,).")
+        if self.annotated_concentrations.shape != (sample_count,):
+            raise ValueError(
+                "Manifest annotated concentrations must have shape (N,)."
+            )
+        if self.blank_concentrations.shape != (sample_count,):
+            raise ValueError("Manifest blank concentrations must have shape (N,).")
+        annotated = self.component_ids >= 0
+        blank = self.blank_centers >= 0
+        if bool((annotated & blank).any()):
+            raise ValueError("A manifest slot cannot be annotated and blank.")
+        if bool((~(annotated | blank)).all(axis=1).any()):
+            raise ValueError("Every manifest row needs at least one component.")
+        if bool((self.requested_target_indices[~annotated] >= 0).any()):
+            raise ValueError("Only annotated slots may request target classes.")
+        if not np.isfinite(self.annotated_concentrations).all() or bool(
+            (self.annotated_concentrations <= 0).any()
+        ):
+            raise ValueError("Annotated concentrations must be finite and positive.")
+        if not np.isfinite(self.blank_concentrations).all() or bool(
+            (self.blank_concentrations <= 0).any()
+        ):
+            raise ValueError("Blank concentrations must be finite and positive.")
 
 
 @dataclass(frozen=True)
@@ -133,7 +166,17 @@ class SyntheticArtifactStore:
                 name: SyntheticManifest(
                     component_ids=arrays[f"{name}__component_ids"],
                     blank_centers=arrays[f"{name}__blank_centers"],
+                    requested_target_indices=arrays[
+                        f"{name}__requested_target_indices"
+                    ],
+                    component_kinds=arrays[f"{name}__component_kinds"],
                     anchor_bins=arrays[f"{name}__anchor_bins"],
+                    annotated_concentrations=arrays[
+                        f"{name}__annotated_concentrations"
+                    ],
+                    blank_concentrations=arrays[
+                        f"{name}__blank_concentrations"
+                    ],
                 )
                 for name in metadata["population_names"]
             }
@@ -168,7 +211,17 @@ class SyntheticArtifactStore:
         for name, manifest in artifact.manifests.items():
             arrays[f"{name}__component_ids"] = manifest.component_ids
             arrays[f"{name}__blank_centers"] = manifest.blank_centers
+            arrays[f"{name}__requested_target_indices"] = (
+                manifest.requested_target_indices
+            )
+            arrays[f"{name}__component_kinds"] = manifest.component_kinds
             arrays[f"{name}__anchor_bins"] = manifest.anchor_bins
+            arrays[f"{name}__annotated_concentrations"] = (
+                manifest.annotated_concentrations
+            )
+            arrays[f"{name}__blank_concentrations"] = (
+                manifest.blank_concentrations
+            )
         np.savez_compressed(directory / "artifact.npz", **arrays)
         (directory / "metadata.json").write_text(
             json.dumps(

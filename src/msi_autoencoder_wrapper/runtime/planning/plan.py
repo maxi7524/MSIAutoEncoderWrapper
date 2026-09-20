@@ -56,22 +56,40 @@ def _grid_references(value: Any) -> set[str]:
     return set()
 
 
-def _replace_grid_references(value: Any, assignments: dict[str, Any]) -> Any:
-    """Replace declarative ``{grid: name}`` nodes with selected values."""
+def _replace_grid_references(
+    value: Any,
+    assignments: dict[str, Any],
+    resolving: frozenset[str] = frozenset(),
+) -> Any:
+    """Replace grid nodes, including references nested in selected values."""
     if isinstance(value, dict):
         if set(value) in ({"grid"}, {"grid", "select"}):
-            selected = deepcopy(assignments[value["grid"]])
+            grid_name = value["grid"]
+            if grid_name in resolving:
+                raise ValueError(
+                    f"Grid values contain a recursive reference to '{grid_name}'."
+                )
+            selected = _replace_grid_references(
+                deepcopy(assignments[grid_name]),
+                assignments,
+                resolving | {grid_name},
+            )
             field = value.get("select")
             if field is None:
                 return selected
             if not isinstance(selected, dict) or field not in selected:
                 raise ValueError(
-                    f"Grid '{value['grid']}' does not provide selected field '{field}'."
+                    f"Grid '{grid_name}' does not provide selected field '{field}'."
                 )
             return deepcopy(selected[field])
-        return {key: _replace_grid_references(item, assignments) for key, item in value.items()}
+        return {
+            key: _replace_grid_references(item, assignments, resolving)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_replace_grid_references(item, assignments) for item in value]
+        return [
+            _replace_grid_references(item, assignments, resolving) for item in value
+        ]
     return deepcopy(value)
 
 

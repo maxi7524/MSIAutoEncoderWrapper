@@ -75,7 +75,12 @@ def test_torch_linear_batch_binning_matches_single_spectrum_batches() -> None:
 
     assert dense.spectra.shape == (2, 2)
     assert torch.allclose(dense.spectra, expected)
-    assert torch.allclose(dense.space.mass_axis, torch.tensor([0.5, 1.5], dtype=torch.float64))
+    assert dense.spectra.dtype == torch.float32
+    assert dense.space.mass_axis.dtype == torch.float32
+    assert torch.allclose(
+        dense.space.mass_axis,
+        torch.tensor([0.5, 1.5], dtype=torch.float32),
+    )
     assert dense.targets is raw.targets
 
 
@@ -206,7 +211,9 @@ def test_per_class_f1_accumulates_counts_across_batches() -> None:
         torch.tensor([[0, 1]]),
     )
 
-    assert torch.allclose(metric.compute(), torch.tensor([2.0 / 3.0, 1.0], dtype=torch.float64))
+    result = metric.compute()
+    assert result.dtype == torch.float32
+    assert torch.allclose(result, torch.tensor([2.0 / 3.0, 1.0]))
 
 
 def test_spectrum_space_is_shared_without_axis_expansion() -> None:

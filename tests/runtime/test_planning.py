@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from msi_autoencoder_wrapper.runtime.planning import build_plan
 
 
@@ -105,3 +107,51 @@ def test_plan_reuses_one_grid_cell_for_corresponding_head_and_criterion() -> Non
     assert len(plan.tasks) == 2
     assert plan.tasks[0].parameters["predictive"] == config["grid"]["methods"]["values"][0]["predictive"]
     assert plan.tasks[0].parameters["training"]["criterions"] == config["grid"]["methods"]["values"][0]["criterions"]
+
+
+def test_selected_grid_value_resolves_references_to_another_grid() -> None:
+    """A schedule may select axis-specific constants without a copied matrix."""
+    config = _config()
+    config["runs"] = {"repetitions": 1}
+    config["task"]["parameters"] = {
+        "axis": {"grid": "axes", "select": "binning"},
+        "phases": {"grid": "schedules"},
+    }
+    config["grid"] = {
+        "axes": {
+            "values": [
+                {"binning": "short", "minimum": 3},
+                {"binning": "extended", "minimum": 4},
+            ]
+        },
+        "schedules": {
+            "values": [
+                {
+                    "min_fragments": {
+                        "grid": "axes",
+                        "select": "minimum",
+                    }
+                }
+            ]
+        },
+    }
+
+    plan = build_plan(config)
+
+    assert [task.parameters for task in plan.tasks] == [
+        {"axis": "short", "phases": {"min_fragments": 3}},
+        {"axis": "extended", "phases": {"min_fragments": 4}},
+    ]
+
+
+def test_recursive_grid_value_is_rejected() -> None:
+    """Nested resolution fails explicitly instead of recursing forever."""
+    config = _config()
+    config["runs"] = {"repetitions": 1}
+    config["task"]["parameters"] = {"value": {"grid": "recursive"}}
+    config["grid"] = {
+        "recursive": {"values": [{"grid": "recursive"}]},
+    }
+
+    with pytest.raises(ValueError, match="recursive reference"):
+        build_plan(config)

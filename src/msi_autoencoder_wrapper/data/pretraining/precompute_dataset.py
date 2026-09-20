@@ -52,7 +52,7 @@ class PrecomputedSyntheticDataset(Dataset):
 
         # Batch renderer state
         self.space = SpectrumSpace(
-            torch.as_tensor(artifact.axis, dtype=torch.float64),
+            torch.as_tensor(artifact.axis, dtype=self.dtype),
             normalization=artifact.normalization,
         )
         sparse_indices = (
@@ -96,7 +96,7 @@ class PrecomputedSyntheticDataset(Dataset):
         """Vectorially render one batch and construct complete molecular targets."""
         row_ids = np.asarray(rows, dtype=np.int64)
         component_ids = self.manifest.component_ids[row_ids]  # (B, K)
-        blank_centers = self.manifest.blank_centers[row_ids]  # (B,)
+        blank_centers = self.manifest.blank_centers[row_ids]  # (B, K)
         spectra = self._render_batch(component_ids, blank_centers, row_ids)  # (B, M)
         return SpectrumBatch(
             sample_ids=torch.as_tensor(row_ids, dtype=torch.long),
@@ -109,6 +109,14 @@ class PrecomputedSyntheticDataset(Dataset):
                     "fingerprint": self.artifact.fingerprint,
                     "population": self.population,
                     "epoch": self.epoch,
+                    "requested_target_indices": torch.as_tensor(
+                        self.manifest.requested_target_indices[row_ids],
+                        dtype=torch.long,
+                    ),
+                    "component_kinds": torch.as_tensor(
+                        self.manifest.component_kinds[row_ids],
+                        dtype=torch.uint8,
+                    ),
                 }
             },
         )
@@ -121,12 +129,18 @@ class PrecomputedSyntheticDataset(Dataset):
     ) -> torch.Tensor:
         """Render sparse basis mixtures and generic blank-bin peaks."""
         ids = torch.as_tensor(component_ids, dtype=torch.long)  # (B, K)
-        valid = ids >= 0  # (B, K)
+        annotated = ids >= 0  # (B, K)
+        blank = blank_centers >= 0  # (B, K)
         batch_size = ids.shape[0]
         safe_ids = ids.clamp_min(0)  # (B, K)
         weights = _component_weights(
             row_ids=row_ids,
-            component_mask=valid.numpy(),
+            annotated_mask=annotated.numpy(),
+            blank_mask=blank,
+            annotated_concentrations=self.manifest.annotated_concentrations[
+                row_ids
+            ],
+            blank_concentrations=self.manifest.blank_concentrations[row_ids],
             seed=self.seed,
             epoch=self.epoch,
         )  # (B, K)
@@ -135,7 +149,11 @@ class PrecomputedSyntheticDataset(Dataset):
             dtype=torch.float32,
         )  # (B, P)
         if self.artifact.prototype_count:
-            composition.scatter_add_(1, safe_ids, weights)
+            composition.scatter_add_(
+                1,
+                safe_ids,
+                weights * annotated.to(dtype=weights.dtype),
+            )
             spectra = torch.sparse.mm(
                 self._transposed_basis,
                 composition.transpose(0, 1),
@@ -148,6 +166,7 @@ class PrecomputedSyntheticDataset(Dataset):
         _add_blank_profiles(
             spectra,
             torch.as_tensor(blank_centers, dtype=torch.long),
+            weights,
             radius=self.artifact.blank_peak_radius,
         )
         denominator = {
@@ -194,70 +213,86 @@ class PrecomputedSyntheticDataset(Dataset):
 def _component_weights(
     *,
     row_ids: np.ndarray,
-    component_mask: np.ndarray,
+    annotated_mask: np.ndarray,
+    blank_mask: np.ndarray,
+    annotated_concentrations: np.ndarray,
+    blank_concentrations: np.ndarray,
     seed: int,
     epoch: int,
 ) -> torch.Tensor:
-    """Generate stateless vectorized Dirichlet(1) component weights."""
-    positions = np.arange(component_mask.shape[1], dtype=np.uint64)[None, :]
-    seed_state = np.uint64(
-        (int(seed) * 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
+    """Generate row-stable Dirichlet weights with annotated-priority priors.
+
+    REMARK: One independent NumPy generator per manifest row makes the result
+    invariant to DataLoader batch composition and ordering. The loop is over
+    the batch dimension only; spectrum rendering remains sparse and batched.
+    """
+    row_ids = np.asarray(row_ids, dtype=np.int64)
+    annotated_mask = np.asarray(annotated_mask, dtype=bool)
+    blank_mask = np.asarray(blank_mask, dtype=bool)
+    if annotated_mask.shape != blank_mask.shape:
+        raise ValueError("Annotated and blank masks must have the same shape.")
+    batch_size, slot_count = annotated_mask.shape
+    if row_ids.shape != (batch_size,):
+        raise ValueError("row_ids must have shape (B,).")
+    annotated_concentrations = np.asarray(
+        annotated_concentrations,
+        dtype=np.float64,
     )
-    epoch_state = np.uint64(
-        ((int(epoch) + 1) * 0xBF58476D1CE4E5B9) & ((1 << 64) - 1)
-    )
-    states = (
-        np.asarray(row_ids, dtype=np.uint64)[:, None]
-        ^ seed_state
-        ^ epoch_state
-        ^ (positions * np.uint64(0x94D049BB133111EB))
-    )
-    uniform = _splitmix64_uniform(states)  # (B, K)
-    exponential = -np.log(np.clip(uniform, np.finfo(np.float64).tiny, 1.0))
-    exponential *= component_mask
-    denominator = exponential.sum(axis=1, keepdims=True)
-    weights = np.divide(
-        exponential,
-        denominator,
-        out=np.zeros_like(exponential),
-        where=denominator > 0,
-    ).astype(np.float32)
+    blank_concentrations = np.asarray(blank_concentrations, dtype=np.float64)
+    if annotated_concentrations.shape != (batch_size,) or (
+        blank_concentrations.shape != (batch_size,)
+    ):
+        raise ValueError("Dirichlet concentrations must have shape (B,).")
+
+    weights = np.zeros((batch_size, slot_count), dtype=np.float32)
+    for batch_index, row_id in enumerate(row_ids):
+        valid = annotated_mask[batch_index] | blank_mask[batch_index]  # (K,)
+        alpha = np.where(
+            annotated_mask[batch_index],
+            annotated_concentrations[batch_index],
+            blank_concentrations[batch_index],
+        )[valid]  # (K_valid,)
+        if not alpha.size or not np.isfinite(alpha).all() or bool((alpha <= 0).any()):
+            raise ValueError("Every rendered row needs positive finite concentrations.")
+        generator = np.random.default_rng(
+            np.random.SeedSequence([int(seed), int(epoch), int(row_id)])
+        )
+        weights[batch_index, valid] = generator.dirichlet(alpha).astype(
+            np.float32,
+            copy=False,
+        )
     return torch.as_tensor(weights)  # (B, K)
-
-
-def _splitmix64_uniform(values: np.ndarray) -> np.ndarray:
-    """Map uint64 states to deterministic open-unit-interval values."""
-    state = np.asarray(values, dtype=np.uint64) + np.uint64(0x9E3779B97F4A7C15)
-    state = (state ^ (state >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
-    state = (state ^ (state >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
-    state = state ^ (state >> np.uint64(31))
-    return ((state >> np.uint64(11)).astype(np.float64) + 0.5) / float(1 << 53)
 
 
 def _add_blank_profiles(
     spectra: torch.Tensor,
     centers: torch.Tensor,
+    weights: torch.Tensor,
     *,
     radius: int,
 ) -> None:
-    """Add normalized triangular profiles at blank axis anchors."""
-    active = centers >= 0  # (B,)
+    """Add weighted normalized triangular profiles at blank axis anchors."""
+    if centers.ndim != 2 or weights.shape != centers.shape:
+        raise ValueError("Blank centers and weights must have shape (B, K).")
+    active = centers >= 0  # (B, K)
     if not bool(active.any()):
         return
     offsets = torch.arange(-radius, radius + 1, dtype=torch.long)  # (W,)
-    positions = centers[:, None] + offsets[None, :]  # (B, W)
+    positions = centers[:, :, None] + offsets[None, None, :]  # (B, K, W)
     valid = (
-        active[:, None]
+        active[:, :, None]
         & (positions >= 0)
         & (positions < spectra.shape[1])
-    )  # (B, W)
+    )  # (B, K, W)
     profile = 1.0 - offsets.abs().to(dtype=spectra.dtype) / float(radius + 1)  # (W,)
-    values = profile.expand_as(positions).clone() * valid.to(dtype=spectra.dtype)  # (B, W)
-    values = values / values.sum(dim=1, keepdim=True).clamp_min(
+    values = profile.expand_as(positions).clone() * valid.to(dtype=spectra.dtype)  # (B, K, W)
+    values = values / values.sum(dim=2, keepdim=True).clamp_min(
         torch.finfo(spectra.dtype).tiny
-    )  # (B, W)
+    )  # (B, K, W)
+    values = values * weights[:, :, None]  # (B, K, W)
+    batch_size = spectra.shape[0]
     spectra.scatter_add_(
         1,
-        positions.clamp(0, spectra.shape[1] - 1),
-        values,
+        positions.clamp(0, spectra.shape[1] - 1).reshape(batch_size, -1),
+        values.reshape(batch_size, -1),
     )

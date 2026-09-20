@@ -1,17 +1,12 @@
-# Paired pretraining ablations on the common 200-900 axis and the extended 100-3000 axis.
-# Each task initializes a fresh model; synthetic and real phases within that task share its weights.
-# The reference-axis selection freezes the same real source IDs and train/validation/test split.
-# Unmeasured ranges are zero-filled. No acquisition channels, hidden intervals, or imputation targets.
-# Compare no pretraining, single/mixed spectra, MSE/Masserstein, supervised ion BCE on/off, and atom counts on/off.
-# Atom counts are supervised only for one annotated component without background; mixtures remain masked.
-# Synthetic ion labels are fully known by construction.
-# Contrastive is intentionally absent here: select the real-data head and its contrastive setting first.
-# TODO: Replace the provisional real-phase BCE objective with that selected head and contrastive condition.
-# TODO: Set final pretraining duration, sampling counts, and objective weights after the initial comparisons.
-
+# Final paired synthetic-pretraining ablation for the selected predictive model.
+# The three excluded source datasets remain outside every split in this campaign.
+# Joint schedules shuffle single-bin and permutation rows in one optimizer phase;
+# staged schedules train the same row populations in single-bin -> permutation order.
 schema_version: 1
+
 experiment:
-  name: kidney-pretraining
+  name: kidney-metaspace-pretraining-final
+
 task:
   entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:run_wrapper_training
   preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
@@ -22,31 +17,29 @@ task:
     factory_parameters:
       project_path: data/kidney_workspace
       project_path_anchor: repository
-      image_path: datasets/kidney/kidney.imzML
+      dtype: float32
       device: null
-      reader:
-        strategy: PyImzMLReader
-        parameters: {}
-      annotations:
-        strategy: auto
-        parameters: {}
-      binning:
-        grid: axes
-      inverse_binning:
-        strategy: PassthroughInverseBinner
+      image_path: datasets/kidney/kidney.imzML
+      cohort_selection:
+        strategy: merged_exclusion
+        parameters:
+          excluded_dataset_ids:
+            - 2024-02-20_01h45m20s
+            - 2024-02-20_01h46m58s
+            - 2024-02-20_01h54m41s
+      reader: {strategy: PyImzMLReader, parameters: {}}
+      annotations: {strategy: auto, parameters: {}}
+      binning: {grid: axes, select: binning}
+      inverse_binning: {strategy: PassthroughInverseBinner}
       dataset:
         strategy: PixelDataset
         parameters:
           source: image
           normalization: tic
           target_specs:
-            molecule:
-              type: multi_label
-            element_counts:
-              type: regression
+            molecule: {type: multi_label}
           annotation_settings:
-            mapping:
-              x_mapping: binner
+            mapping: {x_mapping: binner}
             selection:
               annotated_fraction: 1.0
               unannotated_fraction: 0.0
@@ -58,31 +51,26 @@ task:
                 unobserved_label_policy: unlabelled
                 add_annotation_presence_target: false
           subset:
-            fraction: 0.1
+            fraction: 0.2
             seed: 42
             method: proportional_multilabel
-            parameters:
-              group_fields: dataset_id
-              minimum_positive_count: 3
+            parameters: {group_fields: dataset_id, minimum_positive_count: 3}
           split:
             strategy: proportional_multilabel
-            fractions:
-              train: 0.8
-              validation: 0.1
-              test: 0.1
-            parameters:
-              group_fields: dataset_id
-              minimum_positive_per_split: 1
-      variant:
-        grid: architectures
+            fractions: {train: 0.9, validation: 0.05, test: 0.05}
+            parameters: {group_fields: dataset_id, minimum_positive_per_split: 1}
+      split_reference_binning:
+        strategy: LinearBinning
+        parameters:
+          {bin_step: 0.55, x_min: 200.0, x_max: 900.0, aggregation: sum}
+      variant: {grid: architectures}
       predictive:
         projector:
           strategy: LinearProjector
-          parameters:
-            latent_dim: 10
-            projection_dim: 64
+          parameters: {latent_dim: 10, projection_dim: 64}
         heads:
-          molecule_primary:
+          # One logit head is reused by synthetic BCE and real-data VPU.
+          molecule_vpu:
             target_field: molecule
             strategy: LinearClassificationHead
             parameters:
@@ -90,522 +78,344 @@ task:
               output_dim: auto_from_target
               hidden_dim: 128
               dropout: 0.1
-          element_counts:
-            target_field: element_counts
-            strategy: LinearClassificationHead
-            parameters:
-              latent_dim: 10
-              output_dim: auto_from_target
-              hidden_dim: 128
-              dropout: 0.1
-      split_reference_binning:
-        strategy: LinearBinning
-        parameters:
-          bin_step: 0.55
-          x_min: 200.0
-          x_max: 900.0
-          aggregation: sum
     model_name: null
     training:
       patience: 10
-      continuation:
-        enabled: true
-        resume: true
-        checkpoint_every_epochs: 1
-      checkpoint:
-        enabled: true
-        restore_best: true
-      phases:
-        grid: schedules
-runs:
-  repetitions: 5
+      continuation: {enabled: true, resume: true, checkpoint_every_epochs: 1}
+      checkpoint: {enabled: true, restore_best: true}
+      phases: {grid: schedules}
+
+runs: {repetitions: 5}
 seeds:
-  common_seeds:
-    split: 42
-    dataloader: 43
-  run_seeds:
-    model_initialization: 1000
-    training: 2000
+  common_seeds: {split: 42, dataloader: 43}
+  run_seeds: {model_initialization: 1000, training: 2000}
+
 grid:
-  # TODO: Replace this baseline architecture after model selection; align all latent_dim values.
-  architectures:
-    values:
-    - name: conv1d-ae-32-16-8-latent-10
-      preset: CNNAutoencoder
-      parameters:
-        latent_dim: 10
-        channels:
-        - 1
-        - 32
-        - 16
-        - 8
-        kernels:
-        - 5
-        - 7
-        - 3
-        strides:
-        - 3
-        - 3
-        - 3
-        output_normalization:
-          type: tic
-          parameters:
-            epsilon: 1.0e-12
   axes:
     values:
-    - strategy: LinearBinning
-      parameters:
-        bin_step: 0.55
-        x_min: 200.0
-        x_max: 900.0
-        aggregation: sum
-    - strategy: LinearBinning
-      parameters:
-        bin_step: 0.55
-        x_min: 100.0
-        x_max: 3000.0
-        aggregation: sum
+      - name: axis-200-900
+        artifact_key: kidney-metaspace-200-900-v3
+        min_fragments: 3
+        max_fragments: 61
+        binning:
+          strategy: LinearBinning
+          parameters:
+            {bin_step: 0.55, x_min: 200.0, x_max: 900.0, aggregation: sum}
+      - name: axis-100-3000
+        artifact_key: kidney-metaspace-100-3000-v3
+        min_fragments: 4
+        max_fragments: 68
+        binning:
+          strategy: LinearBinning
+          parameters:
+            {bin_step: 0.55, x_min: 100.0, x_max: 3000.0, aggregation: sum}
+
+  architectures:
+    values:
+      - name: conv1d-ae-32-16-8-latent-10
+        preset: CNNAutoencoder
+        parameters:
+          latent_dim: 10
+          channels: [1, 32, 16, 8]
+          kernels: [5, 7, 3]
+          strides: [3, 3, 3]
+          output_normalization:
+            type: tic
+            parameters: {epsilon: 1.0e-12}
+
   schedules:
     values:
-    - - &id001
-        phase_name: real_adaptation
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer:
-          type: AdamW
-          params:
-            lr: 0.001
-            weight_decay: 0.0001
-        criterions:
-          reconstruction:
-            masserstein:
-              target: MassersteinLoss
-              weight: 1.0
-          heads:
-            molecule_primary:
-              balanced_bce:
-                target: ClassBalancedMultiLabelBCELoss
-                weight: 0.2
+      # Real-only baseline; one independently trained model per axis.
+      - - &real_only
+          phase_name: real_only
+          epochs: 10
+          batch_size: 64
+          gradient_clip_norm: 5.0
+          supervision_sampling: &real_supervision
+            target_field: molecule
+            proportions: {positive: 1, unlabelled: 1}
+            replacement: true
+            seed: 43
+          optimizer: &optimizer
+            type: AdamW
+            params: {lr: 0.001, weight_decay: 0.0001}
+          criterions: &real_objective
+            reconstruction:
+              masserstein: {target: MassersteinLoss, weight: 1.0}
+            heads:
+              molecule_vpu:
+                vpu:
+                  target: VariationalPULoss
+                  weight: 0.2
+                  params:
+                    alpha: 1.0
+                    beta: 1.0
+                    consistency_weight: 0.0
+                    negative_weight: 0.0
+                    simulated_negative_weight: 0.0
+            regularization:
+              contractive:
+                target: ContractiveLoss
+                weight: 2.0e-3
                 params:
-                  class_balance_method: train_inverse_prevalence
-                  max_positive_weight: 20.0
-                  reduction: balanced_class_mean
-                  unknown_label_policy: assume_negative
-    - - phase_name: synthetic_single_mse_ions_0_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: &id002
-          type: AdamW
-          params:
-            lr: 0.001
-            weight_decay: 0.0001
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: &id003
-          - single_random
-          - single_annotated
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: &id004
-            mse:
-              target: MSELoss
-              weight: 1.0
-      - *id001
-    - - phase_name: synthetic_single_mse_ions_0_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-          heads:
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_single_mse_ions_1_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-      - *id001
-    - - phase_name: synthetic_single_mse_ions_1_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_single_masserstein_ions_0_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: &id005
-            masserstein:
-              target: MassersteinLoss
-              weight: 1.0
-      - *id001
-    - - phase_name: synthetic_single_masserstein_ions_0_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-          heads:
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_single_masserstein_ions_1_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-      - *id001
-    - - phase_name: synthetic_single_masserstein_ions_1_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id003
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_mixed_mse_ions_0_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: &id006
-          - single_random
-          - single_annotated
-          - random
-          - annotated
-          - mixed
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-      - *id001
-    - - phase_name: synthetic_mixed_mse_ions_0_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-          heads:
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_mixed_mse_ions_1_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-      - *id001
-    - - phase_name: synthetic_mixed_mse_ions_1_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id004
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_mixed_masserstein_ions_0_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-      - *id001
-    - - phase_name: synthetic_mixed_masserstein_ions_0_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-          heads:
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    - - phase_name: synthetic_mixed_masserstein_ions_1_classes_0_atoms_0
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-      - *id001
-    - - phase_name: synthetic_mixed_masserstein_ions_1_classes_0_atoms_1
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          samples: 4096
-          validation_samples: 512
-          seed: 42
-          max_peaks: 16
-          modes: *id006
-          peak_radius: 0
-          normalization: tic
-        criterions:
-          reconstruction: *id005
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-            element_counts:
-              composition:
-                target: ElementCountLoss
-                weight: 0.1
-      - *id001
-    # Artifact-backed baseline: static train-only annotation geometry is built
-    # once per axis/split and reused by all model tasks through this cache path.
-    # The axis phase is intentionally serial before the mixture phase; an
-    # interleaved schedule is a separate experimental condition.
-    - - phase_name: synthetic_axis_pretraining
-        epochs: 10
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          kind: precomputed_synthetic
-          population: axis
-          validation_samples: 512
-          artifact: &synthetic_precompute_kidney
-            key: kidney_annotation_axis_v1
-            cache_directory: data/kidney_workspace/precompute/synthetic_pretraining
-            peak_source: annotation
-            seed: 42
-            normalization: tic
-            representation:
-              strategy: triangular_peak
-              parameters:
-                peak_radius: 0
-                minimum_intensity: 1.0
-            blank_peak_radius: 0
-            populations:
-              axis:
-                strategy: axis_coverage
-                repetitions_per_bin: 5
-              permutation:
-                strategy: uniform_mixture
-                repetitions_per_bin: 30
-                min_fragments: 15
-                max_fragments: 30
-                detection_probability: 0.5
-        criterions:
-          reconstruction: *id004
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-      - phase_name: synthetic_permutation_pretraining
-        epochs: 15
-        batch_size: 64
-        gradient_clip_norm: 5.0
-        optimizer: *id002
-        pretraining:
-          kind: precomputed_synthetic
-          population: permutation
-          validation_samples: 512
-          artifact: *synthetic_precompute_kidney
-        criterions:
-          reconstruction: *id004
-          heads:
-            molecule_primary:
-              bce:
-                target: MultiLabelBCELoss
-                weight: 0.2
-      - *id001
+                  calculation_method: exact_autograd_jacobian
+                  latent_source: auto
+                  penalty_metric: spectral_plus_hinged
+                  penalized_space: u
+                  input_geometry: fisher_rao
+                  hinge_threshold: 7.0
+                  hinge_alpha: 2.0
+            contrastive:
+              peak_permutation:
+                target: InfoNCELoss
+                weight: 0.001
+                params:
+                  peak_selection_method: permutation_label_invariant
+                  temperature: 0.07
+                  peak_sample_size: 10000
+                  peak_catalog_limit: 4096
+                  permutation_bank_size: 7000
+                  permuted_peaks_per_view: 3
+                  permutation_selection_attempts: 64
+                  annotation_bin_radius: 0
+                  preserve_input_normalization: true
+                  negative_weighting_method: multilabel_jaccard
+                  overlapping_label_negative_weight: 0.1
+          evaluate_test: true
+
+      # P0: single bins only.
+      - - &synthetic_axis_snapshot
+          phase_name: synthetic_single
+          epochs: 10
+          batch_size: 64
+          gradient_clip_norm: 5.0
+          optimizer: *optimizer
+          pretraining:
+            kind: precomputed_synthetic
+            population: axis
+            validation_samples: 2048
+            artifact: &synthetic_artifact
+              key: {grid: axes, select: artifact_key}
+              cache_directory: data/kidney_workspace/precompute/synthetic_pretraining
+              peak_source: annotation
+              seed: 42
+              normalization: tic
+              representation:
+                strategy: isospec_envelope
+                parameters:
+                  probability_coverage: 0.999
+                  max_isotopologues: 4096
+                  occupancy_alpha: 1.0
+                  intensity_log_sigma: 0.5
+              blank_peak_radius: 0
+              component_mixing:
+                distribution: dirichlet
+                minimum_annotated_concentration: 2.0
+                blank_concentration: 1.0
+              populations:
+                axis:
+                  strategy: axis_coverage
+                  repetitions_per_bin: 10
+                permutation_base:
+                  strategy: class_quota_mixture
+                  class_quota: 30
+                  blank_bin_quota: 30
+                  min_fragments: {grid: axes, select: min_fragments}
+                  max_fragments: {grid: axes, select: max_fragments}
+                permutation_overlap:
+                  strategy: class_quota_mixture
+                  class_quota: 30
+                  blank_bin_quota: 30
+                  overlap_bonus_per_class: 30
+                  min_fragments: {grid: axes, select: min_fragments}
+                  max_fragments: {grid: axes, select: max_fragments}
+                permutation_rare:
+                  strategy: class_quota_mixture
+                  class_quota: 30
+                  blank_bin_quota: 30
+                  rare_bonus_per_class: 30
+                  rare_fraction: 0.25
+                  min_fragments: {grid: axes, select: min_fragments}
+                  max_fragments: {grid: axes, select: max_fragments}
+                permutation_all:
+                  strategy: class_quota_mixture
+                  class_quota: 30
+                  blank_bin_quota: 30
+                  overlap_bonus_per_class: 30
+                  rare_bonus_per_class: 30
+                  rare_fraction: 0.25
+                  min_fragments: {grid: axes, select: min_fragments}
+                  max_fragments: {grid: axes, select: max_fragments}
+                joint_base:
+                  strategy: combined
+                  members: [axis, permutation_base]
+                joint_overlap:
+                  strategy: combined
+                  members: [axis, permutation_overlap]
+                joint_rare:
+                  strategy: combined
+                  members: [axis, permutation_rare]
+                joint_all:
+                  strategy: combined
+                  members: [axis, permutation_all]
+          criterions: &synthetic_objective
+            reconstruction:
+              masserstein: {target: MassersteinLoss, weight: 1.0}
+            heads:
+              molecule_vpu:
+                bce: {target: MultiLabelBCELoss, weight: 0.2}
+          save_model_state_as: synthetic_pretrained
+        - &pretrain_only_test
+          phase_name: pretrain_only_real_test
+          epochs: 0
+          batch_size: 64
+          restore_model_state_from: synthetic_pretrained
+          criterions: *real_objective
+          evaluate_test: true
+          evaluation_data: real
+        - &real_frozen
+          phase_name: real_adaptation_frozen_head
+          epochs: 10
+          batch_size: 64
+          gradient_clip_norm: 5.0
+          supervision_sampling: *real_supervision
+          optimizer: *optimizer
+          restore_model_state_from: synthetic_pretrained
+          freeze: [heads.molecule_vpu]
+          criterions: *real_objective
+          evaluate_test: true
+        - &real_unfrozen
+          <<: *real_frozen
+          phase_name: real_adaptation_unfrozen_head
+          freeze: []
+
+      # P1: permutations only.
+      - - &synthetic_permutation_base_snapshot
+          phase_name: synthetic_permutation_base
+          epochs: 10
+          batch_size: 64
+          gradient_clip_norm: 5.0
+          optimizer: *optimizer
+          pretraining:
+            kind: precomputed_synthetic
+            population: permutation_base
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+          criterions: *synthetic_objective
+          save_model_state_as: synthetic_pretrained
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P2 joint: single + base permutations in one shuffled phase.
+      - - &synthetic_joint_base_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_joint_base
+          pretraining:
+            kind: precomputed_synthetic
+            population: joint_base
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P2 staged: single, then base permutations.
+      - - &synthetic_axis_stage
+          <<: *synthetic_axis_snapshot
+          phase_name: synthetic_single_stage
+          save_model_state_as: null
+        - *synthetic_permutation_base_snapshot
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P3 joint: single + permutations carrying additive overlap quota.
+      - - &synthetic_joint_overlap_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_joint_overlap
+          pretraining:
+            kind: precomputed_synthetic
+            population: joint_overlap
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P3 staged.
+      - - *synthetic_axis_stage
+        - &synthetic_permutation_overlap_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_permutation_overlap
+          pretraining:
+            kind: precomputed_synthetic
+            population: permutation_overlap
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P4 joint: single + permutations carrying additive rare-class quota.
+      - - &synthetic_joint_rare_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_joint_rare
+          pretraining:
+            kind: precomputed_synthetic
+            population: joint_rare
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P4 staged.
+      - - *synthetic_axis_stage
+        - &synthetic_permutation_rare_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_permutation_rare
+          pretraining:
+            kind: precomputed_synthetic
+            population: permutation_rare
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P5 joint: all quotas in one shuffled phase.
+      - - &synthetic_joint_all_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_joint_all
+          pretraining:
+            kind: precomputed_synthetic
+            population: joint_all
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
+      # P5 staged: single, then one shared base+overlap+rare permutation phase.
+      - - *synthetic_axis_stage
+        - &synthetic_permutation_all_snapshot
+          <<: *synthetic_permutation_base_snapshot
+          phase_name: synthetic_permutation_all
+          pretraining:
+            kind: precomputed_synthetic
+            population: permutation_all
+            validation_samples: 2048
+            artifact: *synthetic_artifact
+        - *pretrain_only_test
+        - *real_frozen
+        - *real_unfrozen
+
 execution:
   backend: local
   max_parallel_runs: 1
   entropy:
     task_walltime: 06:00:00
+
 reports: []
-reporting:
-  continue_on_error: true
+reporting: {continue_on_error: true}
