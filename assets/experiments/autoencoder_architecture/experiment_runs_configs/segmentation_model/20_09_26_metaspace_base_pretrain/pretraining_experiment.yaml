@@ -541,11 +541,71 @@ grid:
                 target: ElementCountLoss
                 weight: 0.1
       - *id001
+    # Artifact-backed baseline: static train-only annotation geometry is built
+    # once per axis/split and reused by all model tasks through this cache path.
+    # The axis phase is intentionally serial before the mixture phase; an
+    # interleaved schedule is a separate experimental condition.
+    - - phase_name: synthetic_axis_pretraining
+        epochs: 10
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          kind: precomputed_synthetic
+          population: axis
+          validation_samples: 512
+          artifact: &synthetic_precompute_kidney
+            key: kidney_annotation_axis_v1
+            cache_directory: data/kidney_workspace/precompute/synthetic_pretraining
+            peak_source: annotation
+            seed: 42
+            normalization: tic
+            representation:
+              strategy: triangular_peak
+              parameters:
+                peak_radius: 0
+                minimum_intensity: 1.0
+            blank_peak_radius: 0
+            populations:
+              axis:
+                strategy: axis_coverage
+                repetitions_per_bin: 5
+              permutation:
+                strategy: uniform_mixture
+                repetitions_per_bin: 30
+                min_fragments: 15
+                max_fragments: 30
+                detection_probability: 0.5
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - phase_name: synthetic_permutation_pretraining
+        epochs: 15
+        batch_size: 64
+        gradient_clip_norm: 5.0
+        optimizer: *id002
+        pretraining:
+          kind: precomputed_synthetic
+          population: permutation
+          validation_samples: 512
+          artifact: *synthetic_precompute_kidney
+        criterions:
+          reconstruction: *id004
+          heads:
+            molecule_primary:
+              bce:
+                target: MultiLabelBCELoss
+                weight: 0.2
+      - *id001
 execution:
   backend: local
   max_parallel_runs: 1
   entropy:
-    task_walltime: 01:00:00
+    task_walltime: 06:00:00
 reports: []
 reporting:
   continue_on_error: true

@@ -206,3 +206,64 @@ def test_phase_snapshot_reuses_one_pretrain_for_isolated_real_branches():
         "real_frozen_head",
         "pretrain_only_evaluation",
     ]
+
+
+def test_artifact_backed_pretraining_phase_uses_the_training_precompute_boundary(tmp_path):
+    """The trainer routes explicit artifact phases through batch synthetic data."""
+    torch.manual_seed(42)
+    dataset, model = PhaseDataset(), PhaseModel()
+    wrapper = SimpleNamespace(
+        active_context=SimpleNamespace(reader=object(), _instantiated_image_key="fixture"),
+        active_model=model,
+        active_dataset=dataset,
+        device="cpu",
+        models_manager=SimpleNamespace(active_model_type="autoencoder"),
+        workspace=SimpleNamespace(active_img_name="fixture"),
+    )
+    config = {
+        "seed": 42,
+        "test_mode": True,
+        "checkpoint": {"enabled": False},
+        "phases": [
+            {
+                "phase_name": "artifact_axis",
+                "epochs": 1,
+                "batch_size": 4,
+                "dataloader": {"shuffle": False},
+                "optimizer": {"type": "SGD", "params": {"lr": 0.01}},
+                "pretraining": {
+                    "kind": "precomputed_synthetic",
+                    "population": "axis",
+                    "validation_samples": 4,
+                    "artifact": {
+                        "key": "phase-fixture",
+                        "cache_directory": str(tmp_path),
+                        "peak_source": "annotation",
+                        "seed": 42,
+                        "representation": {
+                            "strategy": "triangular_peak",
+                            "parameters": {"peak_radius": 0},
+                        },
+                        "populations": {
+                            "axis": {
+                                "strategy": "axis_coverage",
+                                "repetitions_per_bin": 1,
+                            }
+                        },
+                    },
+                },
+                "criterions": {
+                    "reconstruction": {"mse": {"target": "MSELoss"}},
+                    "heads": {
+                        "ion": {"bce": {"target": "MultiLabelBCELoss"}}
+                    },
+                },
+            }
+        ],
+    }
+
+    history = MSIPyTorchTrainer(wrapper).fit(config)
+
+    assert {entry["phase"] for entry in history} == {"artifact_axis"}
+    assert model.seen[0].shape == (4, 10)
+    assert list(tmp_path.glob("phase-fixture-*/metadata.json"))

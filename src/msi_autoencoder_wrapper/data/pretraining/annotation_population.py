@@ -97,23 +97,11 @@ class AnnotationPopulation:
             raise ValueError("Annotation synthesis requires binner-mapped annotations.")
         target_names = dataset.get_target_schemas()[target_field].class_names
         target_indices = {name: position for position, name in enumerate(target_names)}
-        records: list[AnnotationPeakRecord] = []
-        for spectrum_id in spectrum_ids:
-            entry_slice = index.entry_slice(spectrum_id)
-            grouped: dict[int, set[int]] = defaultdict(set)
-            for annotation_index, coordinate in zip(
-                index.annotation_indices[entry_slice],
-                index.coordinate_indices[entry_slice],
-                strict=True,
-            ):
-                identity = "|".join(index.annotation_identities[int(annotation_index)])
-                target_index = target_indices.get(identity)
-                if target_index is not None:
-                    grouped[int(coordinate)].add(target_index)
-            records.extend(
-                AnnotationPeakRecord(spectrum_id, coordinate, tuple(sorted(labels)))
-                for coordinate, labels in grouped.items()
-            )
+        records = _records_from_sparse_index(
+            index=index,
+            selected_spectrum_ids=spectrum_ids,
+            target_indices=target_indices,
+        )
         return cls(
             feature_count=len(index.coordinate_axis),
             spectrum_ids=spectrum_ids,
@@ -138,26 +126,19 @@ class AnnotationPopulation:
                 for source_id in source_ids
                 if offset <= source_id < offset + member_dataset._source_length()
             }
-            for local_source_id in local_source_ids:
-                entry_slice = index.entry_slice(local_source_id)
-                grouped: dict[int, set[int]] = defaultdict(set)
-                for annotation_index, coordinate in zip(
-                    index.annotation_indices[entry_slice],
-                    index.coordinate_indices[entry_slice],
-                    strict=True,
-                ):
-                    identity = "|".join(index.annotation_identities[int(annotation_index)])
-                    target_index = target_indices.get(identity)
-                    if target_index is not None:
-                        grouped[int(coordinate)].add(target_index)
-                records.extend(
-                    AnnotationPeakRecord(
-                        offset + local_source_id,
-                        coordinate,
-                        tuple(sorted(labels)),
-                    )
-                    for coordinate, labels in grouped.items()
+            local_records = _records_from_sparse_index(
+                index=index,
+                selected_spectrum_ids=local_source_ids,
+                target_indices=target_indices,
+            )
+            records.extend(
+                AnnotationPeakRecord(
+                    spectrum_id=offset + record.spectrum_id,
+                    bin_index=record.bin_index,
+                    label_indices=record.label_indices,
                 )
+                for record in local_records
+            )
         return cls(
             feature_count=feature_count,
             spectrum_ids=source_ids,
@@ -201,3 +182,67 @@ def _source_indices(partition: Any) -> tuple[int, ...]:
         parent = _source_indices(partition.dataset)
         return tuple(parent[int(index)] for index in partition.indices)
     return tuple(range(len(partition)))
+
+
+def _records_from_sparse_index(
+    *,
+    index: Any,
+    selected_spectrum_ids: Iterable[int],
+    target_indices: Mapping[str, int],
+) -> list[AnnotationPeakRecord]:
+    """Extract selected records by intersecting CSR rows before decoding entries.
+
+    :param index: Mapped sparse annotation index with sorted spectrum IDs.
+    :type index: Any
+    :param selected_spectrum_ids: Source IDs belonging to the train split.
+    :type selected_spectrum_ids: collections.abc.Iterable[int]
+    :param target_indices: Molecular identity to target-column mapping.
+    :type target_indices: collections.abc.Mapping[str, int]
+    :return: Complete positive records from selected sparse index rows.
+    :rtype: list[AnnotationPeakRecord]
+
+    REMARK: The index stores rows only for annotated spectra. Intersecting those
+    rows with the selected train IDs makes extraction scale with annotated
+    spectra rather than the complete merged-dataset length.
+    """
+    requested = np.asarray(
+        sorted({int(value) for value in selected_spectrum_ids}),
+        dtype=np.int64,
+    )
+    indexed = np.asarray(index.spectrum_ids, dtype=np.int64)
+    row_ids = np.searchsorted(indexed, requested)
+    in_bounds = row_ids < indexed.size
+    matched = row_ids[in_bounds]
+    matched = matched[indexed[matched] == requested[in_bounds]]
+    identity_targets = np.asarray(
+        [
+            target_indices.get("|".join(identity), -1)
+            for identity in index.annotation_identities
+        ],
+        dtype=np.int64,
+    )
+    records: list[AnnotationPeakRecord] = []
+    for row_id in matched:
+        start, stop = int(index.spectrum_offsets[row_id]), int(index.spectrum_offsets[row_id + 1])
+        entry_targets = identity_targets[index.annotation_indices[start:stop]]
+        coordinates = index.coordinate_indices[start:stop]
+        keep = entry_targets >= 0
+        if not bool(np.any(keep)):
+            continue
+        grouped: dict[int, set[int]] = defaultdict(set)
+        for target_index, coordinate in zip(
+            entry_targets[keep],
+            coordinates[keep],
+            strict=True,
+        ):
+            grouped[int(coordinate)].add(int(target_index))
+        spectrum_id = int(indexed[row_id])
+        records.extend(
+            AnnotationPeakRecord(
+                spectrum_id=spectrum_id,
+                bin_index=coordinate,
+                label_indices=tuple(sorted(labels)),
+            )
+            for coordinate, labels in grouped.items()
+        )
+    return records

@@ -153,10 +153,21 @@ class MSIPyTorchTrainer(ConfigurableComponent):
             # Select phase data while keeping the real train/validation/test split intact
             synthetic_config = phase_config.get("pretraining")
             if synthetic_config is not None:
-                from ...data.pretraining import build_synthetic_partitions
                 if not isinstance(synthetic_config, dict):
                     raise ValueError("phase.pretraining must be a synthetic generator mapping.")
-                dataset_partitions = build_synthetic_partitions(dataset, synthetic_config)
+                if synthetic_config.get("kind") == "precomputed_synthetic":
+                    from ..precompute import SyntheticPrecomputePhase
+
+                    dataset_partitions = SyntheticPrecomputePhase(
+                        synthetic_config
+                    ).build_partitions(dataset)
+                else:
+                    from ...data.pretraining import build_synthetic_partitions
+
+                    dataset_partitions = build_synthetic_partitions(
+                        dataset,
+                        synthetic_config,
+                    )
             else:
                 dataset_partitions = real_dataset_partitions
             epochs = phase_config.get("epochs", 10)

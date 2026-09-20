@@ -167,6 +167,48 @@ leaves Slurm, it verifies every task status. Only then does it submit the next
 batch. A failed task stops the coordinator and prevents finalization; use the
 status file and task log to diagnose it before using `--restart`.
 
+### Kidney precomputed synthetic campaign
+
+For the persistent synthetic pretraining experiment, use the repository
+configuration and the workspace containing
+`data/kidney_workspace/datasets/kidney/kidney.imzML`:
+
+```bash
+cd ~/repositories/MSIAutoEncoderWrapper
+SCRIPTS=assets/scripts/entropy
+WORKSPACE=data/kidney_workspace
+EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/20_09_26_metaspace_base_pretrain/pretraining_experiment.yaml
+CAMPAIGN_ID=kidney-precomputed-$(date +%Y%m%d)-01
+SELECTED_NODE=asusgpu1
+STAGING_ROOT="/tmp/${USER}/msi-wrapper"
+export STAGING_ROOT REPOSITORY_ROOT="${PWD}"
+
+sbatch --nodelist="${SELECTED_NODE}" \
+  "${SCRIPTS}/02_stage_campaign.sbatch" \
+  "${CAMPAIGN_ID}" \
+  "${EXPERIMENT_YAML}" \
+  "${WORKSPACE}"
+```
+
+Wait for staging to create `${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}/task-count`.
+Before starting the coordinator, measure both persistent populations:
+
+```bash
+RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
+sbatch --wait --nodelist="${SELECTED_NODE}" \
+  --output="${RUN_DIRECTORY}/logs/benchmark-axis-%j.out" \
+  assets/scripts/benchmarks/benchmark_precomputed_synthetic.sbatch \
+  "${RUN_DIRECTORY}" synthetic_axis_pretraining 32
+sbatch --wait --nodelist="${SELECTED_NODE}" \
+  --output="${RUN_DIRECTORY}/logs/benchmark-permutation-%j.out" \
+  assets/scripts/benchmarks/benchmark_precomputed_synthetic.sbatch \
+  "${RUN_DIRECTORY}" synthetic_permutation_pretraining 32
+```
+
+Start training only after both benchmark calls succeed. The YAML currently
+expands to 180 tasks, of which 10 use persistent precompute; the remaining
+170 historical schedules still use the legacy generator.
+
 ## Several campaigns orchestration
 
 The sequence launcher runs one campaign at a time. This matters because a

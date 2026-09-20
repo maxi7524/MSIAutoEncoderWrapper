@@ -75,3 +75,37 @@ The train probe uses the campaign's `test_entrypoint`, which is expected to
 bound itself to a small number of batches. It does not write a trained model.
 Use `--device cuda` on Slurm worker nodes to obtain peak allocation for the
 actual allocated GPU.
+
+## Persistent synthetic pretraining benchmark
+
+The pretraining campaign uses `kind: precomputed_synthetic`. The first call
+builds the model-independent artifact; the second call checks the persistent
+cache path. Only then are batches rendered and timed.
+
+Run this after `02_stage_campaign.sbatch` has created `plan/tasks`:
+
+```bash
+cd ~/repositories/MSIAutoEncoderWrapper
+WORKSPACE=data/kidney_workspace
+CAMPAIGN_ID=<campaign-id>
+RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
+
+sbatch --wait --nodelist=asusgpu1 \
+  --output="${RUN_DIRECTORY}/logs/benchmark-axis-%j.out" \
+  assets/scripts/benchmarks/benchmark_precomputed_synthetic.sbatch \
+  "${RUN_DIRECTORY}" synthetic_axis_pretraining 32
+
+sbatch --wait --nodelist=asusgpu1 \
+  --output="${RUN_DIRECTORY}/logs/benchmark-permutation-%j.out" \
+  assets/scripts/benchmarks/benchmark_precomputed_synthetic.sbatch \
+  "${RUN_DIRECTORY}" synthetic_permutation_pretraining 32
+```
+
+The script automatically selects the first materialized task containing the
+artifact-backed phases, so task indices do not need to be hard-coded. To probe
+a specific descriptor, use `--task-file <path>` instead. The JSON output
+contains cold preparation time, matching-cache load time, rendered sample
+throughput, artifact fingerprint, and manifest size.
+
+The benchmark does not train or write model checkpoints. Run it on the same
+node type, Python environment, and workspace copy that will execute training.

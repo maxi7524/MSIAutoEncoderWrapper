@@ -32,6 +32,16 @@ from .synthetic import (
     SyntheticSpectrumSample,
     build_synthetic_partitions,
 )
+from .precomputed import (
+    PrecomputedPopulationSpec,
+    PrecomputedSyntheticConfig,
+    PrecomputedSyntheticDataset,
+    SyntheticArtifactStore,
+    SyntheticManifest,
+    SyntheticPrecomputeArtifact,
+    SyntheticPrecomputeBuilder,
+    build_precomputed_synthetic_partitions,
+)
 
 __all__ = [
     "AnnotationPeakRecord",
@@ -53,6 +63,14 @@ __all__ = [
     "SyntheticSpectrumConfig",
     "SyntheticSpectrumDataset",
     "SyntheticSpectrumSample",
+    "PrecomputedPopulationSpec",
+    "PrecomputedSyntheticConfig",
+    "PrecomputedSyntheticDataset",
+    "SyntheticArtifactStore",
+    "SyntheticManifest",
+    "SyntheticPrecomputeArtifact",
+    "SyntheticPrecomputeBuilder",
+    "build_precomputed_synthetic_partitions",
     "build_synthetic_partitions",
     "get_sampling_strategy",
     "get_representation_strategy",
