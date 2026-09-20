@@ -4,12 +4,15 @@
 #SBATCH --qos=ms488923_common
 #SBATCH --nodelist=asusgpu6
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
 #SBATCH --time=1:00:00
 
 # Execute one materialized task against the campaign workspace snapshot.
 # The orchestrator may override this fallback with --nodelist so the task runs
 # on the node that owns the node-local staged workspace.
+# `--mem=8G` applies independently to each array element; it prevents the
+# cluster default of 2 GiB per CPU from reducing the task memory to 4 GiB.
 set -euo pipefail
 
 if [[ -z "${CAMPAIGN_FILE:-}" || ! -f "${CAMPAIGN_FILE}" ]]; then

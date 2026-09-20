@@ -453,7 +453,7 @@ models from previous campaigns.
 | Workspace and campaign label | The three input variables in the launch command. |
 | Remote SSH alias or remote repository location | Optional arguments to `07_download_campaign.sh`. |
 | Partition, QoS, node, GPU, CPUs, staging walltime | `02_stage_campaign.sbatch`. |
-| Task GPU/CPU allocation and default task walltime | `03_1_task_array.sbatch`; per-experiment walltime can be set as `execution.entropy.task_walltime` in the YAML. |
+| Task GPU/CPU/memory allocation and default task walltime | `03_1_task_array.sbatch` (`2 CPU`, `8 GiB` per array element); per-experiment walltime can be set as `execution.entropy.task_walltime` in the YAML. |
 | Finalizer allocation | `03_2_finalize_campaign.sbatch`. |
 | Account concurrency policy | `TASK_LIMIT` and `PARALLELISM` in `03_orchestrate_campaign.sh`. |
 
