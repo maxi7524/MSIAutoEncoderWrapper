@@ -31,11 +31,26 @@ def _load_task(path: Path) -> dict[str, Any]:
 
 
 def _find_artifact_task(run_directory: Path) -> Path:
-    """Find the unique first task containing the requested precompute phases."""
-    task_paths = sorted((run_directory / "plan" / "tasks").glob("task_*.yaml"))
+    """Find the first artifact task in either supported plan layout."""
+    task_directories = (
+        run_directory / "plan" / "tasks",
+        run_directory / "tasks",
+    )
+    task_paths = [
+        task_path
+        for task_directory in task_directories
+        for task_path in sorted(task_directory.glob("task_*.yaml"))
+    ]
     if not task_paths:
+        available = sorted(
+            str(path)
+            for path in run_directory.glob("**/task_*.yaml")
+            if path.is_file()
+        )[:5]
         raise FileNotFoundError(
-            f"No materialized task files found under {run_directory / 'plan' / 'tasks'}."
+            "No materialized task files found. Checked: "
+            f"{', '.join(str(path) for path in task_directories)}. "
+            f"Nearby task files: {available or 'none'}."
         )
     for task_path in task_paths:
         task = _load_task(task_path)
