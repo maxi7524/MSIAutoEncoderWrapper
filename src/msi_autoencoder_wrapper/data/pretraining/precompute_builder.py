@@ -28,7 +28,6 @@ from ..spaces import SpectrumSpace
 from ..supervision_masks import simulated_negative_mask_key
 from ..targets import TargetBatch, TargetSchema
 from ...utils.logger import get_custom_logger
-from .annotation_population import AnnotationPopulation
 from .representations import (
     SyntheticRepresentationContext,
     SyntheticRepresentationSpec,
@@ -396,17 +395,13 @@ class SyntheticPrecomputeBuilder:
         target_names = self.schemas["molecule"].class_names
         target_lookup = {name: index for index, name in enumerate(target_names)}
         if self.config.peak_source == "annotation":
-            population = AnnotationPopulation.from_dataset(self.dataset)
-            bins = tuple(
-                tuple(
-                    sorted(
-                        {
-                            record.bin_index
-                            for record in population.records_for_label(label)
-                        }
-                    )
-                )
-                for label in range(len(target_names))
+            index = self.dataset.get_mapped_annotation_index()
+            train_ids = _partition_source_ids(self.dataset.create_partitions().train)
+            bins = _compact_annotation_bins(
+                index=index,
+                selected_spectrum_ids=train_ids,
+                target_indices=target_lookup,
+                target_count=len(target_names),
             )
             source = _StaticPeakSource(
                 feature_count=self.axis.size,
@@ -415,16 +410,8 @@ class SyntheticPrecomputeBuilder:
             )
             signature = {
                 "kind": "annotation",
-                "spectrum_ids": population.spectrum_ids,
-                "records": tuple(
-                    (
-                        record.spectrum_id,
-                        record.bin_index,
-                        record.label_indices,
-                    )
-                    for label in population.positive_labels
-                    for record in population.records_for_label(label)
-                ),
+                "spectrum_ids": tuple(sorted(set(int(value) for value in train_ids))),
+                "bins": bins,
             }
             return (
                 source,
@@ -1177,6 +1164,47 @@ def _partition_source_ids(partition: Dataset) -> tuple[int, ...]:
     if callable(source_ids_getter):
         return tuple(int(value) for value in source_ids_getter())
     return tuple(range(len(partition)))
+
+
+def _compact_annotation_bins(
+    *,
+    index: Any,
+    selected_spectrum_ids: Sequence[int],
+    target_indices: Mapping[str, int],
+    target_count: int,
+) -> tuple[tuple[int, ...], ...]:
+    """Extract train-only target/bin geometry without materialising records.
+
+    The sparse index can contain millions of annotation entries.  Precompute
+    needs only the unique target/bin pairs, so retaining one Python record per
+    entry would waste several gigabytes and can exceed the host memory limit.
+    """
+    requested = np.asarray(
+        sorted({int(value) for value in selected_spectrum_ids}),
+        dtype=np.int64,
+    )
+    indexed = np.asarray(index.spectrum_ids, dtype=np.int64)
+    row_ids = np.searchsorted(indexed, requested)
+    in_bounds = row_ids < indexed.size
+    matched = row_ids[in_bounds]
+    matched = matched[indexed[matched] == requested[in_bounds]]
+    identity_targets = np.asarray(
+        [
+            target_indices.get("|".join(identity), -1)
+            for identity in index.annotation_identities
+        ],
+        dtype=np.int32,
+    )
+    bins: list[set[int]] = [set() for _ in range(target_count)]
+    for row_id in matched:
+        start = int(index.spectrum_offsets[row_id])
+        stop = int(index.spectrum_offsets[row_id + 1])
+        entry_targets = identity_targets[index.annotation_indices[start:stop]]
+        coordinates = index.coordinate_indices[start:stop]
+        for target, coordinate in zip(entry_targets, coordinates, strict=True):
+            if target >= 0:
+                bins[int(target)].add(int(coordinate))
+    return tuple(tuple(sorted(values)) for values in bins)
 
 
 def _pad_components(rows: Sequence[Sequence[int]]) -> np.ndarray:

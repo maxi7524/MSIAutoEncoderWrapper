@@ -97,6 +97,10 @@ bash "${SCRIPTS}/01_setup_environment.sh"
 ## REMARK: Here put your workspace path. It must be relative to both repositories.
 WORKSPACE=data/kidney_workspace
 ## REMARK: Here put your YAML config path. It defines data, model, losses, and repetitions.
+WORKSPACE=data/kidney_workspace
+EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/20_09_26_metaspace_base_pretrain/pretraining_experiment.yaml
+CAMPAIGN_ID=metaspace-pretrain-initial-$(date +%Y%m%d)-01
+RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
 EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/05_09_26_contractive_expaned/bce_baseline_experiment.yaml
 ## REMARK: Here put your experiment name. It must be new and scopes run files and model names.
 CAMPAIGN_ID=bce-baseline-$(date +%Y%m%d)-01

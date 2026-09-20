@@ -269,7 +269,7 @@ def test_matching_artifact_is_loaded_without_invoking_builder(tmp_path):
     np.testing.assert_array_equal(loaded.basis_values, artifact.basis_values)
 
 
-def test_partition_cache_hit_skips_annotation_population_construction(
+def test_partition_cache_hit_skips_annotation_geometry_construction(
     tmp_path,
     monkeypatch,
 ):
@@ -280,13 +280,13 @@ def test_partition_cache_hit_skips_annotation_population_construction(
         parameters,
     )
 
-    def fail_annotation_population(*_args, **_kwargs):
-        raise AssertionError("Cache hit unexpectedly extracted annotation records.")
+    def fail_annotation_geometry(*_args, **_kwargs):
+        raise AssertionError("Cache hit unexpectedly rebuilt annotation geometry.")
 
     monkeypatch.setattr(
         "msi_autoencoder_wrapper.data.pretraining.precompute_builder."
-        "AnnotationPopulation.from_dataset",
-        fail_annotation_population,
+        "_compact_annotation_bins",
+        fail_annotation_geometry,
     )
     second = build_precomputed_synthetic_partitions(
         TinyPrecomputeDataset(),
