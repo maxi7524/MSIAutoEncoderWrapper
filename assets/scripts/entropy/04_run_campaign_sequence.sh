@@ -3,8 +3,25 @@
 # Stage and execute several campaigns serially on one Entropy node.
 set -euo pipefail
 
+EXECUTION_NODE=
+if [[ ${1:-} == "--nodelist" ]]; then
+    if (( $# < 2 )); then
+        echo "Missing value for --nodelist." >&2
+        exit 2
+    fi
+    EXECUTION_NODE=$2
+    shift 2
+elif [[ ${1:-} == --nodelist=* ]]; then
+    EXECUTION_NODE=${1#*=}
+    if [[ -z "${EXECUTION_NODE}" ]]; then
+        echo "The --nodelist value must not be empty." >&2
+        exit 2
+    fi
+    shift
+fi
+
 if (( $# < 3 || $# % 2 == 0 )); then
-    echo "Usage: $0 <workspace-dir> <campaign-id> <experiment-yaml> [<campaign-id> <experiment-yaml> ...]" >&2
+    echo "Usage: $0 [--nodelist NODE] <workspace-dir> <campaign-id> <experiment-yaml> [<campaign-id> <experiment-yaml> ...]" >&2
     exit 2
 fi
 
@@ -46,7 +63,13 @@ while (( $# > 0 )); do
     RUN_DIRECTORY=${WORKSPACE_DIRECTORY}/configs/entropy-runs/${CAMPAIGN_ID}
 
     echo "Staging campaign ${CAMPAIGN_ID} using ${EXPERIMENT_YAML}."
-    stage_job_id=$(cd "${REPOSITORY_ROOT}" && sbatch --parsable \
+    stage_submit_options=(--parsable)
+    if [[ -n "${EXECUTION_NODE}" ]]; then
+        stage_submit_options+=(--nodelist="${EXECUTION_NODE}")
+    fi
+
+    stage_job_id=$(cd "${REPOSITORY_ROOT}" && sbatch \
+        "${stage_submit_options[@]}" \
         "${STAGE_SCRIPT}" \
         "${CAMPAIGN_ID}" \
         "${EXPERIMENT_YAML}" \
@@ -60,7 +83,11 @@ while (( $# > 0 )); do
     wait_for_stage "${stage_job_id}"
 
     echo "Executing campaign ${CAMPAIGN_ID}."
-    bash "${ORCHESTRATOR_SCRIPT}" "${RUN_DIRECTORY}"
+    orchestrator_options=()
+    if [[ -n "${EXECUTION_NODE}" ]]; then
+        orchestrator_options+=(--nodelist "${EXECUTION_NODE}")
+    fi
+    bash "${ORCHESTRATOR_SCRIPT}" "${orchestrator_options[@]}" "${RUN_DIRECTORY}"
 done
 
 echo "All requested campaigns completed."

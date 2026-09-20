@@ -10,21 +10,56 @@ TASK_WALLTIME=${TASK_WALLTIME:-06:00:00}
 # Submit bounded Slurm batches sequentially and finalize one staged campaign.
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "Usage: $0 [--restart] <run-directory>" >&2
-    exit 2
-fi
-
 restart=false
-if [[ $# -eq 2 ]]; then
-    if [[ $1 != "--restart" ]]; then
-        echo "Unknown option: $1" >&2
-        exit 2
-    fi
-    restart=true
-    RUN_DIRECTORY_INPUT=$2
-else
-    RUN_DIRECTORY_INPUT=$1
+EXECUTION_NODE=
+RUN_DIRECTORY_INPUT=
+while (( $# > 0 )); do
+    case $1 in
+        --restart)
+            restart=true
+            ;;
+        --nodelist)
+            if (( $# < 2 )); then
+                echo "Missing value for --nodelist." >&2
+                exit 2
+            fi
+            EXECUTION_NODE=$2
+            shift
+            ;;
+        --nodelist=*)
+            EXECUTION_NODE=${1#*=}
+            if [[ -z "${EXECUTION_NODE}" ]]; then
+                echo "The --nodelist value must not be empty." >&2
+                exit 2
+            fi
+            ;;
+        --)
+            shift
+            if (( $# != 1 )); then
+                echo "Usage: $0 [--restart] [--nodelist NODE] <run-directory>" >&2
+                exit 2
+            fi
+            RUN_DIRECTORY_INPUT=$1
+            break
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            if [[ -n "${RUN_DIRECTORY_INPUT}" ]]; then
+                echo "Usage: $0 [--restart] [--nodelist NODE] <run-directory>" >&2
+                exit 2
+            fi
+            RUN_DIRECTORY_INPUT=$1
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "${RUN_DIRECTORY_INPUT}" ]]; then
+    echo "Usage: $0 [--restart] [--nodelist NODE] <run-directory>" >&2
+    exit 2
 fi
 
 if [[ -d "${RUN_DIRECTORY_INPUT}" ]]; then
@@ -169,10 +204,17 @@ while (( next_task < task_count )); do
         last_task=$((task_count - 1))
     fi
 
+    task_submit_options=(
+        --time="${TASK_WALLTIME}"
+        --array="${next_task}-${last_task}%${PARALLELISM}"
+    )
+    if [[ -n "${EXECUTION_NODE}" ]]; then
+        task_submit_options+=(--nodelist="${EXECUTION_NODE}")
+    fi
+
     job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
-        --time="${TASK_WALLTIME}" \
-        --array="${next_task}-${last_task}%${PARALLELISM}" \
-        "${REPOSITORY_ROOT}/assets/scripts/entropy/05_task_array.sbatch")
+        "${task_submit_options[@]}" \
+        "${REPOSITORY_ROOT}/assets/scripts/entropy/03_1_task_array.sbatch")
     job_id=${job_id%%;*}
     if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
         echo "Could not parse the task-array job ID: ${job_id}" >&2
@@ -188,8 +230,14 @@ while (( next_task < task_count )); do
     printf '%s\n' "${next_task}" >"${NEXT_TASK_FILE}"
 done
 
+finalizer_submit_options=()
+if [[ -n "${EXECUTION_NODE}" ]]; then
+    finalizer_submit_options+=(--nodelist="${EXECUTION_NODE}")
+fi
+
 job_id=$(CAMPAIGN_FILE="${CAMPAIGN_FILE}" sbatch --parsable \
-    "${REPOSITORY_ROOT}/assets/scripts/entropy/06_finalize_campaign.sbatch")
+    "${finalizer_submit_options[@]}" \
+    "${REPOSITORY_ROOT}/assets/scripts/entropy/03_2_finalize_campaign.sbatch")
 job_id=${job_id%%;*}
 if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
     echo "Could not parse the finalizer job ID: ${job_id}" >&2

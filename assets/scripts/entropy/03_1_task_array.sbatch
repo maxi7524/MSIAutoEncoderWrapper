@@ -8,6 +8,8 @@
 #SBATCH --time=1:00:00
 
 # Execute one materialized task against the campaign workspace snapshot.
+# The orchestrator may override this fallback with --nodelist so the task runs
+# on the node that owns the node-local staged workspace.
 set -euo pipefail
 
 if [[ -z "${CAMPAIGN_FILE:-}" || ! -f "${CAMPAIGN_FILE}" ]]; then

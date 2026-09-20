@@ -8,6 +8,8 @@
 #SBATCH --time=0:15:00
 
 # Persist campaign artifacts and remove only this campaign's node-local staging directory.
+# The orchestrator may override this fallback with --nodelist so finalization
+# runs on the node that owns the node-local staged workspace.
 set -euo pipefail
 
 if [[ -z "${CAMPAIGN_FILE:-}" || ! -f "${CAMPAIGN_FILE}" ]]; then
