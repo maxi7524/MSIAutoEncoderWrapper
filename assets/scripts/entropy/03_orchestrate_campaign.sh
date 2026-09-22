@@ -94,11 +94,19 @@ if [[ "${RUN_DIRECTORY:-}" != "${REQUESTED_RUN_DIRECTORY}" ]] || [[ ! -f "${REPO
     exit 1
 fi
 RUN_DIRECTORY=${REQUESTED_RUN_DIRECTORY}
+if [[ -n "${STAGING_NODE:-}" ]]; then
+    if [[ -n "${EXECUTION_NODE}" && "${EXECUTION_NODE}" != "${STAGING_NODE}" ]]; then
+        echo "Execution node must match the staging node: ${STAGING_NODE}." >&2
+        exit 1
+    fi
+    EXECUTION_NODE=${STAGING_NODE}
+fi
 
 TASK_COUNT_FILE=${RUN_DIRECTORY}/task-count
-NEXT_TASK_FILE=${RUN_DIRECTORY}/next-task-index
 TASK_JOB_HISTORY=${RUN_DIRECTORY}/task-array-job-ids
 FINALIZER_JOB_FILE=${RUN_DIRECTORY}/finalizer-job-id
+PYTHON=${REPOSITORY_ROOT}/.venv/bin/python
+BATCH_PLANNER=${REPOSITORY_ROOT}/assets/scripts/entropy/campaign_task_batches.py
 
 # Entropy run 
 
@@ -127,15 +135,11 @@ if ${restart}; then
             fi
         done <"${TASK_JOB_HISTORY}"
     fi
-    rm -f -- "${NEXT_TASK_FILE}" "${TASK_JOB_HISTORY}" "${FINALIZER_JOB_FILE}"
+    rm -f -- "${TASK_JOB_HISTORY}" "${FINALIZER_JOB_FILE}"
 fi
 
-next_task=0
-if [[ -f "${NEXT_TASK_FILE}" ]]; then
-    next_task=$(<"${NEXT_TASK_FILE}")
-fi
-if [[ ! "${next_task}" =~ ^[0-9]+$ ]] || (( next_task > task_count )); then
-    echo "Invalid next task index: ${next_task}" >&2
+if [[ ! -x "${PYTHON}" || ! -f "${BATCH_PLANNER}" ]]; then
+    echo "Missing campaign Python environment or batch planner." >&2
     exit 1
 fi
 
@@ -167,46 +171,22 @@ assert_job_completed_successfully() {
     fi
 }
 
-task_completed() {
-    local task_index=$1
-    local status_file
-    printf -v status_file '%s/plan/status/task_%06d.yaml' "${RUN_DIRECTORY}" "${task_index}"
-    [[ -f "${status_file}" ]] && grep -Eq '^[[:space:]]*status: completed$' "${status_file}"
-}
-
-assert_completed_batch() {
-    local first_task=$1
-    local last_task=$2
-    local task_index
-    for ((task_index = first_task; task_index <= last_task; task_index += 1)); do
-        if ! task_completed "${task_index}"; then
-            printf -v status_file '%s/plan/status/task_%06d.yaml' "${RUN_DIRECTORY}" "${task_index}"
-            echo "Task ${task_index} did not complete successfully: ${status_file}" >&2
-            exit 1
-        fi
-    done
-}
-
-# Resume from the first task without a completed manifest after a monitor restart.
-while (( next_task < task_count )) && task_completed "${next_task}"; do
-    next_task=$((next_task + 1))
-done
-printf '%s\n' "${next_task}" >"${NEXT_TASK_FILE}"
-
-while (( next_task < task_count )); do
+# Recompute the ready set after every array; completed parents unlock children.
+while true; do
+    batch=$("${PYTHON}" "${BATCH_PLANNER}" next \
+        --plan-directory "${RUN_DIRECTORY}/plan" --limit "${TASK_LIMIT}" \
+        --local-workspace "${LOCAL_WORKSPACE}")
+    if [[ -z "${batch}" ]]; then
+        break
+    fi
     # The QoS permits six submitted tasks; wait rather than competing with other user jobs.
     while squeue --noheader --user "${USER}" | grep -q .; do
         sleep 30
     done
 
-    last_task=$((next_task + TASK_LIMIT - 1))
-    if (( last_task >= task_count )); then
-        last_task=$((task_count - 1))
-    fi
-
     task_submit_options=(
         --time="${TASK_WALLTIME}"
-        --array="${next_task}-${last_task}%${PARALLELISM}"
+        --array="${batch}%${PARALLELISM}"
     )
     if [[ -n "${EXECUTION_NODE}" ]]; then
         task_submit_options+=(--nodelist="${EXECUTION_NODE}")
@@ -221,13 +201,12 @@ while (( next_task < task_count )); do
         exit 1
     fi
 
-    printf '%s %s-%s\n' "${job_id}" "${next_task}" "${last_task}" >>"${TASK_JOB_HISTORY}"
-    echo "Submitted array ${job_id}: tasks ${next_task}-${last_task}."
+    printf '%s %s\n' "${job_id}" "${batch}" >>"${TASK_JOB_HISTORY}"
+    echo "Submitted array ${job_id}: tasks ${batch}."
     wait_for_job_completion "${job_id}"
-    assert_completed_batch "${next_task}" "${last_task}"
-
-    next_task=$((last_task + 1))
-    printf '%s\n' "${next_task}" >"${NEXT_TASK_FILE}"
+    "${PYTHON}" "${BATCH_PLANNER}" verify \
+        --plan-directory "${RUN_DIRECTORY}/plan" --indices "${batch}" \
+        --local-workspace "${LOCAL_WORKSPACE}"
 done
 
 finalizer_submit_options=()

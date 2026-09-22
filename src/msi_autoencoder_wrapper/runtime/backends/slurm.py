@@ -5,11 +5,19 @@ from __future__ import annotations
 import shlex
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 
-def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str, Any]) -> Path:
-    """Write a job-array script that selects one materialized task by index."""
+def write_sbatch_script(
+    plan_directory: Path,
+    tasks: int | Sequence[str],
+    options: dict[str, Any],
+    *,
+    dependency_job_id: str | None = None,
+    script_name: str = "run.sbatch",
+) -> Path:
+    """Write a job-array script for one dependency-safe task layer."""
+    task_count = tasks if isinstance(tasks, int) else len(tasks)
     if task_count < 1:
         raise ValueError("A Slurm plan requires at least one task")
     parallelism = int(options.get("array_parallelism", 1))
@@ -17,6 +25,10 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
         "#!/usr/bin/env bash",
         f"#SBATCH --array=0-{task_count - 1}%{parallelism}",
     ]
+    if dependency_job_id is not None:
+        if not dependency_job_id.isdigit():
+            raise ValueError("dependency_job_id must contain only digits.")
+        directives.append(f"#SBATCH --dependency=afterany:{dependency_job_id}")
     mapping = {
         "partition": "partition",
         "qos": "qos",
@@ -39,17 +51,24 @@ def write_sbatch_script(plan_directory: Path, task_count: int, options: dict[str
         # REMARK: Entropy documents GPU requests through the portable GRES
         # syntax. Its Slurm deployment rejects --gpus-per-task.
         directives.append(f"#SBATCH --gres=gpu:{gpu_count}")
-    tasks = (plan_directory / "tasks").resolve()
-    task_pattern = shlex.quote(str(tasks / "task_%06d.yaml"))
     python = shlex.quote(sys.executable)
-    directives.extend(
-        [
-            "set -euo pipefail",
-            f'TASK_FILE=$(printf {task_pattern} "$SLURM_ARRAY_TASK_ID")',
-            f'{python} -m msi_autoencoder_wrapper.runtime.cli task "$TASK_FILE"',
+    directives.append("set -euo pipefail")
+    if isinstance(tasks, int):
+        task_pattern = shlex.quote(str((plan_directory / "tasks") / "task_%06d.yaml"))
+        directives.append(
+            f'TASK_FILE=$(printf {task_pattern} "$SLURM_ARRAY_TASK_ID")'
+        )
+    else:
+        task_paths = [
+            shlex.quote(str((plan_directory / "tasks" / f"{task_id}.yaml").resolve()))
+            for task_id in tasks
         ]
+        directives.append(f"TASK_FILES=({' '.join(task_paths)})")
+        directives.append('TASK_FILE="${TASK_FILES[$SLURM_ARRAY_TASK_ID]}"')
+    directives.append(
+        f'{python} -m msi_autoencoder_wrapper.runtime.cli task "$TASK_FILE"'
     )
-    path = plan_directory / "run.sbatch"
+    path = plan_directory / script_name
     path.write_text("\n".join(directives) + "\n", encoding="utf-8")
     return path
 

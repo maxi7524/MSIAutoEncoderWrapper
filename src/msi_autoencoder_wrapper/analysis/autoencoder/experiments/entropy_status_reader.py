@@ -200,4 +200,6 @@ def _build_entropy_task(
         result=result,
         model_config=model_config,
         history=history,
+        workflow=task_definition.get("workflow"),
+        depends_on=tuple(task_definition.get("depends_on", ())),
     )

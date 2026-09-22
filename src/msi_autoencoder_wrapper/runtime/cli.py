@@ -135,7 +135,13 @@ def _task_label(task: dict) -> str:
     architecture_name = architecture.get("name", "unknown-architecture")
     bin_step = grid.get("binning_steps", "?")
     repetition = task.get("repetition", "?")
-    return f"{task['task_id']} | {architecture_name} | bin={bin_step} | rep={repetition}"
+    workflow = task.get("workflow")
+    role = workflow.get("role") if isinstance(workflow, dict) else None
+    role_label = f" | role={role}" if role else ""
+    return (
+        f"{task['task_id']} | {architecture_name} | bin={bin_step} "
+        f"| rep={repetition}{role_label}"
+    )
 
 
 def _has_complete_plan(directory: Path, plan: ExperimentPlan) -> bool:
@@ -147,7 +153,7 @@ def _has_complete_plan(directory: Path, plan: ExperimentPlan) -> bool:
     expected_ids = {task.task_id for task in plan.tasks}
     materialized_ids = {task.get("task_id") for task in manifest.get("tasks", [])}
     return (
-        manifest.get("runtime_schema_version") == 1
+        manifest.get("runtime_schema_version") == 2
         and manifest.get("config_fingerprint") == plan.config_fingerprint
         and materialized_ids == expected_ids
         and all((directory / "tasks" / f"{task_id}.yaml").is_file() for task_id in expected_ids)
@@ -195,6 +201,29 @@ def _execute_task_file(path: Path, *, entrypoint: str | None = None, status_dire
         {"status": "running", "task": task, "task_fingerprint": materialized_fingerprint},
     )
     try:
+        dependency_results: dict[str, dict] = {}
+        for parent_task_id in task.get("depends_on", []):
+            parent_task_path = path.parent / f"{parent_task_id}.yaml"
+            if not parent_task_path.is_file():
+                raise ValueError(
+                    f"Dependency task descriptor does not exist: {parent_task_path}"
+                )
+            parent_task = _load_task(parent_task_path)
+            parent_manifest = runtime_root / status_directory / f"{parent_task_id}.yaml"
+            if not is_completed_task(parent_manifest, parent_task):
+                raise ValueError(
+                    f"Dependency task '{parent_task_id}' is not completed with a "
+                    "matching fingerprint."
+                )
+            parent_status = _load_task(parent_manifest)
+            parent_record = parent_status.get("records", {}).get(parent_task_id, {})
+            parent_result = parent_record.get("result")
+            if not isinstance(parent_result, dict):
+                raise ValueError(
+                    f"Dependency task '{parent_task_id}' has no result mapping."
+                )
+            dependency_results[parent_task_id] = parent_result
+        task["runtime"]["dependency_results"] = dependency_results
         result = execute_task(task)
     except Exception as error:
         update_manifest(manifest, task["task_id"], {"status": "failed", "error": str(error)})
@@ -206,6 +235,42 @@ def _execute_task_file(path: Path, *, entrypoint: str | None = None, status_dire
         {"status": "completed", "result": result, "task_fingerprint": materialized_fingerprint},
     )
     return True
+
+
+def _dependency_layers(task_paths: list[Path]) -> list[list[Path]]:
+    """Return deterministic topological layers for pending task descriptors.
+
+    Dependencies absent from ``task_paths`` are assumed to have completed before the
+    pending set was collected. Execution still verifies their status and fingerprint
+    in :func:`_execute_task_file`.
+
+    :param task_paths: Pending materialized task descriptors.
+    :type task_paths: list[pathlib.Path]
+    :return: Parent-before-child task layers.
+    :rtype: list[list[pathlib.Path]]
+    :raises ValueError: If pending tasks contain a dependency cycle.
+    """
+    tasks = {path: _load_task(path) for path in task_paths}
+    paths_by_id = {task["task_id"]: path for path, task in tasks.items()}
+    if len(paths_by_id) != len(tasks):
+        raise ValueError("Pending tasks contain duplicate task identifiers.")
+    remaining = set(paths_by_id)
+    layers: list[list[Path]] = []
+    while remaining:
+        ready_ids = sorted(
+            task_id
+            for task_id in remaining
+            if not remaining.intersection(
+                tasks[paths_by_id[task_id]].get("depends_on", [])
+            )
+        )
+        if not ready_ids:
+            raise ValueError(
+                f"Pending task dependency graph contains a cycle: {sorted(remaining)}"
+            )
+        layers.append([paths_by_id[task_id] for task_id in ready_ids])
+        remaining.difference_update(ready_ids)
+    return layers
 
 
 def _run_report_command(config: dict, args: argparse.Namespace) -> None:
@@ -254,7 +319,7 @@ def _has_compatible_manifest(directory: Path, plan: ExperimentPlan) -> bool:
         return False
     manifest = _load_task(manifest_path)
     return (
-        manifest.get("runtime_schema_version") == 1
+        manifest.get("runtime_schema_version") == 2
         and manifest.get("config_fingerprint") == plan.config_fingerprint
         and manifest.get("experiment_name") == plan.experiment_name
     )
@@ -313,10 +378,22 @@ def _run_local_campaign(
         description="Experiment",
         position=0,
     )
+    dependency_layers = _dependency_layers(task_paths)
     if max_parallel_runs > 1:
         try:
-            run_local_tasks(task_paths, max_parallel_runs)
-            experiment_progress.update(pending_total)
+            completed = completed_before
+            for layer in dependency_layers:
+                run_local_tasks(layer, max_parallel_runs)
+                completed += len(layer)
+                experiment_progress.update(len(layer))
+                update_progress(
+                    progress_path,
+                    {
+                        "status": "completed" if completed == total_tasks else "running",
+                        "completed": completed,
+                        "total": total_tasks,
+                    },
+                )
             update_progress(
                 progress_path,
                 {"status": "completed", "completed": total_tasks, "total": total_tasks},
@@ -325,7 +402,10 @@ def _run_local_campaign(
             experiment_progress.close()
         return
     try:
-        for index, task_path in enumerate(task_paths, start=1):
+        ordered_task_paths = [
+            task_path for layer in dependency_layers for task_path in layer
+        ]
+        for index, task_path in enumerate(ordered_task_paths, start=1):
             task = _load_task(task_path)
             experiment_progress.set_postfix_str(_task_label(task), refresh=False)
             update_progress(
@@ -527,7 +607,7 @@ def _run_local_backend(
 
 
 def _run_slurm_backend(config: dict, plan: ExperimentPlan, directory: Path, task_paths: list[Path]) -> None:
-    """Stage, submit, and arrange finalization for one Slurm task array.
+    """Stage and submit dependency-safe Slurm task-array layers.
 
     :param config: Loaded experiment configuration.
     :type config: dict
@@ -552,26 +632,42 @@ def _run_slurm_backend(config: dict, plan: ExperimentPlan, directory: Path, task
     array_submitted = False
     try:
         staged_plan = staged / "plan"
-        script = write_sbatch_script(staged_plan, len(task_paths), plan.execution.get("slurm", {}))
-        try:
-            result = subprocess.run(
-                build_sbatch_command(script, parsable=True),
-                check=True,
-                capture_output=True,
-                text=True,
+        job_ids: list[str] = []
+        previous_job_id = None
+        for layer_index, layer in enumerate(_dependency_layers(task_paths)):
+            task_ids = [_load_task(path)["task_id"] for path in layer]
+            script = write_sbatch_script(
+                staged_plan,
+                task_ids,
+                plan.execution.get("slurm", {}),
+                dependency_job_id=previous_job_id,
+                script_name=f"run-layer-{layer_index:03d}.sbatch",
             )
-        except subprocess.CalledProcessError as error:
-            raise RuntimeError(
-                "Slurm array submission failed: "
-                f"stdout={error.stdout!r}; stderr={error.stderr!r}"
-            ) from error
-        job_id = result.stdout.strip().split(";", 1)[0]
-        if not job_id.isdigit():
-            raise RuntimeError(f"Cannot parse sbatch job identifier: {result.stdout!r}")
-        array_submitted = True
+            try:
+                result = subprocess.run(
+                    build_sbatch_command(script, parsable=True),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError(
+                    "Slurm array submission failed: "
+                    f"stdout={error.stdout!r}; stderr={error.stderr!r}"
+                ) from error
+            job_id = result.stdout.strip().split(";", 1)[0]
+            if not job_id.isdigit():
+                raise RuntimeError(
+                    f"Cannot parse sbatch job identifier: {result.stdout!r}"
+                )
+            job_ids.append(job_id)
+            previous_job_id = job_id
+            array_submitted = True
+        if not job_ids:
+            raise ValueError("No pending Slurm task layers were produced.")
         finalize_script = write_finalize_script(
             staged_plan,
-            job_id=job_id,
+            job_id=job_ids[-1],
             config_path=Path(config["_config_path"]),
             persistent_directory=directory,
             staging_directory=staged,
@@ -582,7 +678,11 @@ def _run_slurm_backend(config: dict, plan: ExperimentPlan, directory: Path, task
         if not array_submitted:
             cleanup_staging_directory(staged, execution_id)
         raise
-    logger.info("Submitted Slurm array %s and its dependent finalizer.", job_id)
+    logger.info(
+        "Submitted Slurm task layers %s and finalizer after %s.",
+        job_ids,
+        job_ids[-1],
+    )
 
 
 def _run_campaign_command(config: dict, args: argparse.Namespace) -> None:

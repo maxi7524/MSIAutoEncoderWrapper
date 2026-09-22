@@ -161,6 +161,13 @@ class MSIPyTorchTrainer(ConfigurableComponent):
                     dataset_partitions = SyntheticPrecomputePhase(
                         synthetic_config
                     ).build_partitions(dataset)
+                    logger.info(
+                        "Training phase '%s' selected synthetic population '%s' "
+                        "with %s training rows.",
+                        phase_name,
+                        synthetic_config.get("population"),
+                        len(dataset_partitions["train"]),
+                    )
                 else:
                     from ...data.pretraining import build_synthetic_partitions
 

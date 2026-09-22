@@ -54,3 +54,24 @@ def test_finalizer_runs_after_any_array_outcome(tmp_path: Path) -> None:
     assert content.index("#SBATCH --dependency=afterany:1234") < content.index("set -euo pipefail")
     assert " execution_id" not in content
     assert "--execution-id execution-1" in content
+
+
+def test_slurm_dependency_layer_uses_explicit_task_ids(tmp_path: Path) -> None:
+    """A child layer waits for its parent array and maps only selected tasks."""
+    (tmp_path / "tasks").mkdir()
+
+    script = write_sbatch_script(
+        tmp_path,
+        ["task_000101", "task_000102"],
+        {"array_parallelism": 2},
+        dependency_job_id="1234",
+        script_name="run-layer-001.sbatch",
+    )
+    content = script.read_text(encoding="utf-8")
+
+    assert script.name == "run-layer-001.sbatch"
+    assert "#SBATCH --array=0-1%2" in content
+    assert "#SBATCH --dependency=afterany:1234" in content
+    assert "task_000101.yaml" in content
+    assert "task_000102.yaml" in content
+    assert "task_%06d.yaml" not in content

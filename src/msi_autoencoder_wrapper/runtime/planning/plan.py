@@ -23,6 +23,8 @@ class PlannedTask:
     grid_parameters: dict[str, Any]
     entrypoint: str
     parameters: dict[str, Any]
+    workflow: dict[str, Any] | None = None
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,67 @@ def configuration_fingerprint(config: dict[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _workflow_roles(
+    parameters: dict[str, Any],
+    workflow: dict[str, Any] | None,
+) -> tuple[tuple[str | None, dict[str, Any]], ...]:
+    """Split one grid run into independently persisted workflow roles.
+
+    :param parameters: Grid-resolved task parameters.
+    :type parameters: dict[str, typing.Any]
+    :param workflow: Optional workflow declaration from ``task.workflow``.
+    :type workflow: dict[str, typing.Any] | None
+    :return: Ordered ``(role, parameters)`` task variants.
+    :rtype: tuple[tuple[str | None, dict[str, typing.Any]], ...]
+    :raises ValueError: If a phase-role workflow is incomplete or malformed.
+    """
+    if workflow is None:
+        return ((None, parameters),)
+    if workflow.get("strategy") != "pretraining_branches":
+        raise ValueError("task.workflow.strategy must be 'pretraining_branches'.")
+
+    phases = parameters.get("training", {}).get("phases")
+    if not isinstance(phases, list) or not phases:
+        raise ValueError("A pretraining branch workflow requires training phases.")
+    phases_by_role: dict[str, list[dict[str, Any]]] = {}
+    role_order: list[str] = []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            raise ValueError("Every workflow training phase must be a mapping.")
+        role = phase.get("workflow_role")
+        if role not in {"real_only", "pretrained", "frozen_head", "unfrozen_head"}:
+            raise ValueError(
+                "Every workflow phase requires workflow_role equal to real_only, "
+                "pretrained, frozen_head or unfrozen_head."
+            )
+        if role not in phases_by_role:
+            phases_by_role[role] = []
+            role_order.append(role)
+        phases_by_role[role].append(deepcopy(phase))
+
+    observed_roles = set(phases_by_role)
+    if observed_roles == {"real_only"}:
+        expected_order = ["real_only"]
+    elif observed_roles == {"pretrained", "frozen_head", "unfrozen_head"}:
+        expected_order = ["pretrained", "frozen_head", "unfrozen_head"]
+    else:
+        raise ValueError(
+            "A workflow grid run must contain either real_only or exactly "
+            "pretrained, frozen_head and unfrozen_head phases."
+        )
+    if role_order != expected_order:
+        raise ValueError(
+            f"Workflow roles must appear in order {expected_order}, got {role_order}."
+        )
+
+    variants = []
+    for role in expected_order:
+        role_parameters = deepcopy(parameters)
+        role_parameters["training"]["phases"] = phases_by_role[role]
+        variants.append((role, role_parameters))
+    return tuple(variants)
+
+
 def build_plan(config: dict[str, Any]) -> ExperimentPlan:
     """Create the Cartesian grid while preserving paired repetition seeds."""
     # Cartesian grid construction
@@ -141,6 +204,7 @@ def build_plan(config: dict[str, Any]) -> ExperimentPlan:
     common_seeds = deepcopy(seeds["common_seeds"])
     run_seeds = seeds["run_seeds"]
     tasks: list[PlannedTask] = []
+    workflow = config["task"].get("workflow")
 
     # Task expansion
     ## Evaluate every grid cell with every independently seeded repetition
@@ -159,18 +223,43 @@ def build_plan(config: dict[str, Any]) -> ExperimentPlan:
                 "run_seeds": deepcopy(run_seeds),
                 "derived_run_seeds": derived_run_seeds,
             }
-            task_index = len(tasks)
-            tasks.append(
-                PlannedTask(
-                    task_id=f"task_{task_index:06d}",
-                    grid_id=f"grid_{grid_index:04d}",
-                    repetition=repetition,
-                    reproducibility=reproducibility,
-                    grid_parameters=assignments,
-                    entrypoint=config["task"]["entrypoint"],
-                    parameters=parameters,
+            grid_id = f"grid_{grid_index:04d}"
+            group_id = f"{grid_id}__rep_{repetition:02d}"
+            variants = _workflow_roles(parameters, workflow)
+            role_task_ids = {
+                role: f"task_{len(tasks) + offset:06d}"
+                for offset, (role, _parameters) in enumerate(variants)
+            }
+            for role, role_parameters in variants:
+                parent_role = (
+                    "pretrained" if role in {"frozen_head", "unfrozen_head"} else None
                 )
-            )
+                parent_task_id = (
+                    role_task_ids[parent_role] if parent_role is not None else None
+                )
+                tasks.append(
+                    PlannedTask(
+                        task_id=role_task_ids[role],
+                        grid_id=grid_id,
+                        repetition=repetition,
+                        reproducibility=deepcopy(reproducibility),
+                        grid_parameters=deepcopy(assignments),
+                        entrypoint=config["task"]["entrypoint"],
+                        parameters=role_parameters,
+                        workflow=(
+                            {
+                                "group_id": group_id,
+                                "role": role,
+                                "parent_task_id": parent_task_id,
+                            }
+                            if role is not None
+                            else None
+                        ),
+                        depends_on=(
+                            (parent_task_id,) if parent_task_id is not None else ()
+                        ),
+                    )
+                )
     return ExperimentPlan(
         experiment_name=config["experiment"]["name"],
         config_path=config["_config_path"],
@@ -195,7 +284,7 @@ def materialize_plan(plan: ExperimentPlan, directory: Path) -> Path:
     ## Keep one aggregate record for inspection and result analysis
     plan_path = directory / "resolved-experiment.yaml"
     payload = {
-        "runtime_schema_version": 1,
+        "runtime_schema_version": 2,
         "experiment_name": plan.experiment_name,
         "config_path": plan.config_path,
         "config_fingerprint": plan.config_fingerprint,

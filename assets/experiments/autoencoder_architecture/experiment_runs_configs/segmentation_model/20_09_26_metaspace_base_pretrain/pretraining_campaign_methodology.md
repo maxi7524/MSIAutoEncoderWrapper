@@ -47,9 +47,10 @@ useful information.
 
 Permutation populations first compile an exact component-token bag and then
 randomly pack it into spectra within the axis-specific bounds in the table
-above. Components within a generated spectrum are distinct. Their relative
-intensities are drawn from a Dirichlet distribution followed by the configured
-response model.
+above. Their relative intensities are drawn from a Dirichlet distribution
+followed by the configured response model. The current compiler does not
+deduplicate prototype IDs within an individual spectrum; repeated IDs remain
+one positive molecular target.
 
 The base bag has exactly 30 occurrences of each molecular class and exactly
 30 occurrences of every blank bin. The overlap and rare mechanisms add tokens;
@@ -88,21 +89,25 @@ adaptation.
 | P5-joint | single bins + base permutations + overlap + rare quotas | one shuffled joint phase |
 | P5-staged | single bins, then base permutations + overlap + rare quotas | two sequential phases |
 
-In a joint schedule, the precomputed rows from its member populations are
-combined and deterministically shuffled. In a staged schedule, the same
-populations are retained but are consumed in separate consecutive 10-epoch
-phases. Thus the P2--P5 comparisons isolate ordering from the selected sample
-population. P1 is the no-single-bin ablation.
+In a joint schedule, complete precomputed single-bin and permutation rows are
+concatenated and deterministically shuffled into one population; the DataLoader
+shuffles its rows again each epoch. In a staged schedule, single-bin rows are
+trained for 10 epochs before permutation rows are trained for another 10 epochs.
+The permutation component-token bag is generated once and packed once, not
+resampled into new spectra every epoch. The P2--P5 comparisons therefore change
+both ordering and optimizer-step budget (one versus two 10-epoch phases); they
+are not a pure ordering-only ablation. P1 omits single-bin rows.
 
 ## Real-data branches
 
 The campaign also trains a real-only baseline for 10 epochs. Every synthetic
-schedule saves its post-pretraining snapshot and branches from that identical
-snapshot into the following comparisons.
+schedule materializes its post-pretraining model as an independent task. Two
+dependent adaptation tasks load that exact persisted artifact and save their own
+model weights.
 
 | Branch | Real-data epochs | Head state | Purpose |
 | --- | ---: | --- | --- |
-| Pretraining-only real test | 0 | restored snapshot | evaluate synthetic pretraining without real adaptation |
+| Pretraining-only real test | 0 | persisted pretraining task | evaluate synthetic pretraining without real adaptation |
 | Frozen-head adaptation | 10 | `molecule_vpu` frozen | adapt the representation while retaining synthetic logits |
 | Unfrozen adaptation | 10 | trainable | adapt both representation and logits |
 
@@ -114,10 +119,13 @@ not use the contractive or contrastive terms.
 
 ## Campaign size and execution
 
-There are 11 schedules per axis: the real-only baseline plus the 10 synthetic
-schedules in the ablation table. With two axes and five repetitions, this
-produces 110 planned runs. `execution.backend` is `local` and
-`max_parallel_runs` is `1`; no Slurm scheduler is required.
+There are 11 logical schedules per axis: the real-only baseline plus the 10
+synthetic schedules in the ablation table. Every synthetic schedule expands to
+three model tasks (`pretrained`, `frozen_head`, and `unfrozen_head`). With two
+axes and five repetitions, this produces 310 planned model tasks: 10 real-only
+models and 100 complete three-model pretraining groups. The YAML defaults to
+`execution.backend: local`; the Entropy scripts materialize the same plan and
+submit individual parent-ready tasks through Slurm.
 
 The synthetic artifact is persisted under
 `data/kidney_workspace/precompute/synthetic_pretraining`. Its fingerprint
@@ -135,7 +143,8 @@ selected population:
 2. The base permutation bag contains exactly 30 tokens per class and per blank
    bin; overlap and rare quotas are additive.
 3. Every permutation row has a component count within the configured manual
-   bounds and has no repeated component.
+   bounds. Repeated prototype IDs are allowed; their molecular targets are
+   combined into the row-level multilabel target.
 4. Synthetic spectra, targets, and coordinates are finite `float32` tensors;
    spectral values are non-negative and TIC-normalized.
 5. BCE targets include all labels at an annotated bin and known negatives for

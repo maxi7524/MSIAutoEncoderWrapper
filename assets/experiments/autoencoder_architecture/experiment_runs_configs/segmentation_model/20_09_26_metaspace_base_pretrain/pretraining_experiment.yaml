@@ -12,6 +12,7 @@ task:
   preflight_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:preflight_wrapper_training
   test_entrypoint: msi_autoencoder_wrapper.runtime.workflows.wrapper:test_wrapper_training
   plan_entrypoint: msi_autoencoder_wrapper.runtime.workflows.configured:resolve_single_image_campaign
+  workflow: {strategy: pretraining_branches}
   parameters:
     factory: msi_autoencoder_wrapper.runtime.workflows.configured:build_single_image_autoencoder
     factory_parameters:
@@ -128,6 +129,7 @@ grid:
       # Real-only baseline; one independently trained model per axis.
       - - &real_only
           phase_name: real_only
+          workflow_role: real_only
           epochs: 10
           batch_size: 64
           gradient_clip_norm: 5.0
@@ -184,8 +186,9 @@ grid:
           evaluate_test: true
 
       # P0: single bins only.
-      - - &synthetic_axis_snapshot
+      - - &synthetic_axis_pretraining
           phase_name: synthetic_single
+          workflow_role: pretrained
           epochs: 10
           batch_size: 64
           gradient_clip_norm: 5.0
@@ -264,34 +267,35 @@ grid:
             heads:
               molecule_vpu:
                 bce: {target: MultiLabelBCELoss, weight: 0.2}
-          save_model_state_as: synthetic_pretrained
         - &pretrain_only_test
           phase_name: pretrain_only_real_test
+          workflow_role: pretrained
           epochs: 0
           batch_size: 64
-          restore_model_state_from: synthetic_pretrained
           criterions: *real_objective
           evaluate_test: true
           evaluation_data: real
         - &real_frozen
           phase_name: real_adaptation_frozen_head
+          workflow_role: frozen_head
           epochs: 10
           batch_size: 64
           gradient_clip_norm: 5.0
           supervision_sampling: *real_supervision
           optimizer: *optimizer
-          restore_model_state_from: synthetic_pretrained
           freeze: [heads.molecule_vpu]
           criterions: *real_objective
           evaluate_test: true
         - &real_unfrozen
           <<: *real_frozen
           phase_name: real_adaptation_unfrozen_head
+          workflow_role: unfrozen_head
           freeze: []
 
       # P1: permutations only.
-      - - &synthetic_permutation_base_snapshot
+      - - &synthetic_permutation_base_pretraining
           phase_name: synthetic_permutation_base
+          workflow_role: pretrained
           epochs: 10
           batch_size: 64
           gradient_clip_norm: 5.0
@@ -302,14 +306,13 @@ grid:
             validation_samples: 2048
             artifact: *synthetic_artifact
           criterions: *synthetic_objective
-          save_model_state_as: synthetic_pretrained
         - *pretrain_only_test
         - *real_frozen
         - *real_unfrozen
 
       # P2 joint: single + base permutations in one shuffled phase.
-      - - &synthetic_joint_base_snapshot
-          <<: *synthetic_permutation_base_snapshot
+      - - &synthetic_joint_base_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_joint_base
           pretraining:
             kind: precomputed_synthetic
@@ -322,17 +325,16 @@ grid:
 
       # P2 staged: single, then base permutations.
       - - &synthetic_axis_stage
-          <<: *synthetic_axis_snapshot
+          <<: *synthetic_axis_pretraining
           phase_name: synthetic_single_stage
-          save_model_state_as: null
-        - *synthetic_permutation_base_snapshot
+        - *synthetic_permutation_base_pretraining
         - *pretrain_only_test
         - *real_frozen
         - *real_unfrozen
 
       # P3 joint: single + permutations carrying additive overlap quota.
-      - - &synthetic_joint_overlap_snapshot
-          <<: *synthetic_permutation_base_snapshot
+      - - &synthetic_joint_overlap_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_joint_overlap
           pretraining:
             kind: precomputed_synthetic
@@ -345,8 +347,8 @@ grid:
 
       # P3 staged.
       - - *synthetic_axis_stage
-        - &synthetic_permutation_overlap_snapshot
-          <<: *synthetic_permutation_base_snapshot
+        - &synthetic_permutation_overlap_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_permutation_overlap
           pretraining:
             kind: precomputed_synthetic
@@ -358,8 +360,8 @@ grid:
         - *real_unfrozen
 
       # P4 joint: single + permutations carrying additive rare-class quota.
-      - - &synthetic_joint_rare_snapshot
-          <<: *synthetic_permutation_base_snapshot
+      - - &synthetic_joint_rare_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_joint_rare
           pretraining:
             kind: precomputed_synthetic
@@ -372,8 +374,8 @@ grid:
 
       # P4 staged.
       - - *synthetic_axis_stage
-        - &synthetic_permutation_rare_snapshot
-          <<: *synthetic_permutation_base_snapshot
+        - &synthetic_permutation_rare_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_permutation_rare
           pretraining:
             kind: precomputed_synthetic
@@ -385,8 +387,8 @@ grid:
         - *real_unfrozen
 
       # P5 joint: all quotas in one shuffled phase.
-      - - &synthetic_joint_all_snapshot
-          <<: *synthetic_permutation_base_snapshot
+      - - &synthetic_joint_all_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_joint_all
           pretraining:
             kind: precomputed_synthetic
@@ -399,8 +401,8 @@ grid:
 
       # P5 staged: single, then one shared base+overlap+rare permutation phase.
       - - *synthetic_axis_stage
-        - &synthetic_permutation_all_snapshot
-          <<: *synthetic_permutation_base_snapshot
+        - &synthetic_permutation_all_pretraining
+          <<: *synthetic_permutation_base_pretraining
           phase_name: synthetic_permutation_all
           pretraining:
             kind: precomputed_synthetic

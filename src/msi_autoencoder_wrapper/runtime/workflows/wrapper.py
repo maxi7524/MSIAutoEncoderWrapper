@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 from typing import Any
 
+import torch
+
+from ...models.model_loader import ModelLoader
 from ...utils.logger import get_custom_logger
 from ..reproducibility import set_execution_seed
 from .entrypoints import resolve_entrypoint
@@ -48,6 +52,66 @@ def _apply_split_seed(wrapper: Any, seed: int) -> None:
         dataset._partitions = None
 
 
+def _weights_sha256(model_path: Path) -> str:
+    """Hash the exact persisted parent weights loaded by an adaptation task."""
+    digest = hashlib.sha256()
+    weights_path = model_path / "config" / "weights.pt"
+    with weights_path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _load_parent_model(wrapper: Any, task: dict[str, Any]) -> dict[str, str] | None:
+    """Load a completed parent artifact into one dependent training task.
+
+    :param wrapper: Fully constructed child wrapper.
+    :type wrapper: typing.Any
+    :param task: Materialized task with dependency results injected by the runtime.
+    :type task: dict[str, typing.Any]
+    :return: Auditable parent initialization metadata, or ``None`` for root tasks.
+    :rtype: dict[str, str] | None
+    :raises ValueError: If dependency metadata is missing or inconsistent.
+    """
+    workflow = task.get("workflow")
+    if not isinstance(workflow, dict):
+        return None
+    parent_task_id = workflow.get("parent_task_id")
+    if parent_task_id is None:
+        return None
+    dependencies = task.get("runtime", {}).get("dependency_results", {})
+    if not isinstance(dependencies, dict):
+        raise ValueError("runtime.dependency_results must be a mapping.")
+    parent_result = dependencies.get(parent_task_id)
+    if not isinstance(parent_result, dict):
+        raise ValueError(
+            f"Task '{task['task_id']}' has no completed result for parent "
+            f"'{parent_task_id}'."
+        )
+    parent_reference = parent_result.get("model_path")
+    if not isinstance(parent_reference, str) or not parent_reference:
+        raise ValueError(f"Parent task '{parent_task_id}' has no model_path result.")
+
+    parent_model, _, parent_path = ModelLoader.load_artifact(parent_reference)
+    active_model = wrapper.active_model
+    active_model.load_state_dict(parent_model.state_dict(), strict=True)
+    del parent_model
+    if any(not bool(torch.isfinite(value).all()) for value in active_model.state_dict().values()):
+        raise ValueError(f"Parent task '{parent_task_id}' contains non-finite weights.")
+    initialization = {
+        "parent_task_id": str(parent_task_id),
+        "model_path": str(parent_path.resolve()),
+        "weights_sha256": _weights_sha256(parent_path),
+    }
+    logger.info(
+        "Loaded parent model '%s' from %s (weights_sha256=%s).",
+        parent_task_id,
+        parent_path,
+        initialization["weights_sha256"],
+    )
+    return initialization
+
+
 def preflight_wrapper_training(task: dict[str, Any]) -> dict[str, Any]:
     """Build the complete pipeline and execute its existing probe forward pass."""
     # Complete dry construction
@@ -68,6 +132,7 @@ def run_wrapper_training(task: dict[str, Any]) -> dict[str, Any]:
     """Build, train and persist one wrapper model task."""
     # Task construction and paired split
     wrapper = _build_wrapper(task)
+    initialization = _load_parent_model(wrapper, task)
     reproducibility = task["reproducibility"]
     _apply_split_seed(wrapper, int(reproducibility["common_seeds"]["split"]))
     # Training randomness
@@ -101,7 +166,13 @@ def run_wrapper_training(task: dict[str, Any]) -> dict[str, Any]:
         or task["task_id"]
     )
     model_path = wrapper.workspace.save_model(model_name=model_name, history=history)
-    return {"model_path": str(Path(model_path).resolve()), "epochs": len(history)}
+    result: dict[str, Any] = {
+        "model_path": str(Path(model_path).resolve()),
+        "epochs": len(history),
+    }
+    if initialization is not None:
+        result["initialization"] = initialization
+    return result
 
 
 def test_wrapper_training(task: dict[str, Any]) -> dict[str, Any]:

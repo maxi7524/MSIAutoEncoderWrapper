@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from msi_autoencoder_wrapper.analysis.autoencoder.experiments import (
     CampaignTask,
@@ -61,6 +62,38 @@ def test_read_campaign_load_artifacts_false_skips_json(tmp_path: Path) -> None:
 
     assert tasks[0].model_config is None
     assert tasks[0].history is None
+
+
+def test_read_campaign_preserves_workflow_identity_and_dependencies(
+    tmp_path: Path,
+) -> None:
+    """Analysis records retain the explicit role instead of inferring it from phases."""
+    manifest_path = write_campaign_task(
+        tmp_path,
+        task_id="task_000001",
+        architecture_name="mlp-ae",
+        preset="MLPAutoencoder",
+        binning_step=0.5,
+        repetition=0,
+        input_dim=6,
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    task = manifest["records"]["task_000001"]["task"]
+    task["workflow"] = {
+        "group_id": "grid_0000__rep_00",
+        "role": "frozen_head",
+        "parent_task_id": "task_000000",
+    }
+    task["depends_on"] = ["task_000000"]
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    loaded = read_campaign(tmp_path, EXPERIMENT_NAME)[0]
+
+    assert loaded.workflow == task["workflow"]
+    assert loaded.depends_on == ("task_000000",)
 
 
 def test_read_campaign_incomplete_task_has_no_artifacts_even_when_requested(

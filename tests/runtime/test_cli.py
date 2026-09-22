@@ -9,10 +9,13 @@ import yaml
 
 from msi_autoencoder_wrapper.runtime import build_plan, load_experiment_config
 from msi_autoencoder_wrapper.runtime.cli import (
+    _dependency_layers,
+    _execute_task_file,
     _has_complete_plan,
     _set_experiment_directory,
     main,
 )
+from msi_autoencoder_wrapper.runtime.output import task_fingerprint
 
 
 def preflight_entrypoint(task: dict) -> dict:
@@ -188,3 +191,85 @@ def test_run_test_run_probes_every_grid_cell_without_training_status(tmp_path: P
 
     assert len(list((output / "test-status").glob("task_*.yaml"))) == 2
     assert not (output / "status").exists()
+
+
+def test_dependency_layers_put_parent_before_both_children(tmp_path: Path) -> None:
+    """Topological scheduling is independent of input path ordering."""
+    tasks_directory = tmp_path / "tasks"
+    tasks_directory.mkdir()
+    definitions = {
+        "task_000000": [],
+        "task_000001": ["task_000000"],
+        "task_000002": ["task_000000"],
+    }
+    paths = []
+    for task_id, dependencies in definitions.items():
+        path = tasks_directory / f"{task_id}.yaml"
+        path.write_text(
+            yaml.safe_dump({"task_id": task_id, "depends_on": dependencies}),
+            encoding="utf-8",
+        )
+        paths.append(path)
+
+    layers = _dependency_layers(list(reversed(paths)))
+
+    assert [[path.stem for path in layer] for layer in layers] == [
+        ["task_000000"],
+        ["task_000001", "task_000002"],
+    ]
+
+
+def test_child_execution_receives_only_completed_parent_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Runtime resolves dependency output from the fingerprinted parent status."""
+    tasks_directory = tmp_path / "tasks"
+    status_directory = tmp_path / "status"
+    tasks_directory.mkdir()
+    status_directory.mkdir()
+    parent = {
+        "task_id": "task_000000",
+        "depends_on": [],
+        "repetition": 0,
+        "grid_id": "grid_0000",
+        "reproducibility": {"derived_run_seeds": {"model_initialization": 1}},
+        "entrypoint": "unused:parent",
+    }
+    child = {
+        "task_id": "task_000001",
+        "depends_on": ["task_000000"],
+        "repetition": 0,
+        "grid_id": "grid_0000",
+        "reproducibility": {"derived_run_seeds": {"model_initialization": 1}},
+        "entrypoint": "unused:child",
+    }
+    parent_path = tasks_directory / "task_000000.yaml"
+    child_path = tasks_directory / "task_000001.yaml"
+    parent_path.write_text(yaml.safe_dump(parent), encoding="utf-8")
+    child_path.write_text(yaml.safe_dump(child), encoding="utf-8")
+    parent_result = {"model_path": "/models/pretrained"}
+    (status_directory / "task_000000.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "records": {
+                    "task_000000": {
+                        "status": "completed",
+                        "task_fingerprint": task_fingerprint(parent),
+                        "result": parent_result,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed = {}
+
+    def execute(task: dict) -> dict:
+        observed.update(task["runtime"]["dependency_results"])
+        return {"model_path": "/models/frozen"}
+
+    monkeypatch.setattr("msi_autoencoder_wrapper.runtime.cli.execute_task", execute)
+
+    assert _execute_task_file(child_path)
+    assert observed == {"task_000000": parent_result}

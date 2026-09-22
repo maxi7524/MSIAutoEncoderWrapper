@@ -201,6 +201,16 @@ def test_phase_snapshot_reuses_one_pretrain_for_isolated_real_branches():
         not torch.equal(snapshots["synthetic_bce"][name], snapshots["frozen_branch"][name])
         for name in snapshots["synthetic_bce"]
     )
+    assert all(
+        torch.equal(snapshots["synthetic_bce"][name], snapshots["frozen_branch"][name])
+        for name in snapshots["synthetic_bce"]
+        if name.startswith("heads.ion.")
+    )
+    assert any(
+        not torch.equal(snapshots["synthetic_bce"][name], snapshots["frozen_branch"][name])
+        for name in snapshots["synthetic_bce"]
+        if not name.startswith("heads.ion.")
+    )
     assert [entry["phase"] for entry in history if entry.get("split") == "test"] == [
         "synthetic_bce",
         "real_frozen_head",

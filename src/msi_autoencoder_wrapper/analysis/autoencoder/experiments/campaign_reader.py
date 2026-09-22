@@ -57,6 +57,12 @@ class CampaignTask:
         no ``epoch``/``duration``. Callers computing per-epoch curves must filter on
         ``metrics.epoch is not None``.
     :type history: list[Any] | None
+    :param workflow: Explicit workflow identity attached to the materialized task,
+        including its role and branch group. ``None`` for legacy campaigns.
+    :type workflow: Mapping[str, Any] | None
+    :param depends_on: Task identifiers whose persisted artifacts initialize this
+        task. Empty for independent and legacy tasks.
+    :type depends_on: tuple[str, ...]
     """
 
     task_id: str
@@ -66,6 +72,8 @@ class CampaignTask:
     result: Optional[Mapping[str, Any]]
     model_config: Optional[Mapping[str, Any]]
     history: Optional[list]
+    workflow: Optional[Mapping[str, Any]] = None
+    depends_on: tuple[str, ...] = ()
 
 
 def read_campaign(
@@ -212,6 +220,8 @@ def _build_task(
         result=result,
         model_config=model_config,
         history=history,
+        workflow=task_definition.get("workflow"),
+        depends_on=tuple(task_definition.get("depends_on", ())),
     )
 
 

@@ -7,7 +7,7 @@ and remotely. A campaign stores its durable execution artifacts under:
 ```text
 data/<workspace>/
 ├── configs/entropy-runs/<campaign-id>/  # plan, task statuses, logs, runtime YAML
-└── models/<context>/<campaign-id>__task_<index>/
+└── models/<context>/<campaign-id>__grid_<index>__rep_<rep>__<role>/
 ```
 
 The default remote host is `entropy`. It is an SSH alias defined by the user in
@@ -37,13 +37,13 @@ workspace on /home
       ▼
 /tmp/$USER/msi-wrapper/<campaign>/workspace
       │
-      ├── 03: arrays of at most 6 submitted tasks, at most 3 concurrent
+      ├── 03: dependency-ready arrays of at most 12 tasks, at most 6 concurrent
       ▼
 task logs + plan/status in workspace/configs/entropy-runs/<campaign>
       │
-      ├── 06: copy only <campaign>__task_* model directories
+      ├── 03_2: copy only newly trained <campaign>__* model directories
       ▼
-workspace/models/<context>/<campaign>__task_<index>
+workspace/models/<context>/<campaign>__grid_<index>__rep_<rep>__<role>
 ```
 
 `/tmp` is node-local NVMe storage, not RAM and not GPU memory. Every task in a
@@ -56,8 +56,8 @@ workspace copy.
 
 Use this command only when staging already completed for the same campaign and
 the coordinator stopped or the login session ended. It preserves completed task
-statuses, cancels only arrays recorded for this campaign, and resumes from the
-first task without `status: completed`. Do not run staging again.
+statuses, cancels only arrays recorded for this campaign, and recomputes the
+pending parent-ready DAG layer. Do not run staging again.
 
 ```bash
 # Existing campaign location
@@ -68,14 +68,14 @@ RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
 SELECTED_NODE=asusgpu1  # The same node that was used for staging.
 
 # Restart the persistent coordinator
-## Completed task manifests are retained; only unfinished task indices are submitted.
+## Completed task manifests are retained; only parent-ready pending tasks are submitted.
 nohup bash assets/scripts/entropy/03_orchestrate_campaign.sh \
   --restart "${RUN_DIRECTORY}" \
   --nodelist "${SELECTED_NODE}" \
   > "${RUN_DIRECTORY}/orchestrator-restart.log" 2>&1 &
 ```
 
-### Define inputs nad stage new campaign 
+### Define inputs and stage a new campaign
 
 Staging is the preparation step, it does not train models. It copies the
 selected workspace once to node-local `/tmp`, changes the runtime YAML to use
@@ -96,15 +96,10 @@ bash "${SCRIPTS}/01_setup_environment.sh"
 # Campaign inputs
 ## REMARK: Here put your workspace path. It must be relative to both repositories.
 WORKSPACE=data/kidney_workspace
-## REMARK: Here put your YAML config path. It defines data, model, losses, and repetitions.
-WORKSPACE=data/kidney_workspace
+## The YAML defines data, model, objectives, and repetitions.
 EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/20_09_26_metaspace_base_pretrain/pretraining_experiment.yaml
-CAMPAIGN_ID=metaspace-pretrain-initial-$(date +%Y%m%d)-01
-RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
-EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/05_09_26_contractive_expaned/bce_baseline_experiment.yaml
-## REMARK: Here put your experiment name. It must be new and scopes run files and model names.
-CAMPAIGN_ID=bce-baseline-$(date +%Y%m%d)-01
-## Derived automatically when the optional fourth staging argument is omitted.
+## Use this exact ID when importing recovered models and downloading this run.
+CAMPAIGN_ID=metaspace-pretrain-repaired-20260923-01
 RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
 
 # Choose exactly one of the following staging commands.
@@ -165,53 +160,18 @@ nohup bash "${SCRIPTS}/03_orchestrate_campaign.sh" "${RUN_DIRECTORY}" \
   > "${RUN_DIRECTORY}/orchestrator.log" 2>&1 &
 ```
 
-This command performs the training. It submits the first batch of at most six
-task-array elements with at most three running simultaneously. After the batch
-leaves Slurm, it verifies every task status. Only then does it submit the next
-batch. A failed task stops the coordinator and prevents finalization; use the
+This command performs the training. It submits parent-ready batches of at most
+twelve task-array elements with at most six running simultaneously. After each
+batch leaves Slurm, it verifies matching task fingerprints and accessible model
+bundles before selecting the next dependency layer. A failed task stops the coordinator and prevents finalization; use the
 status file and task log to diagnose it before using `--restart`.
 
-### Kidney precomputed synthetic campaign
-
-For the persistent synthetic pretraining experiment, use the repository
-configuration and the workspace containing
-`data/kidney_workspace/datasets/kidney/kidney.imzML`:
-
-```bash
-cd ~/repositories/MSIAutoEncoderWrapper
-SCRIPTS=assets/scripts/entropy
-WORKSPACE=data/kidney_workspace
-EXPERIMENT_YAML=assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/20_09_26_metaspace_base_pretrain/pretraining_experiment.yaml
-CAMPAIGN_ID=kidney-precomputed-$(date +%Y%m%d)-01
-SELECTED_NODE=asusgpu1
-STAGING_ROOT="/tmp/${USER}/msi-wrapper"
-export STAGING_ROOT REPOSITORY_ROOT="${PWD}"
-
-sbatch --nodelist="${SELECTED_NODE}" \
-  "${SCRIPTS}/02_stage_campaign.sbatch" \
-  "${CAMPAIGN_ID}" \
-  "${EXPERIMENT_YAML}" \
-  "${WORKSPACE}"
-```
-
-Wait for staging to create `${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}/task-count`.
-Before starting the coordinator, measure both persistent populations:
-
-```bash
-RUN_DIRECTORY="${WORKSPACE}/configs/entropy-runs/${CAMPAIGN_ID}"
-sbatch --wait --nodelist="${SELECTED_NODE}" \
-  --output="${RUN_DIRECTORY}/logs/benchmark-axis-%j.out" \
-  assets/scripts/benchmarks/benchmark_precomputed_synthetic.sbatch \
-  "${RUN_DIRECTORY}" synthetic_axis_pretraining 32
-sbatch --wait --nodelist="${SELECTED_NODE}" \
-  --output="${RUN_DIRECTORY}/logs/benchmark-permutation-%j.out" \
-  assets/scripts/benchmarks/benchmark_precomputed_synthetic.sbatch \
-  "${RUN_DIRECTORY}" synthetic_permutation_pretraining 32
-```
-
-Start training only after both benchmark calls succeed. The YAML currently
-expands to 180 tasks, of which 10 use persistent precompute; the remaining
-170 historical schedules still use the legacy generator.
+For the repaired pretraining campaign, stage the full 310-task plan first, transfer
+the audited 108-model bundle, then run `pretrain_repair.py import` with the same
+campaign ID before starting `03`. The importer creates completed statuses for
+10 real-only and 98 pretrained parent tasks. It never imports legacy frozen or
+unfrozen final weights. `07_download_campaign.sh` fetches both legacy task-named
+models and new role-qualified model names.
 
 ## Several campaigns orchestration
 
@@ -220,7 +180,7 @@ workspace copy can occupy roughly 29 GB of the selected node's local `/tmp`.
 For each `campaign-id YAML` pair, `04_run_campaign_sequence.sh` submits `02`,
 waits for staging to succeed, runs `03` until its finalizer completes, and only
 then stages the next pair. Therefore there is one staged workspace at a time;
-within each campaign, `03` still runs up to three GPU tasks concurrently.
+within each campaign, `03` still runs up to six GPU tasks concurrently.
 
 The optional first argument is `--nodelist NODE`; when provided, the same node
 is used for staging, task arrays, and finalization. The next argument is
@@ -300,48 +260,84 @@ the inherited `PATH`, the probe passes a minimal `PATH` explicitly. It also
 uses `--ntasks=1` to produce exactly one record per node.
 
 ```bash
+cat <<'SCRIPT' | bash
+set -u
+
+PARTITION=common
+QOS=ms488923_common
+STAGING_USER="${USER}"
+STAGING_PATH="/tmp/${STAGING_USER}/msi-wrapper"
+WORKSPACE=data/kidney_workspace
+
+SOURCE_BYTES=$(du -sb "${WORKSPACE}" | awk '{print $1}')
+REQUIRED_BYTES=$((SOURCE_BYTES + SOURCE_BYTES / 10))
 PROBE_DIR=$(mktemp -d /tmp/msi-node-probe-XXXXXX)
-trap 'rm -rf -- "${PROBE_DIR}"' EXIT
 
-for node in $(sinfo -h -N -p "${PARTITION}" -o '%N %T' \
-  | awk '$2 == "idle" {print $1}'); do
-  (
-    timeout 30s srun \
-      --partition="${PARTITION}" \
-      --qos="${QOS}" \
-      --nodelist="${node}" \
-      --ntasks=1 \
-      --gres=gpu:1 \
-      --cpus-per-task=1 \
-      --mem=1G \
-      --time=00:02:00 \
-      --export=NIL,PATH=/usr/local/bin:/usr/bin:/bin,STAGING_USER="${STAGING_USER}",REQUIRED_BYTES="${REQUIRED_BYTES}" \
-      --quiet \
-      /bin/bash -c '
-        available=$(df --block-size=1 --output=avail /tmp | awk "NR == 2 {print \$1}")
-        used_stage=$(du -sb "/tmp/${STAGING_USER}/msi-wrapper" 2>/dev/null | awk "{print \$1}")
-        used_stage=${used_stage:-0}
-        margin=$((available - REQUIRED_BYTES))
-        gpu=$(nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
-          --format=csv,noheader | tr "\n" ";")
-        printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
-          "$(hostname)" "$available" "$REQUIRED_BYTES" "$margin" "$used_stage" "$gpu"
-      ' >"${PROBE_DIR}/${node}.out" 2>"${PROBE_DIR}/${node}.err"
-  ) &
-done
-wait
+cleanup() {
+    rm -rf -- "${PROBE_DIR}"
+}
+trap cleanup EXIT
 
-printf 'node\tavailable_bytes\trequired_bytes\tmargin_bytes\texisting_stage_bytes\tgpu\n'
-for result in "${PROBE_DIR}"/*.out; do
-  [ -s "${result}" ] && cat "${result}"
+printf 'node\tavailable_bytes\trequired_bytes\tmargin_bytes\texisting_stage_bytes\tgpu\tstatus\n'
+
+for node in $(sinfo -h -N -p "${PARTITION}" -o '%N' | sort -u); do
+    output="${PROBE_DIR}/${node}.out"
+    error="${PROBE_DIR}/${node}.err"
+
+    if timeout 20s srun \
+        --partition="${PARTITION}" \
+        --qos="${QOS}" \
+        --nodelist="${node}" \
+        --ntasks=1 \
+        --gres=gpu:1 \
+        --cpus-per-task=1 \
+        --mem=1G \
+        --time=00:02:00 \
+        --immediate=5 \
+        /bin/bash -c '
+            node="$1"
+            required="$2"
+            stage="$3"
+
+            available=$(df -B1 --output=avail /tmp | awk "NR == 2 {print \$1}")
+            existing=$(du -sb "$stage" 2>/dev/null | awk "{print \$1}")
+            existing=${existing:-0}
+            margin=$((available - required))
+
+            gpu=$(nvidia-smi \
+                --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
+                --format=csv,noheader 2>/dev/null \
+                | tr "\n" ";")
+
+            if (( margin >= 0 )); then
+                status=READY_FOR_STAGING
+            else
+                status=INSUFFICIENT_TMP
+            fi
+
+            printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+                "$node" \
+                "$available" \
+                "$required" \
+                "$margin" \
+                "$existing" \
+                "$gpu" \
+                "$status"
+        ' _ "${node}" "${REQUIRED_BYTES}" "${STAGING_PATH}" \
+        >"${output}" 2>"${error}"; then
+
+        cat "${output}"
+    else
+        printf '%s\tNA\t%s\tNA\tNA\tNA\tNODE_UNAVAILABLE\n' \
+            "${node}" "${REQUIRED_BYTES}"
+
+        if [ -s "${error}" ]; then
+            printf '\n[%s]\n' "${node}" >&2
+            cat "${error}" >&2
+        fi
+    fi
 done | sort -t $'\t' -k4,4nr | column -t -s $'\t'
-
-for error in "${PROBE_DIR}"/*.err; do
-  if [ -s "${error}" ]; then
-    printf '\nProbe errors from %s:\n' "$(basename "${error%.err}")" >&2
-    cat "${error}" >&2
-  fi
-done
+SCRIPT
 ```
 
 Choose a node with a positive `margin`, preferably the largest one. A node
@@ -487,7 +483,8 @@ bash assets/scripts/entropy/07_download_campaign.sh \
   repositories/MSIAutoEncoderWrapper
 ```
 
-The script downloads only `models/**/<campaign-id>__task_*` and the matching
+The script downloads legacy `models/**/<campaign-id>__task_*` and new
+`models/**/<campaign-id>__grid_*__rep_*__<role>` bundles, plus the matching
 `configs/entropy-runs/<campaign-id>` directory. It does not copy datasets or
 models from previous campaigns.
 

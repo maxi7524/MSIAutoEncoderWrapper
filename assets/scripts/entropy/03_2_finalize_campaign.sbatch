@@ -47,6 +47,13 @@ if [[ -d "${LOCAL_WORKSPACE}/models" ]]; then
     )
 fi
 
+# Rebind result and lineage paths only after every persistent model is present.
+"${REPOSITORY_ROOT}/.venv/bin/python" \
+    "${REPOSITORY_ROOT}/assets/scripts/entropy/finalize_model_paths.py" \
+    --plan-directory "${RUN_DIRECTORY}/plan" \
+    --local-workspace "${LOCAL_WORKSPACE}" \
+    --source-workspace "${SOURCE_WORKSPACE}"
+
 # NODE_LOCAL_DIRECTORY is written by staging and is scoped to one validated campaign ID.
 rm -rf -- "${NODE_LOCAL_DIRECTORY}"
 echo "Finalized campaign ${CAMPAIGN_ID}; logs and task status are in ${RUN_DIRECTORY}."

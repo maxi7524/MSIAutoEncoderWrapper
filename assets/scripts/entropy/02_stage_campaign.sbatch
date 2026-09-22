@@ -120,6 +120,7 @@ fi
 mkdir -p "${NODE_LOCAL_DIRECTORY}" "${RUN_DIRECTORY}/logs"
 trap 'rm -rf -- "${NODE_LOCAL_DIRECTORY}"' ERR
 rsync -a --delete "${SOURCE_WORKSPACE}/" "${LOCAL_WORKSPACE}/"
+STAGING_NODE=${SLURMD_NODENAME:-$(hostname -s)}
 
 # Persist campaign settings for the coordinator, task array, and finalizer.
 {
@@ -130,6 +131,7 @@ rsync -a --delete "${SOURCE_WORKSPACE}/" "${LOCAL_WORKSPACE}/"
     printf 'SOURCE_WORKSPACE=%q\n' "${SOURCE_WORKSPACE}"
     printf 'NODE_LOCAL_DIRECTORY=%q\n' "${NODE_LOCAL_DIRECTORY}"
     printf 'LOCAL_WORKSPACE=%q\n' "${LOCAL_WORKSPACE}"
+    printf 'STAGING_NODE=%q\n' "${STAGING_NODE}"
     printf 'TASK_WALLTIME=%q\n' "${TASK_WALLTIME}"
 } >"${CAMPAIGN_FILE}"
 
@@ -165,6 +167,7 @@ from pathlib import Path
 import sys
 
 import yaml
+from msi_autoencoder_wrapper.runtime.naming import run_identifier
 
 tasks_directory = Path(sys.argv[1])
 campaign_id = sys.argv[2]
@@ -177,7 +180,7 @@ for task_path in sorted(tasks_directory.glob("task_*.yaml")):
     task_id = task.get("task_id")
     if not isinstance(task_id, str):
         raise SystemExit(f"Task descriptor has no task ID: {task_path}")
-    task["parameters"]["model_name"] = f"{campaign_id}__{task_id}"
+    task["parameters"]["model_name"] = run_identifier(campaign_id, task)
     with task_path.open("w", encoding="utf-8") as stream:
         yaml.safe_dump(task, stream, sort_keys=False)
 PY
@@ -187,6 +190,12 @@ PY
 task_count=$(find "${RUN_DIRECTORY}/plan/tasks" -maxdepth 1 -name 'task_*.yaml' -type f | wc -l)
 if (( task_count < 1 )); then
     echo "Planning produced no task descriptors." >&2
+    exit 1
+fi
+indexed_count=$("${PYTHON}" "${REPOSITORY_ROOT}/assets/scripts/entropy/campaign_task_batches.py" \
+    index --plan-directory "${RUN_DIRECTORY}/plan")
+if (( indexed_count != task_count )); then
+    echo "Indexed task count differs from materialized plan: ${indexed_count}/${task_count}." >&2
     exit 1
 fi
 printf '%s\n' "${task_count}" >"${RUN_DIRECTORY}/task-count"

@@ -742,6 +742,14 @@ class SyntheticPrecomputeBuilder:
                 target_rows.append((_EMPTY_COMPONENT,))
                 kind_rows.append((_KIND_SINGLE,))
         size = len(component_rows)
+        logger.info(
+            "Materialized artifact population '%s' (not a training phase): "
+            "axis_bins=%s repetitions_per_bin=%s samples=%s.",
+            population.name,
+            self.axis.size,
+            population.repetitions_per_bin,
+            size,
+        )
         return _make_manifest(
             component_rows=component_rows,
             blank_rows=blank_rows,
@@ -928,7 +936,8 @@ class SyntheticPrecomputeBuilder:
                 self.config.blank_concentration * blank_count / annotated_count,
             )
         logger.info(
-            "Compiled class-quota population '%s': annotated=%s blank=%s "
+            "Materialized artifact population '%s' (not a training phase): "
+            "annotated=%s blank=%s "
             "alpha_annotated=%s alpha_blank=%s samples=%s.",
             population.name,
             annotated_count,
@@ -1019,6 +1028,13 @@ class SyntheticPrecomputeBuilder:
             [manifest.blank_concentrations for manifest in members]
         )
         order = self._population_rng(population.name).permutation(len(anchors))
+        logger.info(
+            "Materialized combined artifact population '%s' from members=%s: "
+            "rows=%s, shuffled_together=true (not a training phase).",
+            population.name,
+            list(population.members),
+            len(anchors),
+        )
         return SyntheticManifest(
             component_ids=component_ids[order],
             blank_centers=blank_centers[order],

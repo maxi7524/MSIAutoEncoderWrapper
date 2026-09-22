@@ -38,7 +38,13 @@ def run_identifier(campaign_id: str, task: Mapping[str, Any]) -> str:
     :rtype: str
     """
     repetition = int(task["repetition"])
-    return f"{campaign_id}__{task['grid_id']}__rep_{repetition:02d}"
+    identifier = f"{campaign_id}__{task['grid_id']}__rep_{repetition:02d}"
+    workflow = task.get("workflow")
+    if isinstance(workflow, Mapping):
+        role = workflow.get("role")
+        if isinstance(role, str) and role:
+            identifier = f"{identifier}__{role}"
+    return identifier
 
 
 def campaign_instance_identifier(campaign_id: str, run_id: str | None) -> str:

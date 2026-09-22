@@ -45,10 +45,31 @@ def _synthetic_phases(task) -> list[dict[str, Any]]:
     ]
 
 
+def _tasks_by_role(plan, group_id: str) -> dict[str, Any]:
+    """Return one workflow group's tasks indexed by persisted artifact role."""
+    return {
+        task.workflow["role"]: task
+        for task in plan.tasks
+        if task.workflow["group_id"] == group_id
+    }
+
+
 def test_campaign_expands_the_complete_paired_ablation_matrix():
-    """Two axes, eleven schedules and five paired repetitions yield 110 runs."""
+    """Every synthetic run expands to three independently persisted models."""
     _, plan = _campaign()
-    assert len(plan.tasks) == 110
+    assert len(plan.tasks) == 310
+
+    grouped: dict[str, set[str]] = {}
+    for task in plan.tasks:
+        grouped.setdefault(task.workflow["group_id"], set()).add(
+            task.workflow["role"]
+        )
+    assert len(grouped) == 110
+    assert sum(roles == {"real_only"} for roles in grouped.values()) == 10
+    assert sum(
+        roles == {"pretrained", "frozen_head", "unfrozen_head"}
+        for roles in grouped.values()
+    ) == 100
 
     signatures = Counter(
         tuple(phase["phase_name"] for phase in _synthetic_phases(task))
@@ -57,12 +78,15 @@ def test_campaign_expands_the_complete_paired_ablation_matrix():
     )
     assert set(signatures) == EXPECTED_SYNTHETIC_SCHEDULES
     assert set(signatures.values()) == {10}
-    assert sum(not _synthetic_phases(task) for task in plan.tasks) == 10
+    assert sum(task.workflow["role"] == "real_only" for task in plan.tasks) == 10
+    assert sum(task.workflow["role"] == "frozen_head" for task in plan.tasks) == 100
+    assert sum(task.workflow["role"] == "unfrozen_head" for task in plan.tasks) == 100
 
     # Every axis/schedule pair reuses its split seed across five model seeds.
     for grid_id in {task.grid_id for task in plan.tasks}:
         tasks = [task for task in plan.tasks if task.grid_id == grid_id]
-        assert len(tasks) == 5
+        roles = {task.workflow["role"] for task in tasks}
+        assert len(tasks) == (5 if roles == {"real_only"} else 15)
         assert {task.reproducibility["common_seeds"]["split"] for task in tasks} == {
             42
         }
@@ -164,12 +188,13 @@ def test_artifact_population_contract_has_exact_quotas_and_joint_bags():
 def test_synthetic_and_real_phases_reuse_one_head_with_distinct_objectives():
     """The same logits use BCE during synthesis and the final VPU objective on real data."""
     _, plan = _campaign()
-    task = next(task for task in plan.tasks if _synthetic_phases(task))
-    assert set(task.parameters["factory_parameters"]["predictive"]["heads"]) == {
+    pretrained = next(task for task in plan.tasks if _synthetic_phases(task))
+    group = _tasks_by_role(plan, pretrained.workflow["group_id"])
+    assert set(pretrained.parameters["factory_parameters"]["predictive"]["heads"]) == {
         "molecule_vpu"
     }
-    phases = task.parameters["training"]["phases"]
-    synthetic = _synthetic_phases(task)
+    phases = pretrained.parameters["training"]["phases"]
+    synthetic = _synthetic_phases(pretrained)
     for phase in synthetic:
         assert phase["epochs"] == 10
         assert phase["criterions"] == {
@@ -183,24 +208,41 @@ def test_synthetic_and_real_phases_reuse_one_head_with_distinct_objectives():
             },
         }
 
-    branches = phases[len(synthetic) :]
-    assert [phase["phase_name"] for phase in branches] == [
-        "pretrain_only_real_test",
-        "real_adaptation_frozen_head",
-        "real_adaptation_unfrozen_head",
+    pretrain_test = phases[-1]
+    frozen = group["frozen_head"].parameters["training"]["phases"]
+    unfrozen = group["unfrozen_head"].parameters["training"]["phases"]
+    assert pretrain_test["phase_name"] == "pretrain_only_real_test"
+    assert pretrain_test["epochs"] == 0
+    assert pretrain_test["evaluation_data"] == "real"
+    assert [phase["phase_name"] for phase in frozen] == [
+        "real_adaptation_frozen_head"
     ]
-    assert [phase["epochs"] for phase in branches] == [0, 10, 10]
+    assert [phase["phase_name"] for phase in unfrozen] == [
+        "real_adaptation_unfrozen_head"
+    ]
+    assert frozen[0]["freeze"] == ["heads.molecule_vpu"]
+    assert unfrozen[0]["freeze"] == []
     assert all(
-        phase["restore_model_state_from"] == "synthetic_pretrained"
-        for phase in branches
+        "restore_model_state_from" not in phase
+        for phase in (pretrain_test, frozen[0], unfrozen[0])
     )
-    assert branches[0]["evaluation_data"] == "real"
-    assert branches[1]["freeze"] == ["heads.molecule_vpu"]
-    assert branches[2]["freeze"] == []
-    assert all(phase["evaluate_test"] is True for phase in branches)
+    assert all(
+        phase["evaluate_test"] is True
+        for phase in (pretrain_test, frozen[0], unfrozen[0])
+    )
 
-    real_objective = branches[0]["criterions"]
-    assert all(phase["criterions"] == real_objective for phase in branches)
+    parent_id = pretrained.task_id
+    assert pretrained.depends_on == ()
+    assert group["frozen_head"].depends_on == (parent_id,)
+    assert group["unfrozen_head"].depends_on == (parent_id,)
+    assert group["frozen_head"].workflow["parent_task_id"] == parent_id
+    assert group["unfrozen_head"].workflow["parent_task_id"] == parent_id
+
+    real_objective = pretrain_test["criterions"]
+    assert all(
+        phase["criterions"] == real_objective
+        for phase in (frozen[0], unfrozen[0])
+    )
     assert real_objective["reconstruction"]["masserstein"] == {
         "target": "MassersteinLoss",
         "weight": 1.0,
@@ -225,10 +267,9 @@ def test_joint_and_staged_variants_reference_the_same_precompute_artifact():
             continue
         artifacts = [phase["pretraining"]["artifact"] for phase in synthetic]
         assert all(artifact == artifacts[0] for artifact in artifacts)
-        assert synthetic[-1]["save_model_state_as"] == "synthetic_pretrained"
+        assert all("save_model_state_as" not in phase for phase in synthetic)
         if len(synthetic) == 2:
             assert synthetic[0]["pretraining"]["population"] == "axis"
-            assert synthetic[0]["save_model_state_as"] is None
             assert synthetic[1]["pretraining"]["population"].startswith(
                 "permutation_"
             )

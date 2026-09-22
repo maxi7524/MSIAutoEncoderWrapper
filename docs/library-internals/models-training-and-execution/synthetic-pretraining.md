@@ -105,5 +105,5 @@ reconstruction remains active. Chemical-class targets retain candidate-derived
 uncertainty masks. Element counts are emitted only for a single labelled
 component without background.
 
-For configuration examples, see [Run synthetic spectral pretraining](../../how-to/models-and-training/synthetic-pretraining.md). For extension rules, see
+For configuration examples, see [Run synthetic spectral pretraining](../../how-to/models-and-training/synthetic-pretraining.md). Artifact-backed pretraining is described in [Precomputed synthetic artifacts](precomputed-synthetic-artifacts.md). For extension rules, see
 [Add synthetic sampling strategies](../../developer-guides/models/autoencoder/adding-synthetic-sampling-strategies.md).

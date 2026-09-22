@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 
 import pytest
 
 from msi_autoencoder_wrapper.runtime.planning import build_plan
+from msi_autoencoder_wrapper.runtime.naming import run_identifier
 
 
 def _config() -> dict:
@@ -155,3 +157,42 @@ def test_recursive_grid_value_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="recursive reference"):
         build_plan(config)
+
+
+def test_pretraining_workflow_expands_parent_and_independent_children() -> None:
+    """One phase schedule becomes three ordered model tasks with explicit lineage."""
+    config = _config()
+    config["runs"] = {"repetitions": 1}
+    config["grid"] = {}
+    config["task"]["workflow"] = {"strategy": "pretraining_branches"}
+    config["task"]["parameters"] = {
+        "training": {
+            "phases": [
+                {"phase_name": "synthetic", "workflow_role": "pretrained"},
+                {"phase_name": "real_test", "workflow_role": "pretrained"},
+                {"phase_name": "frozen", "workflow_role": "frozen_head"},
+                {"phase_name": "unfrozen", "workflow_role": "unfrozen_head"},
+            ]
+        }
+    }
+
+    plan = build_plan(config)
+
+    assert [task.workflow["role"] for task in plan.tasks] == [
+        "pretrained",
+        "frozen_head",
+        "unfrozen_head",
+    ]
+    parent = plan.tasks[0]
+    assert [
+        phase["phase_name"]
+        for phase in parent.parameters["training"]["phases"]
+    ] == ["synthetic", "real_test"]
+    assert plan.tasks[1].depends_on == (parent.task_id,)
+    assert plan.tasks[2].depends_on == (parent.task_id,)
+    assert plan.tasks[1].workflow["parent_task_id"] == parent.task_id
+    assert plan.tasks[2].workflow["parent_task_id"] == parent.task_id
+    assert plan.tasks[1].grid_id == parent.grid_id == plan.tasks[2].grid_id
+    assert run_identifier("campaign", asdict(parent)).endswith("__pretrained")
+    assert run_identifier("campaign", asdict(plan.tasks[1])).endswith("__frozen_head")
+    assert run_identifier("campaign", asdict(plan.tasks[2])).endswith("__unfrozen_head")

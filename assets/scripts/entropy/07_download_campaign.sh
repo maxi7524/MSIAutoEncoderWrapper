@@ -35,6 +35,7 @@ mkdir -p "${LOCAL_WORKSPACE}/models" "${LOCAL_RUN_DIRECTORY}"
 rsync -a --partial --append-verify --info=progress2 \
     --include='*/' \
     --include="*/${CAMPAIGN_ID}__task_*/***" \
+    --include="*/${CAMPAIGN_ID}__grid_*__rep_*__*/***" \
     --exclude='*' \
     "${REMOTE_HOST}:${REMOTE_WORKSPACE}/models/" \
     "${LOCAL_WORKSPACE}/models/"

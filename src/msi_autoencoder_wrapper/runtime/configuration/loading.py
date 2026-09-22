@@ -128,6 +128,15 @@ def validate_experiment_config(config: dict[str, Any]) -> None:
         not isinstance(test_entrypoint, str) or ":" not in test_entrypoint
     ):
         raise ValueError("task.test_entrypoint must use 'module:function'")
+    workflow = task.get("workflow")
+    if workflow is not None:
+        if not isinstance(workflow, dict):
+            raise ValueError("task.workflow must be a mapping when provided.")
+        if workflow != {"strategy": "pretraining_branches"}:
+            raise ValueError(
+                "task.workflow currently supports exactly "
+                "{strategy: pretraining_branches}."
+            )
     runs = config.get("runs", {})
     if not isinstance(runs.get("repetitions", 1), int) or runs.get("repetitions", 1) < 1:
         raise ValueError("runs.repetitions must be a positive integer")
