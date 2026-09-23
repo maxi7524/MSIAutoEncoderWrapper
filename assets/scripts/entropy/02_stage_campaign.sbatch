@@ -192,40 +192,23 @@ if (( task_count < 1 )); then
     echo "Planning produced no task descriptors." >&2
     exit 1
 fi
-indexed_count=$("${PYTHON}" "${REPOSITORY_ROOT}/assets/scripts/entropy/campaign_task_batches.py" \
-    index --plan-directory "${RUN_DIRECTORY}/plan")
-if (( indexed_count != task_count )); then
-    echo "Indexed task count differs from materialized plan: ${indexed_count}/${task_count}." >&2
-    exit 1
-fi
-aggregate_count=$("${PYTHON}" - "${RUN_DIRECTORY}/plan/resolved-experiment.yaml" "${task_count}" <<'PY'
+graph_count=$("${PYTHON}" - "${RUN_DIRECTORY}/plan" "${task_count}" <<'PY' | tee /dev/stderr | tail -n 1
 from pathlib import Path
-import re
 import sys
 
-import yaml
+from msi_autoencoder_wrapper.runtime.planning.graph import verify_plan_graph
 
-aggregate_path = Path(sys.argv[1])
-expected_count = int(sys.argv[2])
-task_ids = []
-schema_version = None
-with aggregate_path.open(encoding="utf-8") as stream:
-    for line in stream:
-        if line.startswith("runtime_schema_version: "):
-            schema_version = line.partition(": ")[2].strip()
-        match = re.match(r"^- task_id: (task_[0-9]{6})$", line.rstrip("\n"))
-        if match:
-            task_ids.append(match.group(1))
-if schema_version != "2" or len(task_ids) != expected_count or len(set(task_ids)) != expected_count:
-    raise SystemExit("Aggregate plan is incomplete")
-with aggregate_path.open(encoding="utf-8") as stream:
-    for _event in yaml.parse(stream, Loader=getattr(yaml, "CLoader", yaml.Loader)):
-        pass
-print(len(task_ids))
+print(verify_plan_graph(Path(sys.argv[1]), expected_count=int(sys.argv[2])))
 PY
 )
-if (( aggregate_count != task_count )); then
-    echo "Aggregate plan count differs from materialized descriptors: ${aggregate_count}/${task_count}." >&2
+if [[ ! "${graph_count}" =~ ^[0-9]+$ ]] || (( graph_count != task_count )); then
+    echo "Validated graph count differs from descriptors: ${graph_count}/${task_count}." >&2
+    exit 1
+fi
+indexed_count=$("${PYTHON}" "${REPOSITORY_ROOT}/assets/scripts/entropy/campaign_task_batches.py" \
+    index --plan-directory "${RUN_DIRECTORY}/plan" | tee /dev/stderr | tail -n 1)
+if [[ ! "${indexed_count}" =~ ^[0-9]+$ ]] || (( indexed_count != task_count )); then
+    echo "Indexed task count differs from materialized plan: ${indexed_count}/${task_count}." >&2
     exit 1
 fi
 printf '%s\n' "${task_count}" >"${RUN_DIRECTORY}/task-count"

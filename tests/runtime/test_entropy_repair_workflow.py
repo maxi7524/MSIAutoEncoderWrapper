@@ -152,6 +152,12 @@ def test_repair_rejects_incomplete_or_invalid_aggregate_plan(tmp_path: Path) -> 
     }), encoding="utf-8")
     assert repair._plan_task_ids(path) == set(identifiers)
 
+    path.write_text(yaml.safe_dump({
+        "runtime_schema_version": 3,
+        "tasks": [{"task_id": task_id} for task_id in identifiers],
+    }), encoding="utf-8")
+    assert repair._plan_task_ids(path) == set(identifiers)
+
     with path.open("a", encoding="utf-8") as stream:
         stream.write("broken: [\n")
     with pytest.raises(yaml.YAMLError):

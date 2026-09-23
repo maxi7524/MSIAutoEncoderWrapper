@@ -77,8 +77,17 @@ def test_range_planning_freezes_population_and_split_before_expanding_axis(tmp_p
         tasks.append({"parameters": {"factory_parameters": parameters}, "reproducibility": {"common_seeds": {"split": 42}}})
     resolved = configured.resolve_single_image_campaign(tasks, tmp_path)
     assert len(built) == 3  # One reference dataset, then one model descriptor per axis.
+    source_paths = set()
     for item in built[1:]:
-        assert item["dataset"]["parameters"]["subset"] == {"method": "source_indices", "indices": [2, 7, 11, 19]}
+        subset = item["dataset"]["parameters"]["subset"]
+        assert subset["method"] == "source_indices"
+        assert "indices" not in subset
+        source_paths.add(subset["indices_ref"]["path"])
+        assert configured._source_indices_from_reference(subset) == {
+            "method": "source_indices", "indices": [2, 7, 11, 19]
+        }
+    assert len(source_paths) == 1
+    assert len(list((tmp_path / "resolved/source_populations").glob("*.yaml"))) == 1
     assert tasks[0]["parameters"]["factory_parameters"]["dataset"]["parameters"]["subset"] == {"fraction": .1, "seed": 42}
     assert resolved[0]["resolved"]["split_manifest"] == resolved[1]["resolved"]["split_manifest"]
     assert resolved[0]["resolved"]["model_config"] != resolved[1]["resolved"]["model_config"]

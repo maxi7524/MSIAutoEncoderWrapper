@@ -175,9 +175,13 @@ assert_job_completed_successfully() {
 while true; do
     batch=$("${PYTHON}" "${BATCH_PLANNER}" next \
         --plan-directory "${RUN_DIRECTORY}/plan" --limit "${TASK_LIMIT}" \
-        --local-workspace "${LOCAL_WORKSPACE}")
+        --local-workspace "${LOCAL_WORKSPACE}" | tee /dev/stderr | tail -n 1)
     if [[ -z "${batch}" ]]; then
         break
+    fi
+    if [[ ! "${batch}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+        echo "Batch planner returned an invalid Slurm array: ${batch}" >&2
+        exit 1
     fi
     # The QoS permits six submitted tasks; wait rather than competing with other user jobs.
     while squeue --noheader --user "${USER}" | grep -q .; do

@@ -142,6 +142,26 @@ def test_complete_materialized_branch_group_passes(tmp_path: Path) -> None:
     assert validator.validate_campaign(campaign, **FIXTURE_COUNTS) == []
 
 
+def test_compact_schema_three_manifest_preserves_artifact_validation(tmp_path: Path) -> None:
+    """The same model lineage is valid with compact task graph entries."""
+    validator = _load_validator()
+    campaign, _ = _write_campaign(tmp_path)
+    manifest_path = campaign / "resolved-experiment.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["runtime_schema_version"] = 3
+    manifest["tasks"] = [
+        {key: task[key] for key in (
+            "task_id", "grid_id", "repetition", "workflow", "depends_on"
+        )}
+        for task in manifest["tasks"]
+    ]
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+
+    assert validator.validate_campaign(campaign, **FIXTURE_COUNTS) == []
+
+
 def test_missing_unfrozen_artifact_and_changed_frozen_head_fail(tmp_path: Path) -> None:
     """The validator rejects an incomplete group and a modified frozen head."""
     validator = _load_validator()

@@ -21,6 +21,7 @@ import yaml
 from msi_autoencoder_wrapper.models.model_loader import ModelLoader
 from msi_autoencoder_wrapper.runtime import build_plan, load_experiment_config
 from msi_autoencoder_wrapper.runtime.naming import run_identifier
+from msi_autoencoder_wrapper.runtime.planning.graph import verify_plan_graph
 from msi_autoencoder_wrapper.runtime.output import is_completed_task, task_fingerprint, update_manifest
 from msi_autoencoder_wrapper.utils.logger import get_custom_logger
 
@@ -71,8 +72,8 @@ def _plan_task_ids(path: Path) -> set[str]:
                 schema_version = line.partition(": ")[2].strip()
             elif line.startswith("- task_id: "):
                 task_ids.append(line.partition(": ")[2].strip())
-    if schema_version != "2" or len(task_ids) != 310 or len(set(task_ids)) != 310:
-        raise ValueError("Target must be the complete 310-task schema-2 plan.")
+    if schema_version not in {"2", "3"} or len(task_ids) != 310 or len(set(task_ids)) != 310:
+        raise ValueError("Target must be a complete 310-task schema-2 or schema-3 plan.")
     with path.open(encoding="utf-8") as stream:
         for _event in yaml.parse(stream, Loader=getattr(yaml, "CLoader", yaml.Loader)):
             pass
@@ -293,6 +294,9 @@ def _validate_bundle(
         raise ValueError(f"Expected one shared target split, found {len(target_splits)}.")
     _validate_split(source_split, _yaml(target_splits[0]))
     manifest_task_ids = _plan_task_ids(plan_directory / "resolved-experiment.yaml")
+    with (plan_directory / "resolved-experiment.yaml").open(encoding="utf-8") as stream:
+        if stream.readline().strip() == "runtime_schema_version: 3":
+            verify_plan_graph(plan_directory, expected_count=310)
     descriptor_task_ids = {path.stem for path in (plan_directory / "tasks").glob("task_*.yaml")}
     if len(manifest_task_ids) != 310 or manifest_task_ids != descriptor_task_ids:
         raise ValueError("Aggregate plan and individual target descriptors disagree.")

@@ -140,6 +140,18 @@ The three variable assignments are the only per-campaign launcher inputs:
 Do not reuse a campaign ID. Staging rejects an existing run directory and the
 finalizer rejects an existing model destination.
 
+The materialized plan uses a compact schema-3 graph. Each task has one YAML
+descriptor in `plan/tasks/`; `plan/resolved-experiment.yaml` contains only
+task identity and dependency edges, not a second copy of every configuration.
+Large reference-axis source IDs are stored once under
+`plan/resolved/source_populations/` and task descriptors carry an absolute
+path and SHA-256 reference. The existing model, context, binner and split
+artifacts remain shared under `plan/resolved/`. The worker expands the source
+IDs only while constructing its dataset. Staging verifies every graph node,
+parent edge and shared checksum before publishing `task-count`; the coordinator
+rechecks this graph before selecting each new batch. Legacy schema-2 plans
+remain readable, but a new stage creates schema 3.
+
 ### Start the training coordinator 
 
 Wait for staging to finish before starting the coordinator. `task-count` is

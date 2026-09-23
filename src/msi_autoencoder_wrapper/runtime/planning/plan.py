@@ -271,20 +271,35 @@ def build_plan(config: dict[str, Any]) -> ExperimentPlan:
 
 
 def materialize_plan(plan: ExperimentPlan, directory: Path) -> Path:
-    """Write resolved task descriptors before any external work starts."""
+    """Write a compact graph index with bounded additional serialization memory.
+
+    :param plan: Resolved experiment plan.
+    :type plan: ExperimentPlan
+    :param directory: Output directory for descriptors and the graph index.
+    :type directory: pathlib.Path
+    :return: Path to the atomically published campaign index.
+    :rtype: pathlib.Path
+    """
     # Per-task descriptors
-    ## Backends consume these files without expanding the original grid again
+    ## Serialize one task at a time; shared source populations remain references.
     directory.mkdir(parents=True, exist_ok=True)
     tasks_directory = directory / "tasks"
     tasks_directory.mkdir(exist_ok=True)
     for task in plan.tasks:
-        with (tasks_directory / f"{task.task_id}.yaml").open("w", encoding="utf-8") as stream:
-            yaml.safe_dump(asdict(task), stream, sort_keys=False)
-    # Campaign manifest
-    ## Keep one aggregate record for inspection and result analysis
+        path = tasks_directory / f"{task.task_id}.yaml"
+        temporary = path.with_suffix(".yaml.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as stream:
+                yaml.safe_dump(asdict(task), stream, sort_keys=False)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    # Campaign graph index
+    ## List identity and lineage only; descriptors own task-specific configuration.
     plan_path = directory / "resolved-experiment.yaml"
     manifest = {
-        "runtime_schema_version": 2,
+        "runtime_schema_version": 3,
         "experiment_name": plan.experiment_name,
         "config_path": plan.config_path,
         "config_fingerprint": plan.config_fingerprint,
@@ -297,7 +312,17 @@ def materialize_plan(plan: ExperimentPlan, directory: Path) -> Path:
             yaml.safe_dump(manifest, stream, sort_keys=False)
             stream.write("tasks:\n")
             for task in plan.tasks:
-                yaml.safe_dump([asdict(task)], stream, sort_keys=False)
+                yaml.safe_dump(
+                    [{
+                        "task_id": task.task_id,
+                        "grid_id": task.grid_id,
+                        "repetition": task.repetition,
+                        "workflow": task.workflow,
+                        "depends_on": list(task.depends_on),
+                    }],
+                    stream,
+                    sort_keys=False,
+                )
         temporary_path.replace(plan_path)
     finally:
         temporary_path.unlink(missing_ok=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,49 @@ logger = get_custom_logger(__name__)
 # Process-local shared resources
 ## Persistent local workers reuse native readers; each worker owns its own safe handle
 _READER_CACHE: dict[tuple[Any, ...], Any] = {}
+
+
+def _source_indices_from_reference(subset: dict[str, Any]) -> dict[str, Any]:
+    """Expand a checksum-verified shared source population for dataset creation.
+
+    :param subset: Inline source-index subset or a shared-file reference.
+    :type subset: dict[str, typing.Any]
+    :return: Dataset-compatible inline source-index subset.
+    :rtype: dict[str, typing.Any]
+    :raises ValueError: If the reference is invalid or its content changed.
+    """
+    reference = subset.get("indices_ref")
+    if reference is None:
+        return subset
+    if subset.get("method") != "source_indices" or "indices" in subset:
+        raise ValueError("A shared source-index subset cannot contain inline indices.")
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+        raise ValueError("Invalid shared source-index reference.")
+    path = Path(reference["path"])
+    if not path.is_absolute():
+        raise ValueError("Shared source-index path must be absolute.")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != reference["sha256"]:
+        raise ValueError(f"Shared source-index checksum mismatch: {path}")
+    indices = _read_yaml(path).get("indices")
+    if (
+        not isinstance(indices, list)
+        or not indices
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in indices)
+        or indices != sorted(set(indices))
+    ):
+        raise ValueError(f"Invalid shared source indices: {path}")
+    return {"method": "source_indices", "indices": indices}
+
+
+def _expand_dataset_subset(dataset_parameters: dict[str, Any]) -> None:
+    """Expand a shared subset only in an ephemeral dataset configuration."""
+    subset = dataset_parameters.get("subset")
+    if isinstance(subset, dict) and "indices_ref" in subset:
+        dataset_parameters["subset"] = _source_indices_from_reference(subset)
 
 
 def _resolve_image_path(parameters: dict[str, Any]) -> Path:
@@ -239,6 +283,7 @@ def build_single_image_autoencoder(parameters: dict[str, Any]) -> MSIAutoEncoder
     split_manifest = _read_yaml(Path(resolved["split_manifest"]))
     dataset = parameters["dataset"]
     dataset_parameters = deepcopy(dataset["parameters"])
+    _expand_dataset_subset(dataset_parameters)
     _resolve_chemistry_path(dataset_parameters, project_path)
     source_population = _resolve_cohort_source_population(parameters, wrapper)
     if source_population is not None:
@@ -324,6 +369,7 @@ def resolve_single_image_campaign(
     molecule_mappings: dict[Any, dict[str, int] | None] = {}
     resolved_parameters: list[dict[str, Any]] = []
     reference_selections: dict[Any, Any] = {}
+    source_index_references: dict[Any, dict[str, str]] = {}
 
     for task in tasks:
         parameters = deepcopy(task["parameters"])
@@ -344,11 +390,23 @@ def resolve_single_image_campaign(
                 reference_selections[reference_key] = reference_dataset
                 logger.info("Resolved the reference-axis population for split seed %s.", reference_key[-1])
             reference_dataset = reference_selections[reference_key]
-            manifest = reference_dataset.create_partitions().manifest
-            source_indices = sorted(i for ids in manifest.assignments.values() for i in ids)
-            logger.debug("Reusing %s source samples across spectral axes.", len(source_indices))
+            if reference_key not in source_index_references:
+                manifest = reference_dataset.create_partitions().manifest
+                source_indices = sorted(
+                    i for ids in manifest.assignments.values() for i in ids
+                )
+                if not source_indices or len(source_indices) != len(set(source_indices)):
+                    raise ValueError("Reference-axis source IDs must be nonempty and unique.")
+                source_index_references[reference_key] = _write_source_indices(
+                    artifact_root / "source_populations", source_indices
+                )
+                logger.info(
+                    "Persisted %s shared reference-axis source IDs.",
+                    len(source_indices),
+                )
             factory_parameters["dataset"]["parameters"]["subset"] = {
-                "method": "source_indices", "indices": source_indices,
+                "method": "source_indices",
+                "indices_ref": source_index_references[reference_key],
             }
         binning = factory_parameters["binning"]
         variant = factory_parameters["variant"]
@@ -615,6 +673,7 @@ def _build_planning_pipeline(
     ## Dataset construction has no model and initializes no neural-network weights
     dataset_definition = parameters.get("dataset", {})
     dataset_parameters = deepcopy(dataset_definition.get("parameters", {}))
+    _expand_dataset_subset(dataset_parameters)
     _resolve_chemistry_path(dataset_parameters, project_path)
     source_population = _resolve_cohort_source_population(parameters, wrapper)
     if source_population is not None:
@@ -856,6 +915,21 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Resolved artifact must contain a mapping: {path}")
     return value
+
+
+def _write_source_indices(root: Path, indices: list[int]) -> dict[str, str]:
+    """Persist one content-addressed population and return its verified reference."""
+    root.mkdir(parents=True, exist_ok=True)
+    content = yaml.safe_dump({"indices": indices}, sort_keys=False).encode("utf-8")
+    digest = hashlib.sha256(content).hexdigest()
+    path = root / f"source-{digest}.yaml"
+    if not path.exists():
+        temporary = path.with_suffix(".yaml.tmp")
+        temporary.write_bytes(content)
+        temporary.replace(path)
+    elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        raise ValueError(f"Shared source-index file changed: {path}")
+    return {"path": str(path.resolve()), "sha256": digest}
 
 
 def _write_yaml(path: Path, value: dict[str, Any]) -> None:

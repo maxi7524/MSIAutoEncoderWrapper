@@ -33,6 +33,7 @@ from .planning import (
     resolve_plan,
 )
 from .planning.plan import configuration_fingerprint
+from .planning.graph import verify_plan_graph
 from .staging import cleanup_staging_directory, copy_verified, restore_results, stage_plan
 from .planning import validate_preflight
 from .progress import create_terminal_progress, format_duration, update_progress
@@ -152,12 +153,15 @@ def _has_complete_plan(directory: Path, plan: ExperimentPlan) -> bool:
     manifest = _load_task(manifest_path)
     expected_ids = {task.task_id for task in plan.tasks}
     materialized_ids = {task.get("task_id") for task in manifest.get("tasks", [])}
-    return (
-        manifest.get("runtime_schema_version") == 2
+    compatible = (
+        manifest.get("runtime_schema_version") in {2, 3}
         and manifest.get("config_fingerprint") == plan.config_fingerprint
         and materialized_ids == expected_ids
         and all((directory / "tasks" / f"{task_id}.yaml").is_file() for task_id in expected_ids)
     )
+    if compatible and manifest["runtime_schema_version"] == 3:
+        verify_plan_graph(directory, expected_count=len(expected_ids))
+    return compatible
 
 
 def _runtime_campaign_identifier(runtime_root: Path) -> str:
@@ -319,7 +323,7 @@ def _has_compatible_manifest(directory: Path, plan: ExperimentPlan) -> bool:
         return False
     manifest = _load_task(manifest_path)
     return (
-        manifest.get("runtime_schema_version") == 2
+        manifest.get("runtime_schema_version") in {2, 3}
         and manifest.get("config_fingerprint") == plan.config_fingerprint
         and manifest.get("experiment_name") == plan.experiment_name
     )

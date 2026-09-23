@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from msi_autoencoder_wrapper.runtime.output import task_fingerprint
+from msi_autoencoder_wrapper.runtime.planning.graph import verify_plan_graph
 
 
 INDEX_NAME = "task-index.json"
@@ -87,6 +88,11 @@ def _load_index(plan: Path) -> dict[str, dict[str, Any]]:
     for task_id, path in paths.items():
         if _sha256(path) != entries[task_id]["descriptor_sha256"]:
             raise ValueError(f"Task descriptor changed after indexing: {task_id}")
+    manifest_path = plan / "resolved-experiment.yaml"
+    if manifest_path.is_file():
+        with manifest_path.open(encoding="utf-8") as stream:
+            if stream.readline().strip() == "runtime_schema_version: 3":
+                verify_plan_graph(plan, expected_count=len(entries))
     return entries
 
 

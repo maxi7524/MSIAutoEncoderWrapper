@@ -17,6 +17,7 @@ from typing import Any
 import torch
 import yaml
 
+from msi_autoencoder_wrapper.runtime.planning.graph import verify_plan_graph
 from msi_autoencoder_wrapper.utils.logger import get_custom_logger
 
 
@@ -154,10 +155,14 @@ def validate_campaign(
         manifest = _read_yaml(manifest_path)
     except (OSError, ValueError, yaml.YAMLError) as error:
         return [f"cannot read campaign manifest '{manifest_path}': {error}"]
-    if manifest.get("runtime_schema_version") != 2:
-        issues.append(
-            "campaign manifest runtime_schema_version must be 2 for workflow dependencies"
-        )
+    schema_version = manifest.get("runtime_schema_version")
+    if schema_version not in {2, 3}:
+        issues.append("campaign manifest must use runtime schema version 2 or 3")
+    elif schema_version == 3:
+        try:
+            verify_plan_graph(root)
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            issues.append(f"invalid campaign plan graph: {error}")
     tasks = manifest.get("tasks")
     if not isinstance(tasks, list) or not tasks:
         return ["campaign manifest must contain a non-empty tasks list"]
@@ -270,8 +275,13 @@ def validate_campaign(
         except (OSError, ValueError, yaml.YAMLError) as error:
             issues.append(f"{task_id}: cannot read task descriptor: {error}")
             continue
-        if descriptor != manifest_task:
+        if schema_version == 2 and descriptor != manifest_task:
             issues.append(f"{task_id}: task descriptor differs from resolved manifest")
+        elif schema_version == 3 and any(
+            descriptor.get(key) != manifest_task.get(key)
+            for key in ("task_id", "grid_id", "repetition", "workflow", "depends_on")
+        ):
+            issues.append(f"{task_id}: task descriptor differs from plan graph node")
 
         status_path = root / "status" / f"{task_id}.yaml"
         if not status_path.is_file():
