@@ -198,6 +198,36 @@ if (( indexed_count != task_count )); then
     echo "Indexed task count differs from materialized plan: ${indexed_count}/${task_count}." >&2
     exit 1
 fi
+aggregate_count=$("${PYTHON}" - "${RUN_DIRECTORY}/plan/resolved-experiment.yaml" "${task_count}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+import yaml
+
+aggregate_path = Path(sys.argv[1])
+expected_count = int(sys.argv[2])
+task_ids = []
+schema_version = None
+with aggregate_path.open(encoding="utf-8") as stream:
+    for line in stream:
+        if line.startswith("runtime_schema_version: "):
+            schema_version = line.partition(": ")[2].strip()
+        match = re.match(r"^- task_id: (task_[0-9]{6})$", line.rstrip("\n"))
+        if match:
+            task_ids.append(match.group(1))
+if schema_version != "2" or len(task_ids) != expected_count or len(set(task_ids)) != expected_count:
+    raise SystemExit("Aggregate plan is incomplete")
+with aggregate_path.open(encoding="utf-8") as stream:
+    for _event in yaml.parse(stream, Loader=getattr(yaml, "CLoader", yaml.Loader)):
+        pass
+print(len(task_ids))
+PY
+)
+if (( aggregate_count != task_count )); then
+    echo "Aggregate plan count differs from materialized descriptors: ${aggregate_count}/${task_count}." >&2
+    exit 1
+fi
 printf '%s\n' "${task_count}" >"${RUN_DIRECTORY}/task-count"
 echo "Staging completed for ${CAMPAIGN_FILE}; ${task_count} tasks are ready."
 echo "Run 03_orchestrate_campaign.sh ${RUN_DIRECTORY} from the login node."

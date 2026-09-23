@@ -89,6 +89,10 @@ def test_plan_command_runs_preflight_and_materializes_all_tasks(tmp_path: Path) 
 
     assert len(list((output / "tasks").glob("task_*.yaml"))) == 4
     assert (output / "resolved-experiment.yaml").is_file()
+    manifest = yaml.safe_load(
+        (output / "resolved-experiment.yaml").read_text(encoding="utf-8")
+    )
+    assert len(manifest["tasks"]) == 4
 
 
 def test_run_reuses_complete_materialized_plan(tmp_path: Path, monkeypatch) -> None:

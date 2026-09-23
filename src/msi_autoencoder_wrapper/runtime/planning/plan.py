@@ -283,15 +283,22 @@ def materialize_plan(plan: ExperimentPlan, directory: Path) -> Path:
     # Campaign manifest
     ## Keep one aggregate record for inspection and result analysis
     plan_path = directory / "resolved-experiment.yaml"
-    payload = {
+    manifest = {
         "runtime_schema_version": 2,
         "experiment_name": plan.experiment_name,
         "config_path": plan.config_path,
         "config_fingerprint": plan.config_fingerprint,
         "execution": plan.execution,
         "reports": list(plan.reports),
-        "tasks": [asdict(task) for task in plan.tasks],
     }
-    with plan_path.open("w", encoding="utf-8") as stream:
-        yaml.safe_dump(payload, stream, sort_keys=False)
+    temporary_path = plan_path.with_suffix(".yaml.tmp")
+    try:
+        with temporary_path.open("w", encoding="utf-8") as stream:
+            yaml.safe_dump(manifest, stream, sort_keys=False)
+            stream.write("tasks:\n")
+            for task in plan.tasks:
+                yaml.safe_dump([asdict(task)], stream, sort_keys=False)
+        temporary_path.replace(plan_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return plan_path
