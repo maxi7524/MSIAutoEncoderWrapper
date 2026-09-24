@@ -1,0 +1,31 @@
+city,longitude,latitude,pubmed_count,query,retrieved
+Warsaw,21.01,52.23,813,"""mass spectrometry""[MeSH Terms] AND (""Warsaw""[Affiliation])",2026-09-24
+Berlin,13.4,52.52,2337,"""mass spectrometry""[MeSH Terms] AND (""Berlin""[Affiliation])",2026-09-24
+Paris,2.35,48.86,2725,"""mass spectrometry""[MeSH Terms] AND (""Paris""[Affiliation])",2026-09-24
+London,-0.13,51.51,3553,"""mass spectrometry""[MeSH Terms] AND (""London""[Affiliation])",2026-09-24
+Madrid,-3.7,40.42,2204,"""mass spectrometry""[MeSH Terms] AND (""Madrid""[Affiliation])",2026-09-24
+Rome,12.5,41.9,1706,"""mass spectrometry""[MeSH Terms] AND (""Rome""[Affiliation])",2026-09-24
+Vienna,16.37,48.21,1806,"""mass spectrometry""[MeSH Terms] AND (""Vienna""[Affiliation])",2026-09-24
+Prague,14.42,50.08,1340,"""mass spectrometry""[MeSH Terms] AND (""Prague""[Affiliation])",2026-09-24
+Budapest,19.04,47.5,628,"""mass spectrometry""[MeSH Terms] AND (""Budapest""[Affiliation])",2026-09-24
+Amsterdam,4.9,52.37,1808,"""mass spectrometry""[MeSH Terms] AND (""Amsterdam""[Affiliation])",2026-09-24
+Brussels,4.35,50.85,660,"""mass spectrometry""[MeSH Terms] AND (""Brussels""[Affiliation])",2026-09-24
+Copenhagen,12.57,55.68,1660,"""mass spectrometry""[MeSH Terms] AND (""Copenhagen""[Affiliation])",2026-09-24
+Stockholm,18.07,59.33,1724,"""mass spectrometry""[MeSH Terms] AND (""Stockholm""[Affiliation])",2026-09-24
+Oslo,10.75,59.91,951,"""mass spectrometry""[MeSH Terms] AND (""Oslo""[Affiliation])",2026-09-24
+Helsinki,24.94,60.17,1033,"""mass spectrometry""[MeSH Terms] AND (""Helsinki""[Affiliation])",2026-09-24
+Lisbon,-9.14,38.72,277,"""mass spectrometry""[MeSH Terms] AND (""Lisbon""[Affiliation])",2026-09-24
+Dublin,-6.26,53.35,700,"""mass spectrometry""[MeSH Terms] AND (""Dublin""[Affiliation])",2026-09-24
+Athens,23.73,37.98,1625,"""mass spectrometry""[MeSH Terms] AND (""Athens""[Affiliation])",2026-09-24
+Bern,7.45,46.95,464,"""mass spectrometry""[MeSH Terms] AND (""Bern""[Affiliation])",2026-09-24
+Bratislava,17.11,48.15,326,"""mass spectrometry""[MeSH Terms] AND (""Bratislava""[Affiliation])",2026-09-24
+Vilnius,25.28,54.69,66,"""mass spectrometry""[MeSH Terms] AND (""Vilnius""[Affiliation])",2026-09-24
+Riga,24.11,56.95,97,"""mass spectrometry""[MeSH Terms] AND (""Riga""[Affiliation])",2026-09-24
+Tallinn,24.75,59.44,100,"""mass spectrometry""[MeSH Terms] AND (""Tallinn""[Affiliation])",2026-09-24
+Ljubljana,14.51,46.06,418,"""mass spectrometry""[MeSH Terms] AND (""Ljubljana""[Affiliation])",2026-09-24
+Zagreb,15.98,45.81,436,"""mass spectrometry""[MeSH Terms] AND (""Zagreb""[Affiliation])",2026-09-24
+Bucharest,26.1,44.43,140,"""mass spectrometry""[MeSH Terms] AND (""Bucharest""[Affiliation])",2026-09-24
+Sofia,23.32,42.7,374,"""mass spectrometry""[MeSH Terms] AND (""Sofia""[Affiliation])",2026-09-24
+Belgrade,20.46,44.79,338,"""mass spectrometry""[MeSH Terms] AND (""Belgrade""[Affiliation])",2026-09-24
+Kyiv,30.52,50.45,37,"""mass spectrometry""[MeSH Terms] AND (""Kyiv""[Affiliation] OR ""Kiev""[Affiliation])",2026-09-24
+Valletta/Msida,14.51,35.9,17,"""mass spectrometry""[MeSH Terms] AND (""Valletta""[Affiliation] OR ""Msida""[Affiliation])",2026-09-24

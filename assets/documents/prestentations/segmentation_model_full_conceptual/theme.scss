@@ -1,0 +1,80 @@
+/*-- scss:defaults --*/
+$font-family-sans-serif: "Source Sans 3", "DejaVu Sans", sans-serif;
+$presentation-font-size-root: 34px;
+$presentation-heading-font: $font-family-sans-serif;
+$presentation-heading-color: #18181B;
+$presentation-heading-font-weight: 600;
+$body-color: #27272A;
+$link-color: #0072B2;
+$presentation-h2-font-size: 1.45em;
+
+/*-- scss:rules --*/
+@import url("https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&display=swap");
+
+.reveal .slide-group {
+  color: #71717A;
+  font-size: 0.55em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: -0.4em;
+}
+
+.reveal .muted { color: #71717A; }
+.reveal .accent { color: #DC2626; }
+.reveal .small { font-size: 0.7em; }
+.reveal .tiny { font-size: 0.55em; color: #71717A; }
+
+.reveal .formula-box {
+  background: #F4F4F5;
+  border-left: 4px solid #0072B2;
+  padding: 0.3em 0.8em;
+  margin: 0.4em 0;
+}
+
+.reveal .source {
+  position: absolute;
+  bottom: -1.2em;
+  left: 0;
+  font-size: 0.45em;
+  color: #71717A;
+}
+
+.reveal section img { margin: 0; }
+.reveal .title-slide h1.title { font-size: 1.9em; }
+
+.reveal .toy-regions-reference {
+  position: absolute;
+  top: 57%;
+  left: 25%;
+  width: 50%;
+  z-index: 2;
+  padding: 0.25em 0.45em;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.reveal .toy-regions-reference img {
+  display: block;
+  width: 100%;
+  margin: 0;
+}
+
+.reveal .toy-regions-reference p {
+  margin: 0;
+  line-height: 1.1;
+}
+
+.reveal .toy-latent-legend {
+  position: absolute;
+  top: 14%;
+  left: 74%;
+  width: 22%;
+  z-index: 3;
+  padding: 0.3em 0.45em;
+  color: #27272A;
+  font-size: 0.45em;
+  line-height: 1.25;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.reveal .toy-latent-legend div { margin: 0.1em 0; }
+.reveal .toy-latent-legend span { margin-right: 0.45em; }
