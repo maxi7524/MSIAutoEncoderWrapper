@@ -17,10 +17,6 @@ format:
     fig-align: center
 ---
 
-<!-- Figures: figure_scripts/concept_figures.py (concept slides) and the notebooks in
-     assets/experiments/autoencoder_architecture/notebooks/representative_model/24_09_26_toy_presentation
-     (toy-model slides). Plan: plan_max.md. -->
-
 ## Welcome {.center}
 
 ::: {.r-fit-text}
