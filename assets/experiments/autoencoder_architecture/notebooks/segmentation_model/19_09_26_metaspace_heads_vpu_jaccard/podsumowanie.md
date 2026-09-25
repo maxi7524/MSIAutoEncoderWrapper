@@ -1,1 +1,1 @@
-ostateczeni wybieramy  T=0.07, w=0.001, kontraktywny+kontrastywny, bez jaccarda ponieważ ma minlmanie lepsze micro precisio, reconsturction ora zjest trohcę odpwoerniesjzy. Cas treingu jest 2x dłużśy (liczenie pochodnej), ale nie ma to dla nas znaczenia) 
+ostateczeni wybieramy  T=0.07, w=0.001, kontraktywny+kontrastywny, **bez jaccarda ponieważ ma minlmanie lepsze micro precisio, reconsturction ora zjest trohcę odpwoerniesjzy**. Cas treingu jest 2x dłużśy (liczenie pochodnej), ale nie ma to dla nas znaczenia) 
