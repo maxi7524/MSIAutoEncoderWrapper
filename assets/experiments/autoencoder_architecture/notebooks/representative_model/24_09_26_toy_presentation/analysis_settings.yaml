@@ -1,0 +1,73 @@
+# Shared settings of the toy-model presentation notebooks and their precomputation.
+# Runner: python -m msi_autoencoder_wrapper.analysis.autoencoder.experiments.representative_toy_precompute --settings <this file>
+
+campaign:
+  experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/representative_model/representative_model_experiment.yaml
+  execution_root: data/kidney_workspace/executions
+  experiment_name: kidney-representative-toy
+  config_fingerprint: fd70090152a4
+  # Display order and short labels of the trained objectives.
+  variants: [m0-reconstruction, m1-head, m2-head-contrastive, m3-head-contractive, m4-head-contrastive-contractive]
+  labels:
+    m0-reconstruction: "reconstruction"
+    m1-head: "+ head"
+    m2-head-contrastive: "+ head + contrastive"
+    m3-head-contractive: "+ head + contractive"
+    m4-head-contrastive-contractive: "+ head + both"
+  # Variants shown on the presentation slides.
+  presentation:
+    contrastive: m2-head-contrastive
+    contractive: m3-head-contractive
+    both: m4-head-contrastive-contractive
+
+device: cuda
+seed: 20260924
+
+sensitivity:
+  # Geodesic half-angles theta (radians); Fisher--Rao distance = 2 theta.
+  geodesic_angles: [0.02, 0.05, 0.1, 0.2, 0.3]
+  directions: 16
+  display_geodesic_angle: 0.3
+  display_directions: 96
+  display_source_ids: []   # empty: one pixel per annotated region, nearest to its spatial centroid
+
+contrastive_views:
+  selection_methods: [permutation_label_invariant, permutation_random]
+  views_per_spectrum: 8
+  display_views: 48
+
+figures:
+  presentation_directory: assets/documents/prestentations/segmentation_model_full_conceptual/figures
+  prefix: toy_
+
+analyses:
+  dataset: {result_directory: part_0_01_representative_dataset_results}
+  training: {result_directory: part_1_01_training_check_results}
+  latent: {result_directory: part_1_02_latent_sphere_results}
+  sensitivity: {result_directory: part_1_04_contractive_sensitivity_results}
+  contrastive_views: {result_directory: part_1_03_contrastive_views_results}
+
+# Five ions shown in the figures: three spatially disjoint (909.6, 826.6, 762.5), one
+# overlapping only 762.5 (377.1) and one present almost everywhere (313.1).
+selected_ions:
+  - {mz: 909.558, color: "#CC79A7"}
+  - {mz: 826.576, color: "#D55E00"}
+  - {mz: 762.521, color: "#0072B2"}
+  - {mz: 377.09, color: "#009E73"}
+  - {mz: 313.145, color: "#71717A"}
+
+# Display categories built from the five ions. Rules are evaluated in order; the first
+# match wins; names list the defining ions.
+regions:
+  - {name: "909.6", color: "#CC79A7", all: ["909.558"]}
+  - {name: "826.6", color: "#D55E00", all: ["826.576"]}
+  - {name: "762.5 + 377.1", color: "#56B4E9", all: ["762.521", "377.09"]}
+  - {name: "762.5", color: "#0072B2", all: ["762.521"]}
+  - {name: "377.1", color: "#009E73", all: ["377.09"]}
+  - {name: "313.1 only", color: "#C4C4CC", all: ["313.145"]}
+  - {name: "none of the five", color: "#F4F4F5"}
+# Categories drawn small and underneath the others on the latent plots.
+background_regions: ["313.1 only", "none of the five"]
+
+# Pixels drawn on the latent sphere/circle (every n-th pixel in x and y); images use all pixels.
+display_stride: 3

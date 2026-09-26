@@ -1,0 +1,44 @@
+{
+  "analysis": "sensitivity",
+  "variants": [
+    "m0-reconstruction",
+    "m1-head",
+    "m2-head-contrastive",
+    "m3-head-contractive",
+    "m4-head-contrastive-contractive"
+  ],
+  "provenance": {
+    "settings_path": "/home/max/repositories/MSIAutoEncoderWrapper/assets/experiments/autoencoder_architecture/notebooks/representative_model/24_09_26_toy_presentation_circle/analysis_settings.yaml",
+    "device": "cuda",
+    "seed": 20260924,
+    "torch": "2.7.1+cu118",
+    "numpy": "2.5.1",
+    "source_sha256": {
+      "representative_toy_precompute.py": "dcbcdbf009e2e71e7bcb261d393772836c867f3c531ee811c3631e336cadd2ca"
+    },
+    "git_commit": "27e584621090c0353f946691a38ee6dcd3b50b5d"
+  },
+  "configuration": {
+    "geodesic_angles": [
+      0.02,
+      0.05,
+      0.1,
+      0.2,
+      0.3
+    ],
+    "directions": 16,
+    "display_geodesic_angle": 0.3,
+    "display_directions": 96,
+    "display_source_ids": []
+  },
+  "display_source_ids": [
+    436,
+    453,
+    406,
+    539
+  ],
+  "tables": [
+    "angles",
+    "display_cloud"
+  ]
+}
