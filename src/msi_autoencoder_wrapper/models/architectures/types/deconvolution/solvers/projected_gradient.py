@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from ..contracts import DeconvolutionResult
 from ..data.dictionary import GlobalCandidateDictionary
-from ...utils.logger import get_custom_logger
+from ......utils.logger import get_custom_logger
 
 
 logger = get_custom_logger(__name__)

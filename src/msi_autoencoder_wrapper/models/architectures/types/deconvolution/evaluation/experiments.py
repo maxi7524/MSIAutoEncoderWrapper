@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pandas as pd
@@ -10,7 +12,7 @@ import torch
 
 from ..data.dictionary import GlobalCandidateDictionary
 from ..data.synthetic import SyntheticDeconvolutionConfig, SyntheticDeconvolutionGenerator
-from ..models.projected_gradient import NonnegativeProjectedGradientSolver
+from ..solvers.projected_gradient import NonnegativeProjectedGradientSolver
 
 
 def catalogue_condition_counts(
@@ -31,6 +33,9 @@ def catalogue_condition_counts(
     get_ions = getattr(candidate_catalog, "get_candidate_ions", None)
     if not callable(get_ions):
         raise ValueError("candidate_catalog must expose get_candidate_ions().")
+    catalogue_path = getattr(candidate_catalog, "path", None)
+    if catalogue_path is not None and Path(catalogue_path).is_file():
+        return _sqlite_catalogue_condition_counts(Path(catalogue_path), conditions)
     rows = []
     for condition in conditions:
         name = condition.get("name")
@@ -53,6 +58,70 @@ def catalogue_condition_counts(
                 "adduct_count": len({str(ion["adduct"]) for ion in ions}),
             }
         )
+    return pd.DataFrame(rows)
+
+
+def _sqlite_catalogue_condition_counts(
+    path: Path,
+    conditions: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Aggregate candidate counts in SQLite without materializing ion records.
+
+    :param path: Materialized candidate-catalogue SQLite path.
+    :param conditions: Explicit METASPACE-compatible filter conditions.
+    :type path: pathlib.Path
+    :type conditions: collections.abc.Sequence[collections.abc.Mapping[str, typing.Any]]
+    :return: One aggregate record per condition.
+    :rtype: pandas.DataFrame
+    """
+    rows = []
+    with sqlite3.connect(path) as connection:
+        for condition in conditions:
+            name = condition.get("name")
+            filters = condition.get("filters")
+            if not isinstance(name, str) or not name or not isinstance(filters, Mapping):
+                raise ValueError("Every condition requires a non-empty name and filters mapping.")
+            clauses: list[str] = []
+            values: list[object] = []
+            for key, column in {
+                "provider": "compound.provider",
+                "adduct": "ion.adduct",
+                "polarity": "ion.polarity",
+                "formula": "ion.formula",
+            }.items():
+                if filters.get(key) is not None:
+                    clauses.append(f"{column} = ?")
+                    values.append(str(filters[key]))
+            if filters.get("mz_min") is not None:
+                clauses.append("ion.theoretical_mz >= ?")
+                values.append(float(filters["mz_min"]))
+            if filters.get("mz_max") is not None:
+                clauses.append("ion.theoretical_mz <= ?")
+                values.append(float(filters["mz_max"]))
+            where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            query = f"""
+                SELECT COUNT(*) AS candidate_ion_count,
+                       COUNT(DISTINCT ion.compound_key) AS compound_count,
+                       COUNT(DISTINCT ion.formula) AS formula_count,
+                       COUNT(DISTINCT ion.adduct) AS adduct_count
+                FROM candidate_ions AS ion
+                JOIN candidate_compounds AS compound USING (compound_key)
+                {where}
+            """
+            counts = connection.execute(query, values).fetchone()
+            rows.append(
+                {
+                    "condition": name,
+                    "polarity": filters.get("polarity"),
+                    "mz_min": filters.get("mz_min"),
+                    "mz_max": filters.get("mz_max"),
+                    "adduct": filters.get("adduct"),
+                    "candidate_ion_count": int(counts[0]),
+                    "compound_count": int(counts[1]),
+                    "formula_count": int(counts[2]),
+                    "adduct_count": int(counts[3]),
+                }
+            )
     return pd.DataFrame(rows)
 
 

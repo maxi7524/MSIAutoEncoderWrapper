@@ -11,7 +11,7 @@ from .evaluation import (
     projected_gradient_gradcheck,
     sample_global_subdictionary,
 )
-from .models.projected_gradient import NonnegativeProjectedGradientSolver
+from .solvers.projected_gradient import NonnegativeProjectedGradientSolver
 
 __all__ = [
     "catalogue_condition_counts",

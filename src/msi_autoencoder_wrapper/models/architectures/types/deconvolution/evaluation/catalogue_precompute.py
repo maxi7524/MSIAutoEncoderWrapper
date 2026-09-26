@@ -16,7 +16,7 @@ from msi_dataset_manager.annotations.candidates import (
 )
 from msi_dataset_manager.metadata import write_dataset_metadata
 
-from ...utils.logger import get_custom_logger
+from ......utils.logger import get_custom_logger
 
 
 logger = get_custom_logger(__name__)
@@ -105,6 +105,10 @@ def precompute_catalogue(
         raise ValueError("catalogue providers must be a mapping of source versions.")
     workspace_path = source_path.parent / workspace_relative_path
     source_cache_dir = repository_root / source_cache_relative_path
+    existing_path = catalogue_path(settings, notebook_dir=source_path.parent)
+    if existing_path.is_file():
+        logger.info("Reusing materialized deconvolution candidate catalogue at %s.", existing_path)
+        return existing_path
     logger.info(
         "Materializing deconvolution candidate catalogue from local sources at %s.",
         source_cache_dir,
@@ -140,7 +144,7 @@ def run_command(settings_path: Path | str) -> str:
     :rtype: str
     """
     return (
-        "uv run python -m msi_autoencoder_wrapper.deconvolution.evaluation.catalogue_precompute "
+        "uv run python -m msi_autoencoder_wrapper.models.architectures.types.deconvolution.evaluation.catalogue_precompute "
         f"--settings {Path(settings_path)}"
     )
 

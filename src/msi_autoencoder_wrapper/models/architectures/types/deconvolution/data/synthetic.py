@@ -8,7 +8,7 @@ import torch
 
 from ..contracts import DeconvolutionBatch
 from .dictionary import GlobalCandidateDictionary
-from ...utils.logger import get_custom_logger
+from ......utils.logger import get_custom_logger
 
 
 logger = get_custom_logger(__name__)
