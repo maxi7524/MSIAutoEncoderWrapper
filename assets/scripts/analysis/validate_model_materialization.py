@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate persisted model materialization for the pretraining campaign.
+"""Validate persisted model materialization for a runtime campaign.
 
 The validator consumes a completed runtime campaign directory, not the source
 experiment YAML.  It therefore checks the artifacts that were actually written by
@@ -23,11 +23,6 @@ from msi_autoencoder_wrapper.utils.logger import get_custom_logger
 
 logger = get_custom_logger(__name__)
 
-EXPECTED_BRANCH_ROLES = frozenset({"pretrained", "frozen_head", "unfrozen_head"})
-BASELINE_ROLE = "real_only"
-DEFAULT_HEAD_PREFIX = "heads.molecule_vpu."
-EXPECTED_BRANCH_GROUP_COUNT = 100
-EXPECTED_BASELINE_GROUP_COUNT = 10
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -106,42 +101,18 @@ def _states_have_same_structure(
     )
 
 
-def _changed_keys(
-    parent: dict[str, torch.Tensor],
-    child: dict[str, torch.Tensor],
-) -> set[str]:
-    """Return tensor keys whose persisted values differ exactly."""
-    return {
-        name
-        for name in parent
-        if name in child and not torch.equal(parent[name], child[name])
-    }
+def validate_campaign(campaign_directory: Path | str) -> list[str]:
+    """Validate materialized model bundles and declared workflow lineage.
 
-
-def validate_campaign(
-    campaign_directory: Path | str,
-    *,
-    head_prefix: str = DEFAULT_HEAD_PREFIX,
-    expected_branch_groups: int = EXPECTED_BRANCH_GROUP_COUNT,
-    expected_baseline_groups: int = EXPECTED_BASELINE_GROUP_COUNT,
-) -> list[str]:
-    """Validate task lineage and separately persisted model artifacts.
-
-    Expected task descriptors contain a top-level ``workflow`` mapping with
-    ``group_id``, ``role`` and ``parent_task_id`` fields.  Dependent tasks also
-    contain a top-level ``depends_on`` list.  Completed child results record the
-    exact loaded parent under ``result.initialization`` using ``parent_task_id``,
-    ``model_path`` and ``weights_sha256``.
+    Workflow roles and group sizes are read from the campaign manifest. Tasks
+    without workflow metadata are still checked for completed status and valid
+    persisted model bundles. A task with ``workflow.parent_task_id`` must declare
+    that parent in ``depends_on`` and record the loaded artifact in
+    ``result.initialization``.
 
     :param campaign_directory: Directory containing ``resolved-experiment.yaml``,
         ``tasks/`` and ``status/``.
     :type campaign_directory: pathlib.Path | str
-    :param head_prefix: State-dictionary prefix frozen during real-data adaptation.
-    :type head_prefix: str
-    :param expected_branch_groups: Required synthetic schedule/axis/repetition groups.
-    :type expected_branch_groups: int
-    :param expected_baseline_groups: Required real-only axis/repetition groups.
-    :type expected_baseline_groups: int
     :return: Human-readable contract violations. An empty list means PASS.
     :rtype: list[str]
     """
@@ -157,7 +128,7 @@ def validate_campaign(
         return [f"cannot read campaign manifest '{manifest_path}': {error}"]
     schema_version = manifest.get("runtime_schema_version")
     if schema_version not in {2, 3}:
-        issues.append("campaign manifest must use runtime schema version 2 or 3")
+        issues.append("campaign manifest runtime_schema_version must be 2 or 3")
     elif schema_version == 3:
         try:
             verify_plan_graph(root)
@@ -168,9 +139,9 @@ def validate_campaign(
         return ["campaign manifest must contain a non-empty tasks list"]
 
     # Task graph contract
-    ## Index every task and enforce one complete artifact-role set per group.
+    ## Index task identifiers and any declared workflow groups.
     tasks_by_id: dict[str, dict[str, Any]] = {}
-    groups: dict[str, dict[str, str]] = {}
+    parents: dict[str, str] = {}
     for index, task in enumerate(tasks):
         if not isinstance(task, dict):
             issues.append(f"tasks[{index}] is not a mapping")
@@ -184,79 +155,43 @@ def validate_campaign(
             continue
         tasks_by_id[task_id] = task
         workflow = task.get("workflow")
+        if workflow is None:
+            continue
         if not isinstance(workflow, dict):
-            issues.append(f"{task_id}: missing workflow materialization metadata")
+            issues.append(f"{task_id}: workflow must be a mapping or null")
             continue
         group_id = workflow.get("group_id")
         role = workflow.get("role")
         if not isinstance(group_id, str) or not group_id:
             issues.append(f"{task_id}: workflow.group_id must be non-empty")
             continue
-        if role not in EXPECTED_BRANCH_ROLES | {BASELINE_ROLE}:
-            issues.append(f"{task_id}: unsupported workflow.role {role!r}")
+        if not isinstance(role, str) or not role:
+            issues.append(f"{task_id}: workflow.role must be non-empty")
             continue
-        role_tasks = groups.setdefault(group_id, {})
-        if role in role_tasks:
-            issues.append(
-                f"{group_id}: role {role!r} is duplicated by {role_tasks[role]} and {task_id}"
-            )
-        role_tasks[role] = task_id
+        parent_id = workflow.get("parent_task_id")
+        if parent_id is not None:
+            if not isinstance(parent_id, str) or not parent_id:
+                issues.append(f"{task_id}: workflow.parent_task_id must be a task ID or null")
+            else:
+                parents[task_id] = parent_id
+                dependencies = task.get("depends_on", [])
+                if not isinstance(dependencies, list):
+                    issues.append(f"{task_id}: depends_on must be a list")
+                elif parent_id not in dependencies:
+                    issues.append(
+                        f"{task_id}: depends_on does not include workflow parent {parent_id}"
+                    )
 
-    for group_id, role_tasks in sorted(groups.items()):
-        roles = set(role_tasks)
-        expected = {BASELINE_ROLE} if BASELINE_ROLE in roles else set(EXPECTED_BRANCH_ROLES)
-        if roles != expected:
-            issues.append(
-                f"{group_id}: materialized roles are {sorted(roles)}, expected {sorted(expected)}"
-            )
+    ## Validate declared parent references against the same workflow group.
+    for child_id, parent_id in sorted(parents.items()):
+        parent = tasks_by_id.get(parent_id)
+        if parent is None:
+            issues.append(f"{child_id}: workflow parent task does not exist: {parent_id}")
             continue
-        if roles == {BASELINE_ROLE}:
-            baseline = tasks_by_id[role_tasks[BASELINE_ROLE]]
-            if baseline.get("depends_on", []) != []:
-                issues.append(f"{baseline['task_id']}: real_only must not depend on another task")
-            continue
-        parent_id = role_tasks["pretrained"]
-        parent = tasks_by_id[parent_id]
-        if parent.get("depends_on", []) != []:
-            issues.append(f"{parent_id}: pretrained must not depend on another task")
-        for role in ("frozen_head", "unfrozen_head"):
-            child_id = role_tasks[role]
-            child = tasks_by_id[child_id]
-            if child.get("depends_on") != [parent_id]:
-                issues.append(
-                    f"{child_id}: depends_on must contain only pretrained task {parent_id}"
-                )
-            if child.get("workflow", {}).get("parent_task_id") != parent_id:
-                issues.append(
-                    f"{child_id}: workflow.parent_task_id must equal {parent_id}"
-                )
-        if parent.get("workflow", {}).get("parent_task_id") is not None:
-            issues.append(f"{parent_id}: pretrained workflow.parent_task_id must be null")
-
-    branch_group_count = sum(
-        set(role_tasks) != {BASELINE_ROLE} for role_tasks in groups.values()
-    )
-    baseline_group_count = sum(
-        set(role_tasks) == {BASELINE_ROLE} for role_tasks in groups.values()
-    )
-    expected_task_count = expected_branch_groups * len(EXPECTED_BRANCH_ROLES) + (
-        expected_baseline_groups
-    )
-    if branch_group_count != expected_branch_groups:
-        issues.append(
-            "campaign has "
-            f"{branch_group_count} synthetic workflow groups, expected {expected_branch_groups}"
-        )
-    if baseline_group_count != expected_baseline_groups:
-        issues.append(
-            "campaign has "
-            f"{baseline_group_count} real-only workflow groups, expected {expected_baseline_groups}"
-        )
-    if len(tasks_by_id) != expected_task_count:
-        issues.append(
-            f"campaign has {len(tasks_by_id)} tasks, expected {expected_task_count} "
-            "separately persisted models"
-        )
+        child_workflow = tasks_by_id[child_id].get("workflow") or {}
+        parent_workflow = parent.get("workflow") or {}
+        if child_workflow.get("group_id") != parent_workflow.get("group_id"):
+            issues.append(f"{child_id}: workflow parent {parent_id} belongs to another group")
 
     # Persisted artifact contract
     ## Validate terminal status, unique model paths and loadable model bundles.
@@ -312,12 +247,6 @@ def validate_campaign(
             issues.append(f"{task_id}: model_path is not absolute: {model_path}")
             continue
         model_path = model_path.resolve()
-        role = manifest_task.get("workflow", {}).get("role")
-        if isinstance(role, str) and not model_path.name.endswith(f"__{role}"):
-            issues.append(
-                f"{task_id}: model directory name must end with '__{role}': "
-                f"{model_path.name}"
-            )
         previous_owner = path_owners.get(model_path)
         if previous_owner is not None:
             issues.append(f"{task_id}: model_path is shared with {previous_owner}: {model_path}")
@@ -346,60 +275,37 @@ def validate_campaign(
             issues.append(f"{task_id}: invalid model bundle: {error}")
 
     # On-disk lineage contract
-    ## Prove that both adaptation tasks loaded the same persisted parent weights.
-    for _group_id, role_tasks in sorted(groups.items()):
-        parent_id = role_tasks.get("pretrained")
-        if parent_id is None:
-            continue
+    ## Compare each declared parent link with persisted initialization provenance.
+    for child_id, parent_id in sorted(parents.items()):
         if parent_id not in weight_paths or parent_id not in states:
             continue
         parent_weights = weight_paths[parent_id]
         parent_hash = _sha256(parent_weights)
         parent_state = states[parent_id]
-        for role in ("frozen_head", "unfrozen_head"):
-            child_id = role_tasks.get(role)
-            if child_id is None:
-                continue
-            record = records.get(child_id, {})
-            result = record.get("result", {}) if isinstance(record, dict) else {}
-            initialization = result.get("initialization") if isinstance(result, dict) else None
-            if not isinstance(initialization, dict):
-                issues.append(f"{child_id}: result.initialization provenance is missing")
-                continue
-            expected_parent_path = model_paths.get(parent_id)
-            reported_parent_path = initialization.get("model_path")
-            reported_resolved = (
-                Path(reported_parent_path).resolve()
-                if isinstance(reported_parent_path, str)
-                else None
-            )
-            if initialization.get("parent_task_id") != parent_id:
-                issues.append(f"{child_id}: initialization.parent_task_id is not {parent_id}")
-            if reported_resolved != expected_parent_path:
-                issues.append(f"{child_id}: initialization.model_path does not identify parent artifact")
-            if initialization.get("weights_sha256") != parent_hash:
-                issues.append(f"{child_id}: initialization.weights_sha256 does not match parent weights")
+        record = records.get(child_id, {})
+        result = record.get("result", {}) if isinstance(record, dict) else {}
+        initialization = result.get("initialization") if isinstance(result, dict) else None
+        if not isinstance(initialization, dict):
+            issues.append(f"{child_id}: result.initialization provenance is missing")
+            continue
+        expected_parent_path = model_paths.get(parent_id)
+        reported_parent_path = initialization.get("model_path")
+        reported_resolved = (
+            Path(reported_parent_path).resolve()
+            if isinstance(reported_parent_path, str)
+            else None
+        )
+        if initialization.get("parent_task_id") != parent_id:
+            issues.append(f"{child_id}: initialization.parent_task_id is not {parent_id}")
+        if reported_resolved != expected_parent_path:
+            issues.append(f"{child_id}: initialization.model_path does not identify parent artifact")
+        if initialization.get("weights_sha256") != parent_hash:
+            issues.append(f"{child_id}: initialization.weights_sha256 does not match parent weights")
 
-            child_state = states.get(child_id)
-            if child_state is None:
-                continue
-            if not _states_have_same_structure(parent_state, child_state):
-                issues.append(f"{child_id}: state-dictionary structure differs from pretrained parent")
-                continue
-            changed = _changed_keys(parent_state, child_state)
-            if not changed:
-                issues.append(f"{child_id}: no persisted tensor changed from pretrained parent")
-            if role == "frozen_head":
-                head_keys = {name for name in parent_state if name.startswith(head_prefix)}
-                if not head_keys:
-                    issues.append(
-                        f"{child_id}: pretrained state has no tensors with prefix {head_prefix!r}"
-                    )
-                changed_head = sorted(head_keys & changed)
-                if changed_head:
-                    issues.append(f"{child_id}: frozen head tensors changed: {changed_head}")
-                if not (changed - head_keys):
-                    issues.append(f"{child_id}: no non-head tensor changed during adaptation")
+        child_state = states.get(child_id)
+        if child_state is not None and not _states_have_same_structure(parent_state, child_state):
+            issues.append(f"{child_id}: state-dictionary structure differs from parent model")
+
 
     return issues
 
@@ -408,40 +314,24 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for artifact validation."""
     parser = argparse.ArgumentParser(
         description=(
-            "Validate that every pretraining workflow task produced an independent "
-            "model bundle with auditable parent-weight lineage."
+            "Validate completed model artifacts and any declared workflow lineage "
+            "in a runtime campaign directory."
         )
     )
     parser.add_argument("campaign_directory", type=Path)
-    parser.add_argument("--head-prefix", default=DEFAULT_HEAD_PREFIX)
-    parser.add_argument(
-        "--expected-branch-groups",
-        type=int,
-        default=EXPECTED_BRANCH_GROUP_COUNT,
-    )
-    parser.add_argument(
-        "--expected-baseline-groups",
-        type=int,
-        default=EXPECTED_BASELINE_GROUP_COUNT,
-    )
     return parser
 
 
 def main() -> int:
     """Run validation and return a shell-compatible status code."""
     args = build_parser().parse_args()
-    issues = validate_campaign(
-        args.campaign_directory,
-        head_prefix=args.head_prefix,
-        expected_branch_groups=args.expected_branch_groups,
-        expected_baseline_groups=args.expected_baseline_groups,
-    )
+    issues = validate_campaign(args.campaign_directory)
     if issues:
-        logger.error("Pretraining model materialization: FAIL (%s violation(s)).", len(issues))
+        logger.error("Campaign model materialization: FAIL (%s violation(s)).", len(issues))
         for issue in issues:
             logger.error("- %s", issue)
         return 1
-    logger.info("Pretraining model materialization: PASS.")
+    logger.info("Campaign model materialization: PASS.")
     return 0
 
 

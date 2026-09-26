@@ -181,6 +181,11 @@ grid:
                   permutation_selection_attempts: 64
                   annotation_bin_radius: 0
                   preserve_input_normalization: true
+                  # REMARK: Jaccard negative weighting was added to this campaign by
+                  # mistake and should not be used; it slightly worsens the results.
+                  # It is kept here only because every trained model of this campaign
+                  # (real_only, frozen_head and unfrozen_head) used it, so the YAML must
+                  # match the trained artifacts. Do not copy it into new campaigns.
                   negative_weighting_method: multilabel_jaccard
                   overlapping_label_negative_weight: 0.1
           evaluate_test: true

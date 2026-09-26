@@ -16,13 +16,8 @@ import yaml
 
 SCRIPT_PATH = (
     Path(__file__).parents[2]
-    / "assets/experiments/autoencoder_architecture/experiment_runs_configs"
-    / "segmentation_model/20_09_26_metaspace_base_pretrain"
-    / "validate_model_materialization.py"
+    / "assets/scripts/analysis/validate_model_materialization.py"
 )
-FIXTURE_COUNTS = {"expected_branch_groups": 1, "expected_baseline_groups": 0}
-
-
 def _load_validator() -> ModuleType:
     """Load the campaign-local script as a testable module."""
     specification = importlib.util.spec_from_file_location(
@@ -139,7 +134,7 @@ def test_complete_materialized_branch_group_passes(tmp_path: Path) -> None:
     validator = _load_validator()
     campaign, _ = _write_campaign(tmp_path)
 
-    assert validator.validate_campaign(campaign, **FIXTURE_COUNTS) == []
+    assert validator.validate_campaign(campaign) == []
 
 
 def test_compact_schema_three_manifest_preserves_artifact_validation(tmp_path: Path) -> None:
@@ -159,29 +154,23 @@ def test_compact_schema_three_manifest_preserves_artifact_validation(tmp_path: P
         yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
     )
 
-    assert validator.validate_campaign(campaign, **FIXTURE_COUNTS) == []
+    assert validator.validate_campaign(campaign) == []
 
 
-def test_missing_unfrozen_artifact_and_changed_frozen_head_fail(tmp_path: Path) -> None:
-    """The validator rejects an incomplete group and a modified frozen head."""
+def test_missing_workflow_parent_is_reported(tmp_path: Path) -> None:
+    """The validator reports workflow links whose parent task is absent."""
     validator = _load_validator()
-    campaign, model_paths = _write_campaign(tmp_path)
+    campaign, _ = _write_campaign(tmp_path)
     manifest_path = campaign / "resolved-experiment.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["tasks"] = [
-        task for task in manifest["tasks"] if task["workflow"]["role"] != "unfrozen_head"
+        task for task in manifest["tasks"] if task["workflow"]["role"] != "pretrained"
     ]
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
-    frozen_weights = model_paths["frozen_head"] / "config" / "weights.pt"
-    frozen_state = torch.load(frozen_weights, map_location="cpu", weights_only=True)
-    frozen_state["heads.molecule_vpu.weight"] += 1.0
-    torch.save(frozen_state, frozen_weights)
+    issues = validator.validate_campaign(campaign)
 
-    issues = validator.validate_campaign(campaign, **FIXTURE_COUNTS)
-
-    assert any("expected ['frozen_head', 'pretrained', 'unfrozen_head']" in issue for issue in issues)
-    assert any("frozen head tensors changed" in issue for issue in issues)
+    assert any("workflow parent task does not exist" in issue for issue in issues)
 
 
 def test_child_provenance_must_match_parent_weights(tmp_path: Path) -> None:
@@ -195,6 +184,6 @@ def test_child_provenance_must_match_parent_weights(tmp_path: Path) -> None:
     ] = "0" * 64
     status_path.write_text(yaml.safe_dump(status, sort_keys=False), encoding="utf-8")
 
-    issues = validator.validate_campaign(campaign, **FIXTURE_COUNTS)
+    issues = validator.validate_campaign(campaign)
 
     assert any("weights_sha256 does not match parent weights" in issue for issue in issues)

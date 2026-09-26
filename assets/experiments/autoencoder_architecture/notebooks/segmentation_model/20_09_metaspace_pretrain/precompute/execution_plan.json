@@ -1,0 +1,12 @@
+{
+  "strategy": "autoencoder.pretraining_campaign_analysis",
+  "model_type": "autoencoder",
+  "stages": [
+    "autoencoder.pretraining.campaign_plan",
+    "autoencoder.pretraining.populations",
+    "autoencoder.pretraining.synthetic_reference",
+    "autoencoder.pretraining.inference",
+    "autoencoder.pretraining.stage_reconstruction",
+    "autoencoder.pretraining.rare_classes"
+  ]
+}

@@ -114,7 +114,10 @@ model weights.
 All real-data branches use Masserstein reconstruction (`1.0`), VPU (`0.2`),
 contractive Fisher--Rao spectral-hinge regularization (`2e-3`), and InfoNCE
 (`1e-3`, temperature `0.07`). The contrastive negatives use multilabel Jaccard
-weighting with overlapping-label negative weight `0.1`. Synthetic phases do
+weighting with overlapping-label negative weight `0.1`. This weighting was
+added by mistake: it should not be part of the objective and slightly worsens
+the results. It is retained in the YAML only because every trained model of
+this campaign used it. Synthetic phases do
 not use the contractive or contrastive terms.
 
 ## Campaign size and execution

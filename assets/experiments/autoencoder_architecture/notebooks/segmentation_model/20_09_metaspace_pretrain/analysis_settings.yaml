@@ -1,0 +1,406 @@
+# Paths are relative to the repository root; absolute paths are also accepted.
+#
+# Analysis settings of the synthetic-pretraining campaign (20_09_26_metaspace_base_pretrain).
+# One file serves every notebook part below this directory and the precompute that
+# produces their tables:
+#
+#   uv run --extra cu118 python -m msi_autoencoder_wrapper.analysis.precompute \
+#       --settings <this file> [--analysis <name> ...]
+#
+# The shared cache (plan -> populations -> synthetic reference -> inference) lives under
+# `cache_directory`. Every level is identified by a content contract and reused while the
+# contract is unchanged; directories from before contracts existed are adopted only after
+# a content validation. Cache status without computing anything:
+#
+#   uv run python -m msi_autoencoder_wrapper.analysis.autoencoder.experiments.pretraining_campaign_cache \
+#       --settings <this file>
+#
+# Each analysis below writes only its own result directory; no analysis reads the output
+# of another analysis, and an analysis whose recorded inputs are unchanged is kept.
+workspace: data/kidney_workspace
+model_store: data/kidney_workspace/models/kidney
+experiment_config: assets/experiments/autoencoder_architecture/experiment_runs_configs/segmentation_model/20_09_26_metaspace_base_pretrain/pretraining_experiment.yaml
+campaign_id: metaspace-pretrain-repaired-20260923-01
+merged_store: data/kidney_workspace/datasets/kidney/kidney.sqlite
+cache_directory: data/kidney_workspace/cache/metaspace_pretrain_analysis
+# Recovered split of the original training run; used only to verify the resolved split.
+reference_split: tmp/pretrain_repair/bundle/source_split.yaml
+
+precompute:
+  strategy: autoencoder.pretraining_campaign_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/precompute
+  # A failing analysis writes failure.json into its result directory; the others still run.
+  continue_on_error: true
+
+# Every role of the campaign; part 1 analyses only the baseline role.
+roles: [real_only, pretrained, frozen_head, unfrozen_head]
+baseline_role: real_only
+
+# Stages of one synthetic-pretraining lineage (workflow roles), in lineage order.
+stages:
+  pretrained: {label: "pretrained", line_style: dotted, marker: "^"}
+  frozen_head: {label: "fine-tuned, frozen head", line_style: dashed, marker: "s"}
+  unfrozen_head: {label: "fine-tuned, unfrozen head", line_style: solid, marker: "o"}
+
+# Pretraining variants, identified by the ordered names of their synthetic phases. One
+# model alias <variant>__<stage>__<axis directory> is generated per axis, variant and stage.
+# Factors define the 2 x 2 x 2 design of P2-P5 (schedule x overlap quota x rare quota).
+variants:
+  P0_single:
+    phases: [synthetic_single]
+    label: "P0 single bins"
+    color: "#7F7F7F"
+    factors: {components: single}
+  P1_permutation:
+    phases: [synthetic_permutation_base]
+    label: "P1 permutations"
+    color: "#9467BD"
+    factors: {components: permutation}
+  P2_joint_base:
+    phases: [synthetic_joint_base]
+    label: "P2 joint"
+    color: "#17BECF"
+    factors: {components: combined, schedule: joint, overlap: 0, rare: 0}
+  P2_staged_base:
+    phases: [synthetic_single_stage, synthetic_permutation_base]
+    label: "P2 staged"
+    color: "#9EDAE5"
+    factors: {components: combined, schedule: staged, overlap: 0, rare: 0}
+  P3_joint_overlap:
+    phases: [synthetic_joint_overlap]
+    label: "P3 joint + overlap"
+    color: "#BCBD22"
+    factors: {components: combined, schedule: joint, overlap: 1, rare: 0}
+  P3_staged_overlap:
+    phases: [synthetic_single_stage, synthetic_permutation_overlap]
+    label: "P3 staged + overlap"
+    color: "#DBDB8D"
+    factors: {components: combined, schedule: staged, overlap: 1, rare: 0}
+  P4_joint_rare:
+    phases: [synthetic_joint_rare]
+    label: "P4 joint + rare"
+    color: "#2CA02C"
+    factors: {components: combined, schedule: joint, overlap: 0, rare: 1}
+  P4_staged_rare:
+    phases: [synthetic_single_stage, synthetic_permutation_rare]
+    label: "P4 staged + rare"
+    color: "#98DF8A"
+    factors: {components: combined, schedule: staged, overlap: 0, rare: 1}
+  P5_joint_all:
+    phases: [synthetic_joint_all]
+    label: "P5 joint + overlap + rare"
+    color: "#D62728"
+    factors: {components: combined, schedule: joint, overlap: 1, rare: 1}
+  P5_staged_all:
+    phases: [synthetic_single_stage, synthetic_permutation_all]
+    label: "P5 staged + overlap + rare"
+    color: "#FF9896"
+    factors: {components: combined, schedule: staged, overlap: 1, rare: 1}
+
+# Comparison with the baseline (paired by axis and repetition: one initialization seed per
+# repetition across all grid groups). Improvements are signed so that positive is better.
+comparison:
+  key_metrics:
+    - {family: reconstruction, metric: masserstein}
+    - {family: reconstruction, metric: spectral_angle}
+    - {family: prediction, metric: average_precision, ranking: annotation_retrieval}
+    - {family: prediction, metric: micro_average_precision, ranking: annotation_retrieval}
+    - {family: prediction, metric: f1, ranking: annotation_retrieval}
+  # The best variant of a stage is selected on the withheld test pixels, never on the
+  # held-out images it is shown on.
+  selection_population: test
+  tie_breaker: {family: prediction, metric: average_precision, ranking: annotation_retrieval}
+  confidence: 0.95
+  # Paired contrasts mean(plus) - mean(minus) per axis, stage and repetition.
+  contrasts:
+    permutation_vs_single: {plus: [P1_permutation], minus: [P0_single]}
+    joint_combined_vs_single: {plus: [P2_joint_base], minus: [P0_single]}
+    joint_combined_vs_permutation: {plus: [P2_joint_base], minus: [P1_permutation]}
+    staged_vs_joint_base: {plus: [P2_staged_base], minus: [P2_joint_base]}
+    staged_vs_joint_overlap: {plus: [P3_staged_overlap], minus: [P3_joint_overlap]}
+    staged_vs_joint_rare: {plus: [P4_staged_rare], minus: [P4_joint_rare]}
+    staged_vs_joint_all: {plus: [P5_staged_all], minus: [P5_joint_all]}
+    overlap_quota_joint: {plus: [P3_joint_overlap], minus: [P2_joint_base]}
+    overlap_quota_staged: {plus: [P3_staged_overlap], minus: [P2_staged_base]}
+    rare_quota_joint: {plus: [P4_joint_rare], minus: [P2_joint_base]}
+    rare_quota_staged: {plus: [P4_staged_rare], minus: [P2_staged_base]}
+    all_quotas_joint: {plus: [P5_joint_all], minus: [P2_joint_base]}
+    all_quotas_staged: {plus: [P5_staged_all], minus: [P2_staged_base]}
+  # Two-level factorial design of P2-P5; the first level is the reference.
+  factorial:
+    levels: {schedule: [joint, staged], overlap: [0, 1], rare: [0, 1]}
+
+# Mechanism-specific analyses: each treated variant is compared with the control variant
+# that differs only in the mechanism under test.
+targeted:
+  rare:
+    pairs: {P4_joint_rare: P2_joint_base, P4_staged_rare: P2_staged_base,
+            P5_joint_all: P3_joint_overlap, P5_staged_all: P3_staged_overlap}
+    evaluations: [test_combined, test_extended, heldout_image]
+    # Classes within this many count ranks of the rare cutoff form the cutoff comparison.
+    cutoff_window: 25
+  overlap:
+    pairs: {P3_joint_overlap: P2_joint_base, P3_staged_overlap: P2_staged_base,
+            P5_joint_all: P4_joint_rare, P5_staged_all: P4_staged_rare}
+    # Collision pairs need this many evaluation pixels with exactly one class annotated.
+    minimum_pair_pixels: 5
+    # Lower edges of the groups of pixels by number of annotated classes.
+    cooccurrence_edges: [1, 2, 4, 8]
+
+# Linear (ridge) probe of the annotations from the canonical latent codes.
+probe: {train_size: 20000, seed: 42, regularization: 1.0e-3}
+
+# Real-data learning curves: slope over the last epochs and compared components.
+finetuning: {slope_epochs: 3, components: [masserstein, total_loss]}
+
+# Parallel CPU workers of the per-model latent computations.
+workers: 4
+
+models:
+  baseline_200_900:
+    display_label: "Real-only baseline, 200-900 m/z"
+    select: {axis: axis-200-900, role: real_only}
+    tags: {axis: axis-200-900, role: real_only}
+    visualization: {order: 0, color: "#0072B2", line_style: solid, marker: "o"}
+  baseline_100_3000:
+    display_label: "Real-only baseline, 100-3000 m/z"
+    select: {axis: axis-100-3000, role: real_only}
+    tags: {axis: axis-100-3000, role: real_only}
+    visualization: {order: 1, color: "#D55E00", line_style: solid, marker: "s"}
+
+groups:
+  real_baseline: [baseline_200_900, baseline_100_3000]
+
+axes:
+  axis-200-900: {directory: axis_200_900, label: "200-900 m/z"}
+  axis-100-3000: {directory: axis_100_3000, label: "100-3000 m/z"}
+# Common m/z range of both axes; defines the common / boundary / extension class sets.
+reference_mass_range: [200.0, 900.0]
+
+target_field: molecule
+device: cuda
+# Spectra per forward pass; runtime only (not part of any cache contract).
+batch_size: 4096
+
+populations:
+  # null: use the cohort exclusion recorded in the campaign YAML.
+  heldout_dataset_ids: null
+  # Extra pixels of cohort images outside the 20 % subset, only for classes with fewer
+  # than `minimum_positives` test positives.
+  test_extension: {minimum_positives: 20, seed: 42}
+
+# Evidence rule adopted from 19_09_26_metaspace_heads_vpu_jaccard (not re-selected).
+evidence: {absolute_threshold: 0.0, relative_threshold: 0.0119, bin_radius: 1}
+
+# Local Masserstein: windows aligned to multiples of `width` on every axis.
+windows: {width: 100.0, minimum_mass: 1.0e-3}
+
+metaspace:
+  # METASPACE pixel coordinates = imzML coordinates + offset; verified during precompute.
+  coordinate_offset: [-1, -1]
+  candidate_offsets: [[-1, -1], [0, 0], [-1, 0], [0, -1], [1, 1]]
+
+# Every image shows the representative model of its axis, never a repetition mean.
+# Metrics are ranked on the withheld test pixels (not on the displayed held-out images);
+# the lowest mean rank wins, the tie breaker decides equal mean ranks.
+representative_model:
+  population: test
+  evaluation: annotation_retrieval
+  scope: train_supported
+  metrics: {masserstein: lower, spectral_angle: lower, average_precision: higher,
+            micro_average_precision: higher, f1: higher}
+  tie_breaker: average_precision
+
+display:
+  # Held-out reconstruction of the representative model stored for display (float16).
+  # Windows whose mean held-out TIC fraction is below this value are not stored.
+  minimum_window_mass_fraction: 0.01
+
+# Spectrum cases per population: seeded rows plus each model's best and worst Masserstein rows.
+cases: {per_population: 6, seed: 42}
+# Half width (m/z) of the zoom around the strongest peak of a displayed spectrum.
+spectrum_zoom: {half_width: 15.0}
+
+# Held-out m/z channels compared as images: apex bins of the image's mean-spectrum peaks.
+image_channels:
+  minimum_height_fraction: 1.0e-3
+  minimum_distance_bins: 3
+  criterion: pearson
+  per_kind: 2
+
+latent:
+  seed: 42
+  sample_size: 2000
+  neighbours: 10
+  pair_count: 5000
+  epsilons: [0.001, 0.003, 0.01, 0.03, 0.1]
+  sensitivity_sample_size: 1000
+  data_components: 50
+
+segmentation:
+  k_values: [4, 6, 8, 12]
+  seed: 42
+  fit_sample_size: 20000
+  # k values whose held-out labels are stored by the stage segmentation.
+  stage_k_values: [4, 6]
+  marker_top: 10
+  marker_minimum_mean: 1.0e-5
+  # Mixture refits of the representative model on independent training subsamples.
+  resamples: 5
+
+class_selection:
+  count: 3
+  minimum_positive_pixels: 20
+
+pixel_sample: {size: 2000, seed: 42}
+
+analyses:
+  # Part 0 - training check
+  split_population_audit:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_training_check/part_0_02_split_and_population_audit_results
+  loss_overview:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_training_check/part_0_03_loss_overview_results
+  training_dynamics:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_training_check/part_0_04_training_dynamics_results
+
+  # Part 1 - real baseline, one result directory per axis
+  reconstruction_global:
+    output_directory: &part_1 assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_1_real_baseline
+    result_directory: part_1_01_reconstruction_global_results
+  reconstruction_windowed:
+    output_directory: *part_1
+    result_directory: part_1_02_reconstruction_windowed_results
+  reconstruction_spectra:
+    output_directory: *part_1
+    result_directory: part_1_03_reconstruction_spectra_results
+  heldout_image_reconstruction:
+    output_directory: *part_1
+    result_directory: part_1_04_heldout_image_reconstruction_results
+  reconstructed_ion_images:
+    output_directory: *part_1
+    result_directory: part_1_05_reconstructed_ion_images_results
+  latent_geometry:
+    output_directory: *part_1
+    result_directory: part_1_06_latent_geometry_results
+  latent_segmentation:
+    output_directory: *part_1
+    result_directory: part_1_07_latent_segmentation_results
+  prediction_global:
+    output_directory: *part_1
+    result_directory: part_1_08_prediction_global_results
+  prediction_local:
+    output_directory: *part_1
+    result_directory: part_1_09_prediction_local_results
+  prediction_class_strata:
+    output_directory: *part_1
+    result_directory: part_1_10_prediction_class_strata_results
+  prediction_ion_images:
+    output_directory: *part_1
+    result_directory: part_1_11_prediction_ion_images_results
+
+  # Part 1 - axis comparison
+  axis_comparison_reconstruction:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_1_real_baseline/axis_comparison/part_1_12_reconstruction_results
+  axis_comparison_latent_capacity:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_1_real_baseline/axis_comparison/part_1_13_latent_capacity_results
+  axis_comparison_prediction:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_1_real_baseline/axis_comparison/part_1_14_prediction_results
+  error_localization:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_1_real_baseline/axis_comparison/part_1_15_error_localization_results
+  decision_summary:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_1_real_baseline/axis_comparison/part_1_16_decision_summary_results
+
+  # Part 0 - pretraining and fine-tuning histories
+  synthetic_pretraining_curves:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_training_check/part_0_05_synthetic_pretraining_curves_results
+  finetuning_curves:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_0_training_check/part_0_06_finetuning_curves_results
+
+  # Parts 2 and 3 - one template per stage: pretrained (part 2), fine-tuned (part 3)
+  stage_overview:
+    # Root of the notebook collection; result paths are set per stage.
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain
+    stages:
+      pretrained: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_2_pretrained, result_directory: part_2_01_overview_vs_baseline_results}
+      frozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: frozen_head,
+                    result_directory: part_3_01_overview_vs_baseline_results}
+      unfrozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: unfrozen_head,
+                      result_directory: part_3_01_overview_vs_baseline_results}
+  stage_reconstruction:
+    # Root of the notebook collection; result paths are set per stage.
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain
+    stages:
+      pretrained: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_2_pretrained, result_directory: part_2_02_reconstruction_results}
+      frozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: frozen_head,
+                    result_directory: part_3_02_reconstruction_results}
+      unfrozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: unfrozen_head,
+                      result_directory: part_3_02_reconstruction_results}
+  stage_prediction:
+    # Root of the notebook collection; result paths are set per stage.
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain
+    stages:
+      pretrained: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_2_pretrained, result_directory: part_2_03_prediction_results}
+      frozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: frozen_head,
+                    result_directory: part_3_03_prediction_results}
+      unfrozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: unfrozen_head,
+                      result_directory: part_3_03_prediction_results}
+  stage_latent:
+    # Root of the notebook collection; result paths are set per stage.
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain
+    stages:
+      pretrained: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_2_pretrained, result_directory: part_2_04_latent_results}
+      frozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: frozen_head,
+                    result_directory: part_3_04_latent_results}
+      unfrozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: unfrozen_head,
+                      result_directory: part_3_04_latent_results}
+  stage_segmentation:
+    # Root of the notebook collection; result paths are set per stage.
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain
+    stages:
+      pretrained: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_2_pretrained, result_directory: part_2_05_segmentation_results}
+      frozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: frozen_head,
+                    result_directory: part_3_05_segmentation_results}
+      unfrozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: unfrozen_head,
+                      result_directory: part_3_05_segmentation_results}
+  stage_mechanisms:
+    # Root of the notebook collection; result paths are set per stage.
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain
+    stages:
+      pretrained: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_2_pretrained, result_directory: part_2_06_mechanism_contrasts_results}
+      frozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: frozen_head,
+                    result_directory: part_3_06_mechanism_contrasts_results}
+      unfrozen_head: {output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned, stage_directory: unfrozen_head,
+                      result_directory: part_3_06_mechanism_contrasts_results}
+
+  # Part 3 - stage comparison per axis
+  stage_transitions:
+    output_directory: &part_3 assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_3_finetuned
+    result_directory: stage_comparison/part_3_07_stage_transitions_results
+  stage_representation_change:
+    output_directory: *part_3
+    result_directory: stage_comparison/part_3_08_representation_and_head_change_results
+  stage_images:
+    output_directory: *part_3
+    result_directory: stage_comparison/part_3_09_stage_images_results
+
+  # Part 4 - targeted mechanisms per axis
+  rare_classes:
+    output_directory: &part_4 assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_4_targeted_mechanisms
+    result_directory: part_4_01_rare_classes_results
+  overlap_classes:
+    output_directory: *part_4
+    result_directory: part_4_02_overlap_classes_results
+
+  # Part 5 - axis comparison of every stage
+  axis_reconstruction_common:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_5_axis_comparison/part_5_01_reconstruction_common_results
+  axis_prediction_common:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_5_axis_comparison/part_5_02_prediction_common_results
+  axis_benefit:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_5_axis_comparison/part_5_03_benefit_by_axis_results
+  axis_latent_capacity:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_5_axis_comparison/part_5_04_latent_capacity_results
+
+  # Part 6 - thesis verdict
+  thesis_verdict:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/segmentation_model/20_09_metaspace_pretrain/part_6_summary/part_6_01_thesis_verdict_results
