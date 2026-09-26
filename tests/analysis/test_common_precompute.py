@@ -1,5 +1,6 @@
 """Unit tests for catalog-driven common analysis precompute orchestration."""
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +23,38 @@ from msi_autoencoder_wrapper.visualization.analysis_catalog import (
     model_style_map,
     theme_from_visualization_contract,
 )
+
+
+def test_load_table_reuses_complete_artifacts_without_provenance_comparison(tmp_path, monkeypatch):
+    """A notebook can read complete CSVs after unrelated settings or source edits."""
+    cache_root = tmp_path / "cache"
+    run_directory = cache_root / "evaluations" / "saved-run"
+    model_directory = run_directory / "model-a"
+    model_directory.mkdir(parents=True)
+    (model_directory / "complete.json").write_text("{}")
+    pd.DataFrame({"model_id": ["model-a"], "score": [0.75]}).to_csv(
+        model_directory / "prediction.csv", index=False,
+    )
+    pd.DataFrame({"model_id": ["model-a"], "artifact": ["/checkpoint/model-a"]}).to_csv(
+        run_directory / "inventory.csv", index=False,
+    )
+    (cache_root / "latest.json").write_text(json.dumps({
+        "run_directory": str(run_directory),
+        "models": [{
+            "model_id": "model-a",
+            "directory": str(model_directory),
+            "artifact_sha256": "saved-checkpoint-fingerprint",
+        }],
+    }))
+    monkeypatch.setattr(
+        predictive_precompute.ModelLoader,
+        "artifact_fingerprint",
+        lambda _artifact: "saved-checkpoint-fingerprint",
+    )
+
+    loaded = predictive_precompute.load_table({"cache_directory": str(cache_root)}, "prediction")
+
+    pd.testing.assert_frame_equal(loaded, pd.DataFrame({"model_id": ["model-a"], "score": [0.75]}))
 
 
 @pytest.fixture

@@ -38,6 +38,8 @@ def test_duplicate_conditions_do_not_inflate_seed_count_and_actual_seeds_must_ma
     differences, summary = paired_comparisons(experimental_units(frame, changed, ["metric"]), ["metric"])
     assert differences.empty
     assert summary.iloc[0].pairs == 0
+    assert "metric" in summary.columns
+    assert summary.metric.isna().all()
 
 
 def test_test_scores_cannot_change_selection_and_incomplete_seeds_are_ineligible():

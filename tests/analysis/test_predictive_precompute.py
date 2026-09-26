@@ -246,8 +246,7 @@ def test_full_cache_resume_and_all_notebook_cells(miniature_campaign, monkeypatc
     assert len(calls) == 3  # Only the incomplete model is recomputed.
     changed = deepcopy(settings)
     changed["probe_penalty"] = .2
-    with pytest.raises(ValueError, match="changed"):
-        cache.load_table(changed, "prediction")
+    pd.testing.assert_frame_equal(first, cache.load_table(changed, "prediction"))
 
     # Execute all real notebook cells with only the unavailable dataset/checkpoint
     # construction replaced. Computation, joins, plotting and exports remain real.

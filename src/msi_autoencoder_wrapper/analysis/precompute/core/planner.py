@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .context import AnalysisContext
@@ -49,3 +50,32 @@ def build_plan(strategy: PrecomputeStrategy, context: AnalysisContext) -> Execut
         available.update(names)
         enabled.append(plugin)
     return ExecutionPlan(tuple(enabled))
+
+
+def restrict_plan(plan: ExecutionPlan, analyses: Sequence[str]) -> ExecutionPlan:
+    """Keep only the stages producing the requested analyses and their dependencies.
+
+    :param plan: Validated plan returned by :func:`build_plan`.
+    :type plan: ExecutionPlan
+    :param analyses: Analysis keys (``ArtifactSpec.analysis_name``) to produce.
+    :type analyses: collections.abc.Sequence[str]
+    :return: Plan with the original stage order, reduced to the required stages.
+    :rtype: ExecutionPlan
+    :raises ValueError: If a requested analysis is not produced by any enabled stage.
+    """
+    requested = set(analyses)
+    produced = {spec.analysis_name for stage in plan.stages for spec in stage.provides}
+    unknown = sorted(requested - produced)
+    if unknown:
+        raise ValueError(f"No enabled stage produces the requested analysis(es): {unknown}.")
+    providers = {spec.name: stage for stage in plan.stages for spec in stage.provides}
+    frontier = [stage for stage in plan.stages
+                if any(spec.analysis_name in requested for spec in stage.provides)]
+    required: set[str] = set()
+    while frontier:
+        stage = frontier.pop()
+        if stage.name in required:
+            continue
+        required.add(stage.name)
+        frontier.extend(providers[name] for name in stage.requires if name in providers)
+    return ExecutionPlan(tuple(stage for stage in plan.stages if stage.name in required))

@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional override of YAML precompute.strategy.")
     parser.add_argument("--allow-cpu", action="store_true", help="Permit a deliberate CPU fallback.")
     parser.add_argument("--dry-run", action="store_true", help="Validate without model inference.")
+    parser.add_argument("--analysis", action="append", dest="analyses",
+                        help="Produce only this analysis (repeatable) and the shared stages it needs.")
     arguments = parser.parse_args(argv)
     strategy = arguments.strategy
     if strategy is None:
@@ -48,5 +50,5 @@ def main(argv: list[str] | None = None) -> int:
     if not strategy:
         parser.error("Set precompute.strategy in the YAML or pass --strategy.")
     run_precompute(arguments.settings, strategy, allow_cpu=arguments.allow_cpu,
-                   dry_run=arguments.dry_run)
+                   dry_run=arguments.dry_run, analyses=arguments.analyses)
     return 0

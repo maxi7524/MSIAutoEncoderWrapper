@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from ....utils.logger import get_custom_logger
@@ -9,7 +10,7 @@ from ..model_catalog.exports import write_catalog_artifacts
 from ..model_catalog.resolver import resolve_model_catalog
 from .artifacts import ArtifactStore
 from .context import AnalysisContext
-from .planner import build_plan
+from .planner import build_plan, restrict_plan
 from .resources import ResourceManager
 from .strategy_loader import load_strategy
 
@@ -45,6 +46,7 @@ def run_precompute(
     *,
     allow_cpu: bool = False,
     dry_run: bool = False,
+    analyses: Sequence[str] | None = None,
 ) -> AnalysisContext:
     """Resolve one experiment and execute its complete declared precompute strategy.
 
@@ -57,6 +59,9 @@ def run_precompute(
     :type allow_cpu: bool
     :param dry_run: Validate models, folders, and stage order without computation.
     :type dry_run: bool
+    :param analyses: Optional analysis keys to produce; only their stages and the
+        shared stages they depend on are executed. ``None`` runs every enabled stage.
+    :type analyses: collections.abc.Sequence[str] | None
     :return: Fully resolved context, useful to focused integration tests.
     :rtype: AnalysisContext
     """
@@ -82,6 +87,8 @@ def run_precompute(
     # the orchestration package's concrete classes.
     settings["_precompute_resources"] = context.resources
     plan = build_plan(strategy, context)
+    if analyses:
+        plan = restrict_plan(plan, analyses)
     store.prepare(context, strategy)
     write_catalog_artifacts(store.root, catalog)
     store.write_plan(strategy, [stage.name for stage in plan.stages])
