@@ -1,0 +1,5 @@
+name,version,directory,aliases,alignments,class_edges,classes,compounds,memberships
+LIPID_MAPS,retrieved-2026-09-12,/home/max/repositories/MSIAutoEncoderWrapper/assets/local/metabolite_databases/derived/LIPID_MAPS_retrieved_2026_09_12,73446,0,515,522,49745,49745
+SwissLipids,retrieved-2026-10-13,/home/max/repositories/MSIAutoEncoderWrapper/assets/local/metabolite_databases/derived/SwissLipids_retrieved_2026_10_13,810400,0,527,813,284516,183546
+ClassyFire,chemont-2.1_hmdb-5.0_direct-parent,/home/max/repositories/MSIAutoEncoderWrapper/assets/local/metabolite_databases/derived/ClassyFire_chemont_2_1_hmdb_5_0_direct_parent,242411,6866,4824,4825,217879,145917
+ChEBI,255,/home/max/repositories/MSIAutoEncoderWrapper/assets/local/metabolite_databases/derived/ChEBI_255,250072,0,16086,10077,177465,246976

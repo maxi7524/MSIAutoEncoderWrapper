@@ -1,0 +1,2 @@
+model_alias,display_label,display_order,color,line_style,marker,tags_json
+chemical_label_graph,Chemical label graph,0,,solid,o,{}

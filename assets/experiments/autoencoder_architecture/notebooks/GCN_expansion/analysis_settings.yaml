@@ -1,0 +1,115 @@
+# Chemical label-graph analysis for the GCN expansion of the MSI autoencoder.
+# Shared by the precompute runner and every notebook of this folder:
+#   uv run --extra cu118 python -m msi_autoencoder_wrapper.analysis.precompute \
+#     --settings assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/analysis_settings.yaml
+# No model is loaded; the analysis depends only on METASPACE annotations, METASPACE
+# ion images and local taxonomy exports.
+precompute:
+  strategy: chemistry.class_graph_analysis
+  output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/precompute
+
+# Torch device of vectorized computations (graph propagation, kernels, correlations,
+# permutation tests). The runner refuses to fall back to the CPU without --allow-cpu.
+device: cuda
+
+# Decoded ion images and per-collection evidence tables (regenerable, git-ignored).
+cache_directory: data/chemistry_graph_cache
+
+# Local taxonomy exports (assets/local/metabolite_databases, git-ignored). Normalized
+# taxonomies are written once to derived_directory and reused by every run.
+taxonomies:
+  source_directory: assets/local/metabolite_databases
+  derived_directory: assets/local/metabolite_databases/derived
+  # Display order: lipid-specific taxonomies first, then broad chemical ones.
+  order: [LIPID_MAPS, SwissLipids, ClassyFire, ChEBI]
+  sources:
+    LIPID_MAPS:
+      loader: lipidmaps
+      version: retrieved-2026-09-12
+      files: {table: lipidmaps_retrieved-2026-09-12.tsv}
+    SwissLipids:
+      loader: swisslipids
+      version: retrieved-2026-10-13
+      files: {table: swisslipids_retrieved-2026-10-13.tsv.gz}
+    ClassyFire:
+      loader: classyfire
+      # Canonical lineage of the HMDB direct parent (tree). Alternative parents make
+      # compounds members of several unrelated classes per level; enable them only
+      # with a new version label so the derived snapshot is rebuilt.
+      version: chemont-2.1_hmdb-5.0_direct-parent
+      options: {alternative_parents: false}
+      files: {ontology: chemont_2-1/ChemOnt_2_1.obo, compounds: hmdb_5-0/hmdb_metabolites.xml}
+    ChEBI:
+      loader: chebi
+      version: '255'
+      files: {ontology: chebi_255.obo.gz}
+
+# METASPACE dataset collections (all complete images of the workspace).
+collections:
+  kidney:
+    dataset_root: data/kidney_workspace/datasets
+    # Derived toy dataset built from two kidney sections; not a METASPACE image.
+    exclude: [representative_dataset]
+  brain:
+    dataset_root: data/brain_workspace/datasets
+    exclude: []
+
+# Label-graph variant grid: every non-empty taxonomy combination x these axes.
+graph:
+  axes:
+    resolution: [metaspace_ids, formula]
+    assignment: [certain, possible, weighted]
+    attachment: [most_specific, all_ancestors]
+    alignment: [none, exact, declared]
+    adduct_links: [false, true]
+    pruning: [none, informative]
+  min_class_support: 2        # informative pruning: classes with fewer ions are removed
+  max_class_fraction: 0.5     # informative pruning: classes covering more resolved ions are removed
+  trainable_support: 5        # ions needed for a class label to count as trainable
+  propagation_steps: [1, 2, 3]
+
+# Focus variants used by the spatial and embedding analyses; same keys as GraphVariant.
+focus_variants:
+  - {taxonomies: [LIPID_MAPS], resolution: formula, assignment: certain, pruning: none}
+  - {taxonomies: [SwissLipids], resolution: formula, assignment: certain, pruning: none}
+  - {taxonomies: [ClassyFire], resolution: formula, assignment: certain, pruning: none}
+  - {taxonomies: [ChEBI], resolution: formula, assignment: certain, pruning: none}
+  - {taxonomies: [ClassyFire], resolution: metaspace_ids, assignment: certain, pruning: none}
+  - {taxonomies: [ClassyFire], resolution: formula, assignment: weighted, pruning: none}
+  - {taxonomies: [ClassyFire], resolution: formula, assignment: certain, pruning: informative}
+  - {taxonomies: [LIPID_MAPS, ClassyFire], resolution: formula, assignment: certain, pruning: none, alignment: declared}
+  - {taxonomies: [LIPID_MAPS, SwissLipids, ClassyFire, ChEBI], resolution: formula, assignment: certain, pruning: informative, alignment: declared}
+
+analyses:
+  annotation_inventory:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_0_1_annotation_inventory_results
+  taxonomy_structure:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_0_2_taxonomy_structure_results
+    agreement_max_depth: 6
+    agreement_min_ions: 10
+  class_mz_distribution:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_0_3_class_mz_distribution_results
+    mz_range: [200.0, 900.0]       # axis of the 200-900 models (bin_step 0.55 Da)
+    depths: [0, 1, 2, 3, 4, 5]     # LIPID MAPS categories are roots (depth 0)
+    bin_widths: [0.001, 0.005, 0.01, 0.05, 0.1, 0.55]   # 0.55 Da = model binning
+    purity_threshold: 0.9
+    min_class_members: 20
+  graph_variants:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_1_graph_variants_results
+  spatial_class_maps:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_2_spatial_class_maps_results
+    map_images_per_collection: 3   # images with most annotated ions
+    max_map_depth: 5
+    top_classes_per_depth: 8
+  graph_colocalization:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_3_graph_colocalization_results
+    n_permutations: 199
+    seed: 20261013
+    min_images_per_ion: 3          # ions entering kernel alignment
+    propagation_steps: [0, 1, 2, 3]   # k = 0: identity kernel (graph-free reference)
+  label_space_embedding:
+    output_directory: assets/experiments/autoencoder_architecture/notebooks/GCN_expansion/part_4_label_space_embedding_results
+    n_clusters: 6
+    sample_size: 4000
+    seed: 20261013
+    propagation_steps: [1, 2]

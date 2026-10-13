@@ -1,0 +1,9 @@
+{
+  "strategy": "chemistry.class_graph_analysis",
+  "model_type": "chemistry",
+  "stages": [
+    "chemistry.taxonomies",
+    "chemistry.collections",
+    "chemistry.label_space_embedding"
+  ]
+}
