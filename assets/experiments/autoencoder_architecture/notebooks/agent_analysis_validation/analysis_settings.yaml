@@ -1,0 +1,100 @@
+schema_version: 1
+output: assets/experiments/autoencoder_architecture/notebooks/agent_analysis_validation/part_0_analysis_validation_results
+device: cuda
+seeds:
+- 101
+- 102
+- 103
+numerical_atol: 1.0e-05
+numerical_rtol: 0.0001
+prediction_threshold: 0.5
+annotations_complete: false
+rare_threshold: 0.1
+boundary_tolerance_pixels: 1.0
+max_raster_pixels: 20000000
+clustering:
+  methods:
+  - kmeans
+  - hdbscan
+  - gmm
+  n_clusters: 2
+  min_cluster_size: 12
+synthetic:
+  side: 24
+  features: 32
+manual_annotation:
+  source_image: data/kidney_segmentation_reference/poseidon_ccrcc/reference/histology_annotated.png
+  regions: assets/experiments/autoencoder_architecture/notebooks/agent_analysis_validation/poseidon_regions.json
+  destination: data/kidney_segmentation_reference/poseidon_ccrcc/reference/manual_annotation
+  uncertainty_pixels: 3
+cache_root: data/kidney_segmentation_reference/decoded_cache
+datasets:
+- dataset_id: poseidon_ccrcc
+  directory: data/kidney_segmentation_reference/poseidon_ccrcc
+  image_id: ccrcc_section_1
+  assay: Lipids
+- dataset_id: cardinal_rcc
+  directory: data/kidney_segmentation_reference/cardinal_rcc
+  image_id: MH0204_33
+- dataset_id: blocksam_kidney
+  directory: data/kidney_segmentation_reference/blocksam_kidney
+  image_id: NL_0705A190c
+spectral_partition_comparison:
+  side: 32
+  many_classes: 5
+  layouts:
+  - two_stripes
+  - many_stripes
+  - concentric_rings
+  relative_amplitude_noise:
+  - 0.05
+  - 0.8
+  peak_positions:
+  - 320.0
+  - 380.0
+  - 440.0
+  - 520.0
+  - 600.0
+  - 720.0
+  - 800.0
+  - 850.0
+  peak_width_mz: 0.65
+  clustering_methods:
+  - kmeans
+  - gmm_diag
+  - dbscan
+  clustering_seeds:
+  - 101
+  min_cluster_size: 12
+  gmm_regularization: 1.0e-06
+  batch_size: 128
+  display_input_seed: 101
+  display_model_repetition: 0
+  model_axis:
+    x_min: 200.0
+    x_max: 900.0
+    bin_step: 0.55
+    aggregation: sum
+  models:
+  - family: clean_b0
+    repetition: 0
+    artifact: data/kidney_workspace/models/kidney/vpu-contractive-interaction-expanded-20260917-01__task_000045
+  - family: clean_b0
+    repetition: 1
+    artifact: data/kidney_workspace/models/kidney/vpu-contractive-interaction-expanded-20260917-01__task_000046
+  - family: clean_b0
+    repetition: 2
+    artifact: data/kidney_workspace/models/kidney/vpu-contractive-interaction-expanded-20260917-01__task_000047
+  - family: pretraining_unfrozen
+    repetition: 0
+    artifact: data/kidney_workspace/models/kidney/metaspace-pretrain-repaired-20260923-01__grid_0001__rep_00__unfrozen_head
+  - family: pretraining_unfrozen
+    repetition: 1
+    artifact: data/kidney_workspace/models/kidney/metaspace-pretrain-repaired-20260923-01__grid_0001__rep_01__unfrozen_head
+  - family: pretraining_unfrozen
+    repetition: 2
+    artifact: data/kidney_workspace/models/kidney/metaspace-pretrain-repaired-20260923-01__grid_0001__rep_02__unfrozen_head
+  inference_dtype: float32
+  density_radius_quantile: 0.95
+  max_iter: 100
+reference_preview_mz: 750.0
